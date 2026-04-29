@@ -12,6 +12,7 @@ class OrderEngineService {
 
   final Map<String, StreamSubscription> _priceSubscriptions = {};
   StreamSubscription? _pendingOrdersSubscription;
+  StreamSubscription? _gttOrdersSubscription;
 
   OrderEngineService({
     required TradingService tradingService,
@@ -26,24 +27,44 @@ class OrderEngineService {
         .collection('orders')
         .where('status', isEqualTo: 'PENDING')
         .snapshots()
-        .listen(_onPendingOrdersUpdate);
+        .listen((_) => _recalculateWatchedStocks());
+
+    _gttOrdersSubscription = _firestore
+        .collection('gtt_orders')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .listen((_) => _recalculateWatchedStocks());
   }
 
   void stop() {
     _pendingOrdersSubscription?.cancel();
+    _gttOrdersSubscription?.cancel();
     for (var sub in _priceSubscriptions.values) {
       sub.cancel();
     }
     _priceSubscriptions.clear();
   }
 
-  void _onPendingOrdersUpdate(QuerySnapshot<Map<String, dynamic>> snapshot) {
+  void _recalculateWatchedStocks() async {
     final stocksToWatch = <String>{};
-    for (var doc in snapshot.docs) {
+
+    final pendingSnap = await _firestore
+        .collection('orders')
+        .where('status', isEqualTo: 'PENDING')
+        .get();
+    for (var doc in pendingSnap.docs) {
       stocksToWatch.add(doc.data()['stock'] as String);
     }
 
-    // Remove subscriptions for stocks no longer in pending orders
+    final gttSnap = await _firestore
+        .collection('gtt_orders')
+        .where('isActive', isEqualTo: true)
+        .get();
+    for (var doc in gttSnap.docs) {
+      stocksToWatch.add(doc.data()['symbol'] as String);
+    }
+
+    // Remove subscriptions for stocks no longer needed
     final currentStocks = _priceSubscriptions.keys.toList();
     for (var stock in currentStocks) {
       if (!stocksToWatch.contains(stock)) {
@@ -54,24 +75,36 @@ class OrderEngineService {
     // Add subscriptions for new stocks
     for (var stock in stocksToWatch) {
       if (!_priceSubscriptions.containsKey(stock)) {
-        _priceSubscriptions[stock] = _priceProvider.getPrice(stock).listen((price) {
+        _priceSubscriptions[stock] =
+            _priceProvider.getPrice(stock).listen((price) {
           _checkOrdersForStock(stock, price);
         });
       }
     }
   }
 
+
   void _checkOrdersForStock(String stock, double currentPrice) async {
-    // Fetch pending orders for this stock
-    // In production, you'd want to be careful with read volume here.
-    final snapshot = await _firestore
+    // 1. Check Pending Orders
+    final orderSnap = await _firestore
         .collection('orders')
         .where('stock', isEqualTo: stock)
         .where('status', isEqualTo: 'PENDING')
         .get();
 
-    for (var doc in snapshot.docs) {
+    for (var doc in orderSnap.docs) {
       await _tradingService.processPendingOrder(doc.id, currentPrice);
+    }
+
+    // 2. Check GTT Orders
+    final gttSnap = await _firestore
+        .collection('gtt_orders')
+        .where('symbol', isEqualTo: stock)
+        .where('isActive', isEqualTo: true)
+        .get();
+
+    for (var doc in gttSnap.docs) {
+      await _tradingService.processGttTrigger(doc.id, currentPrice);
     }
   }
 }

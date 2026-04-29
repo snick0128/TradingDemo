@@ -84,6 +84,14 @@ class TradingService {
           .limit(50)
           .snapshots();
 
+  Stream<QuerySnapshot<Map<String, dynamic>>> gttOrdersStreamForUser(
+          String uid) =>
+      _firestore.raw
+          .collection('gtt_orders')
+          .where('userId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .snapshots();
+
   Stream<QuerySnapshot<Map<String, dynamic>>> tradesStreamForUser(String uid) =>
       _firestore.raw
           .collection('trades')
@@ -300,6 +308,128 @@ class TradingService {
     }));
 
     return clientOrderId;
+  }
+
+  // ── Cancel Order ──────────────────────────────────────────────────────────
+
+  Future<void> cancelOrder(String orderId) async {
+    final orderRef = _firestore.raw.doc('orders/$orderId');
+    final serverTs = FieldValue.serverTimestamp();
+
+    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
+      final snap = await tx.get(orderRef);
+      if (!snap.exists) throw Exception('Order not found.');
+
+      final status = snap.data()?['status'] as String?;
+      if (status != 'PENDING') {
+        throw Exception('Only pending orders can be cancelled.');
+      }
+
+      tx.update(orderRef, {
+        'status': 'CANCELLED',
+        'updatedAt': serverTs,
+      });
+    }));
+  }
+
+  // ── GTT Orders ────────────────────────────────────────────────────────────
+
+  Future<String> placeGttOrder({
+    required String userId,
+    required String symbol,
+    required String gttType,
+    required double triggerPrice,
+    double? secondTriggerPrice,
+    required String side,
+    required int qty,
+    double? limitPrice,
+  }) async {
+    final id = _uuid.v4();
+    final gttRef = _firestore.raw.doc('gtt_orders/$id');
+
+    await _firestore.setDocument('gtt_orders/$id', {
+      'userId': userId,
+      'symbol': symbol.toUpperCase(),
+      'type': gttType.toUpperCase(),
+      'triggerPrice': triggerPrice,
+      'secondTriggerPrice': secondTriggerPrice,
+      'orderType': side.toUpperCase(),
+      'quantity': qty,
+      'limitPrice': limitPrice,
+      'isActive': true,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    return id;
+  }
+
+  Future<void> cancelGttOrder(String gttId) async {
+    await _firestore.deleteDocument('gtt_orders/$gttId');
+  }
+
+  Future<void> processGttTrigger(String gttId, double currentPrice) async {
+    final gttRef = _firestore.raw.doc('gtt_orders/$gttId');
+
+    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
+      final gttSnap = await tx.get(gttRef);
+      if (!gttSnap.exists) return;
+
+      final data = gttSnap.data()!;
+      if (!(data['isActive'] as bool)) return;
+
+      final userId = data['userId'] as String;
+      final symbol = data['symbol'] as String;
+      final triggerPrice = _double(data['triggerPrice']);
+      final secondTrigger = _double(data['secondTriggerPrice']);
+      final type = data['type'] as String;
+      final side = data['orderType'] as String;
+      final qty = data['quantity'] as int;
+      final limitPrice = _double(data['limitPrice']);
+
+      bool triggered = false;
+      if (type == 'SINGLE') {
+        if (side == 'BUY') {
+          triggered = currentPrice <= triggerPrice;
+        } else {
+          triggered = currentPrice >= triggerPrice;
+        }
+      } else if (type == 'OCO') {
+        if (side == 'BUY') {
+          triggered = currentPrice <= triggerPrice || currentPrice >= secondTrigger;
+        } else {
+          triggered = currentPrice >= triggerPrice || currentPrice <= secondTrigger;
+        }
+      }
+
+      if (!triggered) return;
+
+      // Mark GTT as triggered
+      tx.update(gttRef, {
+        'isActive': false,
+        'triggeredAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Place actual order - Note: we can't call placeOrder inside a transaction
+      // because placeOrder starts its own transaction.
+      // Instead, we manually write a PENDING order doc.
+      final orderId = 'ORD-GTT-${_uuid.v4()}';
+      final orderRef = _firestore.raw.doc('orders/$orderId');
+
+      _writePendingOrder(
+        tx: tx,
+        orderRef: orderRef,
+        userId: userId,
+        symbol: symbol,
+        type: side,
+        qty: qty,
+        price: limitPrice > 0 ? limitPrice : currentPrice,
+        triggerPrice: null,
+        variety: limitPrice > 0 ? 'LIMIT' : 'MARKET',
+        serverTs: FieldValue.serverTimestamp(),
+      );
+    }));
   }
 
   // ── BUY (pure — synchronous, no external calls) ───────────────────────────
@@ -528,12 +658,15 @@ class TradingService {
       'createdAt': serverTs,
     });
 
+    final realizedPnl = (executedPrice - avgPrice) * qty;
+
     // Ledger CREDIT — inside transaction (atomic with balance update)
     tx.set(ledgerRef, {
       'userId': userId,
       'type': 'CREDIT',
       'subType': 'SELL',
       'amount': total,
+      'realized_pnl': realizedPnl,
       'before_balance': available,
       'balance_after': balanceAfter,
       'referenceType': 'ORDER',

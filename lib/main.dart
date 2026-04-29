@@ -60,6 +60,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   AuthService? _authService;
   TradingService? _tradingService;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _gttSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _positionsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _holdingsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
@@ -95,10 +96,12 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       _authService!.authStateChanges.listen((firebaseUser) async {
         if (firebaseUser == null) {
           await _ordersSub?.cancel();
+          await _gttSub?.cancel();
           await _positionsSub?.cancel();
           await _holdingsSub?.cancel();
           await _userSub?.cancel();
           _ordersSub = null;
+          _gttSub = null;
           _positionsSub = null;
           _holdingsSub = null;
           _userSub = null;
@@ -173,6 +176,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   void dispose() {
     _authSession.removeListener(_syncTradingUserFromAuthSession);
     _ordersSub?.cancel();
+    _gttSub?.cancel();
     _positionsSub?.cancel();
     _holdingsSub?.cancel();
     _userSub?.cancel();
@@ -250,6 +254,30 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
       _tradingStore.replaceOrders(mapped);
+    });
+
+    _gttSub?.cancel();
+    _gttSub = _tradingService!.gttOrdersStreamForUser(userId).listen((snapshot) {
+      final List<GTTOrder> mapped = snapshot.docs.map((doc) {
+        final data = doc.data();
+        final timestamp = data['createdAt'];
+        final createdAt = timestamp is Timestamp ? timestamp.toDate() : DateTime.now();
+
+        return GTTOrder(
+          id: doc.id,
+          symbol: (data['symbol'] as String?) ?? 'N/A',
+          type: (data['type'] as String?) == 'OCO' ? GTTType.oco : GTTType.single,
+          triggerPrice: (data['triggerPrice'] as num).toDouble(),
+          secondTriggerPrice: (data['secondTriggerPrice'] as num?)?.toDouble(),
+          orderType: (data['orderType'] as String?) == 'SELL' ? OrderType.sell : OrderType.buy,
+          quantity: (data['quantity'] as num).toInt(),
+          limitPrice: (data['limitPrice'] as num?)?.toDouble(),
+          isActive: (data['isActive'] as bool?) ?? true,
+          createdAt: createdAt,
+          triggeredAt: (data['triggeredAt'] as Timestamp?)?.toDate(),
+        );
+      }).toList();
+      _tradingStore.replaceGttOrders(mapped);
     });
 
     _positionsSub?.cancel();

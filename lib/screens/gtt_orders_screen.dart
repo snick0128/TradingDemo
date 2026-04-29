@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../app/app_scope.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -40,8 +41,7 @@ class GttOrdersScreen extends StatelessWidget {
                   return _GttOrderTile(
                     order: order,
                     onEdit: () => _showGttForm(context, existing: order),
-                    onCancel: () =>
-                        TradingScope.of(context).cancelGTTOrder(order.id),
+                    onCancel: () => _cancelGttOrder(context, order.id),
                   );
                 },
               ),
@@ -58,6 +58,25 @@ class GttOrdersScreen extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _cancelGttOrder(BuildContext context, String id) async {
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (appScope != null) {
+      try {
+        await appScope.tradingService.cancelGttOrder(id);
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to cancel GTT: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return;
+    }
+    TradingScope.of(context).cancelGTTOrder(id);
   }
 
   void _showGttForm(BuildContext context, {GTTOrder? existing}) {
@@ -401,7 +420,7 @@ class _GttOrderFormState extends State<_GttOrderForm> {
     );
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     final symbol = _symbolController.text.trim().toUpperCase();
     final trigger = double.tryParse(_triggerController.text) ?? 0;
     final secondTrigger = double.tryParse(_secondTriggerController.text);
@@ -415,6 +434,42 @@ class _GttOrderFormState extends State<_GttOrderForm> {
           backgroundColor: AppColors.danger,
         ),
       );
+      return;
+    }
+
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (appScope != null) {
+      final sessionUser = appScope.notifier?.user;
+      if (sessionUser == null) return;
+
+      try {
+        await appScope.tradingService.placeGttOrder(
+          userId: sessionUser.uid,
+          symbol: symbol,
+          gttType: _gttType.name.toUpperCase(),
+          triggerPrice: trigger,
+          secondTriggerPrice: _gttType == GTTType.oco ? secondTrigger : null,
+          side: _orderType.name.toUpperCase(),
+          qty: qty,
+          limitPrice: limitPrice,
+        );
+        if (!context.mounted) return;
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('GTT order created'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to create GTT: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
       return;
     }
 

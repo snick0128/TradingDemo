@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
+import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
 import '../../theme.dart';

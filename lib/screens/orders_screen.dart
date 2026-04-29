@@ -262,6 +262,29 @@ class _OrderCard extends StatelessWidget {
   final Order order;
   const _OrderCard({required this.order});
 
+  Future<void> _cancelOrder(BuildContext context, String orderId) async {
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (appScope != null) {
+      try {
+        await appScope.tradingService.cancelOrder(orderId);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order cancelled')),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cancellation failed: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return;
+    }
+    TradingScope.of(context).cancelOrder(orderId);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isBuy = order.type == OrderType.buy;
@@ -689,28 +712,6 @@ class _PendingOrderCard extends StatelessWidget {
   }
 }
 
-  Future<void> _cancelOrder(BuildContext context, String orderId) async {
-    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
-    if (appScope != null) {
-      try {
-        await appScope.tradingService.cancelOrder(orderId);
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Order cancelled')),
-        );
-      } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Cancellation failed: $e'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-      return;
-    }
-    TradingScope.of(context).cancelOrder(orderId);
-  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

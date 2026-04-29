@@ -84,27 +84,52 @@ class OrderEngineService {
   }
 
 
+  // Map to track processing state to avoid duplicate triggers while a transaction is in flight
+  final Set<String> _processingOrders = {};
+
   void _checkOrdersForStock(String stock, double currentPrice) async {
-    // 1. Check Pending Orders
-    final orderSnap = await _firestore
-        .collection('orders')
-        .where('stock', isEqualTo: stock)
-        .where('status', isEqualTo: 'PENDING')
-        .get();
+    try {
+      // 1. Check Pending Orders
+      final orderSnap = await _firestore
+          .collection('orders')
+          .where('stock', isEqualTo: stock)
+          .where('status', isEqualTo: 'PENDING')
+          .get();
 
-    for (var doc in orderSnap.docs) {
-      await _tradingService.processPendingOrder(doc.id, currentPrice);
-    }
+      for (var doc in orderSnap.docs) {
+        if (_processingOrders.contains(doc.id)) continue;
 
-    // 2. Check GTT Orders
-    final gttSnap = await _firestore
-        .collection('gtt_orders')
-        .where('symbol', isEqualTo: stock)
-        .where('isActive', isEqualTo: true)
-        .get();
+        _processingOrders.add(doc.id);
+        try {
+          await _tradingService.processPendingOrder(doc.id, currentPrice);
+        } catch (e) {
+          // Inner catch so one failed order doesn't stop others
+        } finally {
+          _processingOrders.remove(doc.id);
+        }
+      }
 
-    for (var doc in gttSnap.docs) {
-      await _tradingService.processGttTrigger(doc.id, currentPrice);
+      // 2. Check GTT Orders
+      final gttSnap = await _firestore
+          .collection('gtt_orders')
+          .where('symbol', isEqualTo: stock)
+          .where('isActive', isEqualTo: true)
+          .get();
+
+      for (var doc in gttSnap.docs) {
+        if (_processingOrders.contains(doc.id)) continue;
+
+        _processingOrders.add(doc.id);
+        try {
+          await _tradingService.processGttTrigger(doc.id, currentPrice);
+        } catch (e) {
+          // Inner catch
+        } finally {
+          _processingOrders.remove(doc.id);
+        }
+      }
+    } catch (e) {
+      // Prevents the engine from crashing on Firestore glitches
     }
   }
 }

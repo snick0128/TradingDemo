@@ -45,6 +45,10 @@ class OrderEngineService {
     _priceSubscriptions.clear();
   }
 
+  // Cache to store the latest pending orders and GTTs to avoid heavy fetching on every price tick
+  final Map<String, List<Map<String, dynamic>>> _pendingOrdersCache = {};
+  final Map<String, List<Map<String, dynamic>>> _gttOrdersCache = {};
+
   void _recalculateWatchedStocks() async {
     final stocksToWatch = <String>{};
 
@@ -52,16 +56,28 @@ class OrderEngineService {
         .collection('orders')
         .where('status', isEqualTo: 'PENDING')
         .get();
+
+    _pendingOrdersCache.clear();
     for (var doc in pendingSnap.docs) {
-      stocksToWatch.add(doc.data()['stock'] as String);
+      final data = doc.data();
+      data['id'] = doc.id;
+      final stock = data['stock'] as String;
+      stocksToWatch.add(stock);
+      _pendingOrdersCache.putIfAbsent(stock, () => []).add(data);
     }
 
     final gttSnap = await _firestore
         .collection('gtt_orders')
         .where('isActive', isEqualTo: true)
         .get();
+
+    _gttOrdersCache.clear();
     for (var doc in gttSnap.docs) {
-      stocksToWatch.add(doc.data()['symbol'] as String);
+      final data = doc.data();
+      data['id'] = doc.id;
+      final symbol = data['symbol'] as String;
+      stocksToWatch.add(symbol);
+      _gttOrdersCache.putIfAbsent(symbol, () => []).add(data);
     }
 
     // Remove subscriptions for stocks no longer needed
@@ -89,47 +105,39 @@ class OrderEngineService {
 
   void _checkOrdersForStock(String stock, double currentPrice) async {
     try {
-      // 1. Check Pending Orders
-      final orderSnap = await _firestore
-          .collection('orders')
-          .where('stock', isEqualTo: stock)
-          .where('status', isEqualTo: 'PENDING')
-          .get();
+      // 1. Check Pending Orders from cache
+      final pendingOrders = _pendingOrdersCache[stock] ?? [];
+      for (var order in pendingOrders) {
+        final orderId = order['id'] as String;
+        if (_processingOrders.contains(orderId)) continue;
 
-      for (var doc in orderSnap.docs) {
-        if (_processingOrders.contains(doc.id)) continue;
-
-        _processingOrders.add(doc.id);
+        _processingOrders.add(orderId);
         try {
-          await _tradingService.processPendingOrder(doc.id, currentPrice);
+          await _tradingService.processPendingOrder(orderId, currentPrice);
         } catch (e) {
-          // Inner catch so one failed order doesn't stop others
+          // One failed order doesn't stop others
         } finally {
-          _processingOrders.remove(doc.id);
+          _processingOrders.remove(orderId);
         }
       }
 
-      // 2. Check GTT Orders
-      final gttSnap = await _firestore
-          .collection('gtt_orders')
-          .where('symbol', isEqualTo: stock)
-          .where('isActive', isEqualTo: true)
-          .get();
+      // 2. Check GTT Orders from cache
+      final gttOrders = _gttOrdersCache[stock] ?? [];
+      for (var gtt in gttOrders) {
+        final gttId = gtt['id'] as String;
+        if (_processingOrders.contains(gttId)) continue;
 
-      for (var doc in gttSnap.docs) {
-        if (_processingOrders.contains(doc.id)) continue;
-
-        _processingOrders.add(doc.id);
+        _processingOrders.add(gttId);
         try {
-          await _tradingService.processGttTrigger(doc.id, currentPrice);
+          await _tradingService.processGttTrigger(gttId, currentPrice);
         } catch (e) {
           // Inner catch
         } finally {
-          _processingOrders.remove(doc.id);
+          _processingOrders.remove(gttId);
         }
       }
     } catch (e) {
-      // Prevents the engine from crashing on Firestore glitches
+      // Prevents crash
     }
   }
 }

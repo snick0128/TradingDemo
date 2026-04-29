@@ -7,6 +7,7 @@ import 'app/app_scope.dart';
 import 'data/providers/mock_price_provider.dart';
 import 'data/services/auth_service.dart';
 import 'data/services/firestore_service.dart';
+import 'data/services/order_engine_service.dart';
 import 'data/services/trading_service.dart';
 import 'domain/auth/auth_session.dart';
 import 'firebase_options.dart';
@@ -52,6 +53,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
   AuthService? _authService;
   FirestoreService? _firestoreService;
   TradingService? _tradingService;
+  OrderEngineService? _orderEngineService;
 
   final ThemeMode _themeMode = ThemeMode.light;
 
@@ -70,10 +72,18 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
         auth: FirebaseAuth.instance,
         firestore: firestore,
       );
+      final priceProvider = MockPriceProvider();
       _tradingService = TradingService(
         firestore: firestore,
-        priceProvider: MockPriceProvider(),
+        priceProvider: priceProvider,
       );
+      _orderEngineService = OrderEngineService(
+        tradingService: _tradingService!,
+        firestore: FirebaseFirestore.instance,
+        priceProvider: priceProvider,
+      );
+      _orderEngineService!.start();
+
       _adminStore = AdminStore(
         tradingService: _tradingService,
         firestoreService: _firestoreService,
@@ -106,6 +116,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
 
   @override
   void dispose() {
+    _orderEngineService?.stop();
     _authSession.removeListener(_syncAdminContext);
     _adminStore.dispose();
     _tradingStore.dispose();

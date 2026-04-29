@@ -697,7 +697,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   Future<void> _submitOrder(BuildContext context, store) async {
     final price = _isPriceEnabled
         ? (double.tryParse(_priceController.text) ?? 0)
-        : 0.0;
+        : null;
     final triggerPrice = _isTriggerEnabled
         ? double.tryParse(_triggerController.text)
         : null;
@@ -715,24 +715,28 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         return;
       }
 
-      // Generate clientOrderId HERE in the UI — this is the cross-tab
-      // idempotency key. Same ID from any tab = safe no-op on the second call.
       final clientOrderId = const Uuid().v4();
 
       try {
+        String varietyStr;
+        switch (_variety) {
+          case OrderVariety.market: varietyStr = 'MARKET'; break;
+          case OrderVariety.limit: varietyStr = 'LIMIT'; break;
+          case OrderVariety.slLimit: varietyStr = 'SL'; break;
+          case OrderVariety.slMarket: varietyStr = 'SL-M'; break;
+          default: varietyStr = 'MARKET';
+        }
+
         final orderId = await appScope.tradingService.placeOrder(
           userId: sessionUser.uid,
           stock: widget.stock.symbol,
           qty: _qty,
           type: _side == OrderType.buy ? 'BUY' : 'SELL',
-          requestPrice: _effectivePrice,
+          variety: varietyStr,
+          price: price,
+          triggerPrice: triggerPrice,
           clientOrderId: clientOrderId,
         );
-
-        // Do NOT insert a local PENDING order — the Firestore stream will
-        // deliver the EXECUTED order within milliseconds. Inserting locally
-        // with PENDING status creates a state mismatch (Firestore = EXECUTED,
-        // UI = PENDING) and a duplicate entry once the stream fires.
 
         if (!context.mounted) return;
         Navigator.pop(context);
@@ -742,7 +746,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
               children: [
                 const Icon(LucideIcons.checkCircle, color: Colors.white, size: 16),
                 const SizedBox(width: 8),
-                Text('Order executed · $orderId'),
+                Text('Order processed · $orderId'),
               ],
             ),
             backgroundColor: _sideColor,

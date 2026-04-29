@@ -363,8 +363,7 @@ class _OrderCard extends StatelessWidget {
                 if (isPending) ...[
                   const SizedBox(height: 6),
                   GestureDetector(
-                    onTap: () =>
-                        TradingScope.of(context).cancelOrder(order.id),
+                    onTap: () => _cancelOrder(context, order.id),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 4),
@@ -595,6 +594,29 @@ class _PendingOrderCard extends StatelessWidget {
   final Order order;
   const _PendingOrderCard({required this.order});
 
+  Future<void> _cancelOrder(BuildContext context, String orderId) async {
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (appScope != null) {
+      try {
+        await appScope.tradingService.cancelOrder(orderId);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order cancelled')),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cancellation failed: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return;
+    }
+    TradingScope.of(context).cancelOrder(orderId);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isBuy = order.type == OrderType.buy;
@@ -658,12 +680,36 @@ class _PendingOrderCard extends StatelessWidget {
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(LucideIcons.x, size: 16, color: AppColors.danger),
-            onPressed: () => TradingScope.of(context).cancelOrder(order.id),
+            onPressed: () => _cancelOrder(context, order.id),
             tooltip: 'Cancel',
           ),
         ],
       ),
     );
+  }
+}
+
+  Future<void> _cancelOrder(BuildContext context, String orderId) async {
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (appScope != null) {
+      try {
+        await appScope.tradingService.cancelOrder(orderId);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order cancelled')),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cancellation failed: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return;
+    }
+    TradingScope.of(context).cancelOrder(orderId);
   }
 }
 

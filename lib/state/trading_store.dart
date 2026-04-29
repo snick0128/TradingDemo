@@ -847,6 +847,13 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void replaceGttOrders(List<GTTOrder> gttOrders) {
+    _gttOrders
+      ..clear()
+      ..addAll(gttOrders);
+    notifyListeners();
+  }
+
   // ─── User update ──────────────────────────────────────────────────────────
 
   void updateUser(User updated, {bool updateBalance = false}) {

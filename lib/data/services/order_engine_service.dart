@@ -1,0 +1,110 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../domain/pricing/price_provider.dart';
+import 'trading_service.dart';
+
+/// A basic client-side order engine for demonstration.
+/// In a production system, this logic would run in a trusted backend environment (e.g., Cloud Functions).
+class OrderEngineService {
+  final TradingService _tradingService;
+  final FirebaseFirestore _firestore;
+  final PriceProvider _priceProvider;
+
+  final Map<String, StreamSubscription> _priceSubscriptions = {};
+  StreamSubscription? _pendingOrdersSubscription;
+  StreamSubscription? _gttOrdersSubscription;
+
+  OrderEngineService({
+    required TradingService tradingService,
+    required FirebaseFirestore firestore,
+    required PriceProvider priceProvider,
+  }) : _tradingService = tradingService,
+       _firestore = firestore,
+       _priceProvider = priceProvider;
+
+  void start() {
+    _pendingOrdersSubscription = _firestore
+        .collection('orders')
+        .where('status', isEqualTo: 'PENDING')
+        .snapshots()
+        .listen((_) => _recalculateWatchedStocks());
+
+    _gttOrdersSubscription = _firestore
+        .collection('gtt_orders')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .listen((_) => _recalculateWatchedStocks());
+  }
+
+  void stop() {
+    _pendingOrdersSubscription?.cancel();
+    _gttOrdersSubscription?.cancel();
+    for (var sub in _priceSubscriptions.values) {
+      sub.cancel();
+    }
+    _priceSubscriptions.clear();
+  }
+
+  void _recalculateWatchedStocks() async {
+    final stocksToWatch = <String>{};
+
+    final pendingSnap = await _firestore
+        .collection('orders')
+        .where('status', isEqualTo: 'PENDING')
+        .get();
+    for (var doc in pendingSnap.docs) {
+      stocksToWatch.add(doc.data()['stock'] as String);
+    }
+
+    final gttSnap = await _firestore
+        .collection('gtt_orders')
+        .where('isActive', isEqualTo: true)
+        .get();
+    for (var doc in gttSnap.docs) {
+      stocksToWatch.add(doc.data()['symbol'] as String);
+    }
+
+    // Remove subscriptions for stocks no longer needed
+    final currentStocks = _priceSubscriptions.keys.toList();
+    for (var stock in currentStocks) {
+      if (!stocksToWatch.contains(stock)) {
+        _priceSubscriptions.remove(stock)?.cancel();
+      }
+    }
+
+    // Add subscriptions for new stocks
+    for (var stock in stocksToWatch) {
+      if (!_priceSubscriptions.containsKey(stock)) {
+        _priceSubscriptions[stock] =
+            _priceProvider.getPrice(stock).listen((price) {
+          _checkOrdersForStock(stock, price);
+        });
+      }
+    }
+  }
+
+
+  void _checkOrdersForStock(String stock, double currentPrice) async {
+    // 1. Check Pending Orders
+    final orderSnap = await _firestore
+        .collection('orders')
+        .where('stock', isEqualTo: stock)
+        .where('status', isEqualTo: 'PENDING')
+        .get();
+
+    for (var doc in orderSnap.docs) {
+      await _tradingService.processPendingOrder(doc.id, currentPrice);
+    }
+
+    // 2. Check GTT Orders
+    final gttSnap = await _firestore
+        .collection('gtt_orders')
+        .where('symbol', isEqualTo: stock)
+        .where('isActive', isEqualTo: true)
+        .get();
+
+    for (var doc in gttSnap.docs) {
+      await _tradingService.processGttTrigger(doc.id, currentPrice);
+    }
+  }
+}

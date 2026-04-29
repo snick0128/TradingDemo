@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../models/trading_models.dart';
+
 class SecurityStore extends ChangeNotifier {
-  SecurityStore({Duration? lockTimeout}) : _lockTimeout = lockTimeout ?? const Duration(minutes: 5);
+  SecurityStore({Duration? lockTimeout})
+    : _lockTimeout = lockTimeout ?? const Duration(minutes: 5);
 
   final Duration _lockTimeout;
 
@@ -12,8 +15,55 @@ class SecurityStore extends ChangeNotifier {
   DateTime? _pausedAt;
   Timer? _idleTimer;
 
+  // Authentication state
+  bool _isAuthenticated = false;
+  User? _currentUser;
+  final List<DateTime> _sessionLog = [];
+
   bool get isLocked => _isLocked;
   Duration get lockTimeout => _lockTimeout;
+  bool get isAuthenticated => _isAuthenticated;
+  User? get currentUser => _currentUser;
+  List<DateTime> get sessionLog => List.unmodifiable(_sessionLog);
+
+  // ─── Authentication ────────────────────────────────────────────────────────
+
+  bool authenticate(String clientId, String password) {
+    return false;
+  }
+
+  bool register(String name, String email, double balance) {
+    return false;
+  }
+
+  void setPin(String pin) {
+    _pin = pin;
+    // PIN setup happens right after login/register, so ensure authenticated
+    _isAuthenticated = true;
+    if (_sessionLog.isEmpty) {
+      _sessionLog.add(DateTime.now());
+    }
+    notifyListeners();
+  }
+
+  bool biometricUnlock() {
+    // Simulate biometric: always succeeds for demo
+    _isAuthenticated = true;
+    _isLocked = false;
+    _sessionLog.add(DateTime.now());
+    _resetIdleTimer();
+    notifyListeners();
+    return true;
+  }
+
+  void killAllSessions() {
+    _isAuthenticated = false;
+    _isLocked = true;
+    _idleTimer?.cancel();
+    notifyListeners();
+  }
+
+  // ─── PIN / Lock ────────────────────────────────────────────────────────────
 
   void startMonitoring() {
     _resetIdleTimer();
@@ -37,9 +87,7 @@ class SecurityStore extends ChangeNotifier {
     final pausedAt = _pausedAt;
     _pausedAt = null;
 
-    if (pausedAt == null) {
-      return;
-    }
+    if (pausedAt == null) return;
 
     final awayDuration = DateTime.now().difference(pausedAt);
     if (awayDuration >= _lockTimeout) {
@@ -53,19 +101,14 @@ class SecurityStore extends ChangeNotifier {
   }
 
   void lockNow() {
-    if (_isLocked) {
-      return;
-    }
+    if (_isLocked) return;
     _isLocked = true;
     _idleTimer?.cancel();
     notifyListeners();
   }
 
   bool unlock(String pin) {
-    if (pin != _pin) {
-      return false;
-    }
-
+    if (pin != _pin) return false;
     _isLocked = false;
     _resetIdleTimer();
     notifyListeners();
@@ -73,10 +116,7 @@ class SecurityStore extends ChangeNotifier {
   }
 
   bool changePin({required String currentPin, required String newPin}) {
-    if (currentPin != _pin || !_isValidPin(newPin)) {
-      return false;
-    }
-
+    if (currentPin != _pin || !_isValidPin(newPin)) return false;
     _pin = newPin;
     notifyListeners();
     return true;

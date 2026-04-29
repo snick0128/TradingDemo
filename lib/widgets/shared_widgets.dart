@@ -11,18 +11,21 @@ class CustomCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
+    return Material(
+      color: AppColors.surface,
       borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: padding ?? const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.border, width: 1),
-          boxShadow: AppColors.softShadow,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: padding ?? const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border, width: 1),
+            boxShadow: AppColors.softShadow,
+          ),
+          child: child,
         ),
-        child: child,
       ),
     );
   }
@@ -34,7 +37,13 @@ class PriceText extends StatelessWidget {
   final bool? isChangePositive;
   final double? fontSize;
 
-  const PriceText({super.key, required this.price, this.change, this.isChangePositive, this.fontSize});
+  const PriceText({
+    super.key,
+    required this.price,
+    this.change,
+    this.isChangePositive,
+    this.fontSize,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -91,12 +100,18 @@ class StatusBadge extends StatelessWidget {
     );
   }
 }
+
 class InfoRow extends StatelessWidget {
   final String label;
   final String value;
   final Color? valueColor;
 
-  const InfoRow({super.key, required this.label, required this.value, this.valueColor});
+  const InfoRow({
+    super.key,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -105,7 +120,14 @@ class InfoRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           Text(
             value,
             style: GoogleFonts.jetBrainsMono(
@@ -116,6 +138,79 @@ class InfoRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class PriceFlashWidget extends StatefulWidget {
+  final double price;
+  final Widget child;
+
+  const PriceFlashWidget({super.key, required this.price, required this.child});
+
+  @override
+  State<PriceFlashWidget> createState() => _PriceFlashWidgetState();
+}
+
+class _PriceFlashWidgetState extends State<PriceFlashWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late Animation<Color?> _flashColor;
+  double? _previousPrice;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _flashColor = ColorTween(
+      begin: Colors.transparent,
+      end: Colors.transparent,
+    ).animate(_controller);
+    _previousPrice = widget.price;
+  }
+
+  @override
+  void didUpdateWidget(covariant PriceFlashWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final previous = _previousPrice ?? oldWidget.price;
+    if (widget.price == previous) return;
+
+    final isUp = widget.price > previous;
+    _flashColor = ColorTween(
+      begin: (isUp ? AppColors.success : AppColors.danger).withValues(
+        alpha: 0.22,
+      ),
+      end: Colors.transparent,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _controller.forward(from: 0);
+    _previousPrice = widget.price;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      child: widget.child,
+      builder: (context, child) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: _flashColor.value,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: child,
+        );
+      },
     );
   }
 }

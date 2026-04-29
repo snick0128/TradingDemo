@@ -1,1173 +1,140 @@
-import 'dart:math' as math;
-
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
-import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
-import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/shared_widgets.dart';
+import 'advanced_chart_screen.dart';
+import 'fno_dashboard_screen.dart';
+import 'ipo_screen.dart';
+import 'market_depth_screen.dart';
+import 'notifications_center_screen.dart';
+import 'options_chain_screen.dart';
+import 'sector_heatmap_screen.dart';
+import 'time_and_sales_screen.dart';
+import 'top_gainers_losers_screen.dart';
+import 'universal_search_screen.dart';
+import 'market_watch_screen.dart';
+import 'orders_screen.dart';
+import 'portfolio_screen.dart';
 import 'stock_detail_screen.dart';
 
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends State<DashboardScreen> {
-  String _selectedSymbol = '';
-  String _query = '';
-  int _selectedRange = 2;
-  ChartType _chartType = ChartType.candles;
-  bool _showSma20 = true;
-  bool _showSma50 = false;
-  bool _showVolume = true;
-  late final TransformationController _chartTransformController;
-  int _mobileVisibleCandles = 34;
-
-  @override
-  void initState() {
-    super.initState();
-    _chartTransformController = TransformationController();
-  }
-
-  @override
-  void dispose() {
-    _chartTransformController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final allStocks = store.watchlist;
-    final filteredStocks = _filteredStocks(allStocks);
-    final isMobile = MediaQuery.of(context).size.width < 760;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : hour < 17
+        ? 'Good afternoon'
+        : 'Good evening';
+    final firstName = store.currentUser.name.split(' ').first;
 
-    if (allStocks.isEmpty) {
-      return const Scaffold(body: Center(child: Text('No symbols available.')));
-    }
+    final netWorth =
+        store.holdings.fold(0.0, (s, h) => s + h.currentValue) +
+        store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice) +
+        store.balance;
+    final dayPnl = store.positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
+    final dayPnlPct = netWorth == 0 ? 0.0 : (dayPnl / netWorth) * 100;
 
-    final selectedStock = _resolveSelectedStock(
-      fallback: allStocks.first,
-      all: allStocks,
-      filtered: filteredStocks,
-    );
+    // Top movers: sort by abs changePercentage
+    final movers = store.watchlist.toList()
+      ..sort(
+        (a, b) => b.changePercentage.abs().compareTo(a.changePercentage.abs()),
+      );
+    final topMovers = movers.take(5).toList();
+
+    final positions = store.positions.take(3).toList();
+    final realizedPnl = store.orders
+        .where(
+          (o) =>
+              o.status == OrderStatus.executed ||
+              o.status == OrderStatus.approved,
+        )
+        .fold(0.0, (s, o) {
+          final exec = o.executedPrice ?? o.price;
+          return s +
+              (o.type == OrderType.sell
+                  ? (exec - o.price) * o.quantity
+                  : (o.price - exec) * o.quantity);
+        });
 
     return Scaffold(
-      appBar: _buildAppBar(context, store),
-      bottomNavigationBar: isMobile ? _buildMobileCtaBar(context, selectedStock) : null,
-      body: Container(
-        color: AppColors.background,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final isDesktop = constraints.maxWidth >= 1150;
-            final isTablet = constraints.maxWidth >= 760;
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildKpiStrip(context, isTablet),
-                  const SizedBox(height: 16),
-                  _buildPortfolioSummary(context, store),
-                  const SizedBox(height: 16),
-                  if (isDesktop)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          flex: 7,
-                          child: Column(
-                            children: [
-                              _buildChartCard(context, selectedStock),
-                              const SizedBox(height: 16),
-                              _buildDepthAndTape(context, selectedStock, horizontal: true),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        SizedBox(
-                          width: 360,
-                          child: _buildWatchlistPanel(context, filteredStocks, selectedStock),
-                        ),
-                      ],
-                    )
-                  else ...[
-                    _buildChartCard(context, selectedStock, showInlineActions: !isMobile),
-                    const SizedBox(height: 16),
-                    _buildWatchlistPanel(context, filteredStocks, selectedStock),
-                    const SizedBox(height: 16),
-                    _buildDepthAndTape(context, selectedStock, horizontal: false),
-                  ],
-                ],
-              ),
-            );
-          },
-        ),
+      appBar: _DashboardAppBar(
+        greeting: '$greeting, $firstName',
+        unreadCount: store.unreadNotificationCount,
       ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(BuildContext context, TradingStore store) {
-    final compact = MediaQuery.of(context).size.width < 760;
-
-    return AppBar(
-      titleSpacing: 20,
-      title: Row(
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              gradient: const LinearGradient(
-                colors: [AppColors.primary, AppColors.accent],
-              ),
-            ),
-            child: const Icon(LucideIcons.candlestickChart, size: 18, color: Colors.white),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Box Trading Pro',
-                  style: Theme.of(context).textTheme.titleMedium,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  'Live Market Mode',
-                  style: Theme.of(context).textTheme.bodySmall,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        if (!compact) ...[
-          _smallChip(icon: LucideIcons.activity, label: 'NSE Open', color: AppColors.success),
-          const SizedBox(width: 10),
-        ],
-        IconButton(
-          onPressed: () => _openSearchSheet(context),
-          icon: const Icon(LucideIcons.search),
-        ),
-        if (!compact) IconButton(onPressed: () {}, icon: const Icon(LucideIcons.settings2)),
-        const SizedBox(width: 8),
-      ],
-    );
-  }
-
-  Widget _buildKpiStrip(BuildContext context, bool isTablet) {
-    final store = TradingScope.of(context);
-    final pnl = store.totalPnl;
-    final pnlPct = store.totalInvestment == 0 ? 0 : (pnl / store.totalInvestment) * 100;
-    
-    final kpis = [
-      _kpiCard(context, 'NIFTY 50', '22,814.65', '+192.15 (0.84%)', AppColors.success, isTablet),
-      _kpiCard(context, 'SENSEX', '75,091.11', '+440.23 (0.59%)', AppColors.success, isTablet),
-      _kpiCard(context, 'Portfolio P&L', '₹${pnl.abs().toStringAsFixed(0)}', 
-               '${pnl >= 0 ? '+' : '-'}${pnlPct.abs().toStringAsFixed(2)}%', 
-               pnl >= 0 ? AppColors.success : AppColors.danger, isTablet),
-      _kpiCard(context, 'Margin Available', '₹${store.balance.toStringAsFixed(0)}', 
-               'Blocked: ₹${store.usedMargin.toStringAsFixed(0)}', 
-               AppColors.primary, isTablet),
-    ];
-
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: kpis,
-    );
-  }
-
-  Widget _kpiCard(BuildContext context, String label, String value, String subValue, Color color, bool isTablet) {
-    return SizedBox(
-      width: isTablet ? 250 : double.infinity,
-      child: CustomCard(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      backgroundColor: AppColors.background,
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600, letterSpacing: 0.2)),
-                Icon(LucideIcons.trendingUp, size: 14, color: color.withValues(alpha: 0.6)),
-              ],
+            // 1. Net Worth Card
+            _NetWorthCard(
+              netWorth: netWorth,
+              dayPnl: dayPnl,
+              dayPnlPct: dayPnlPct,
+              balance: store.balance,
+            ),
+            const SizedBox(height: 20),
+
+            // 2. Quick Actions
+            const _QuickActionsRow(),
+            const SizedBox(height: 20),
+
+            // 3. Today's P&L strip
+            _PnlStrip(realized: realizedPnl, unrealized: dayPnl),
+            const SizedBox(height: 20),
+
+            // 4. Positions snapshot
+            if (positions.isNotEmpty) ...[
+              _SectionHeader(
+                title: 'Positions',
+                onViewAll: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PortfolioScreen()),
+                ),
+              ),
+              const SizedBox(height: 8),
+              _PositionsSnapshot(positions: positions),
+              const SizedBox(height: 20),
+            ],
+
+            // 5. Top Movers
+            _SectionHeader(title: 'Top Movers'),
+            const SizedBox(height: 8),
+            _TopMoversRow(stocks: topMovers),
+            const SizedBox(height: 20),
+
+            // 6. Quick Trade / Watchlist Preview
+            _SectionHeader(
+              title: 'Quick Trade',
+              onViewAll: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Watchlist',
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w500,
+              ),
             ),
             const SizedBox(height: 8),
-            Text(
-              value,
-              style: GoogleFonts.jetBrainsMono(
-                color: AppColors.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              subValue,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.1, end: 0),
-    );
-  }
+            _WatchlistPreview(stocks: store.watchlist.take(4).toList()),
+            const SizedBox(height: 20),
 
-  Widget _buildPortfolioSummary(BuildContext context, TradingStore store) {
-    final pnl = store.totalPnl;
-    final isPos = pnl >= 0;
-
-    return CustomCard(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _summaryBit('Total Portfolio Value', '₹${store.totalCurrentValue.toStringAsFixed(0)}', context),
-          const VerticalDivider(width: 32),
-          _summaryBit('Unrealized P&L', '${isPos ? '+' : ''}₹${pnl.abs().toStringAsFixed(0)}', context, color: isPos ? AppColors.success : AppColors.danger),
-          const VerticalDivider(width: 32),
-          _summaryBit('Funds Available', '₹${store.balance.toStringAsFixed(0)}', context, color: AppColors.primary),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryBit(String label, String value, BuildContext context, {Color? color}) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11)),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: GoogleFonts.jetBrainsMono(
-              color: color ?? AppColors.textPrimary,
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-
-  Widget _buildChartCard(
-    BuildContext context,
-    Stock stock, {
-    bool showInlineActions = true,
-  }) {
-    final isMobile = MediaQuery.of(context).size.width < 760;
-    final series = TradingChartService.buildSeries(
-      symbol: stock.symbol,
-      basePrice: stock.currentPrice,
-      rangeIndex: _selectedRange,
-    );
-    final isPositive = series.close >= series.open;
-
-    return CustomCard(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () => _openStockDetail(context, stock.symbol),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(stock.symbol, style: Theme.of(context).textTheme.titleLarge),
-                      const SizedBox(height: 3),
-                      Text('${stock.name} • ${stock.sector}', style: Theme.of(context).textTheme.bodySmall),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '₹${series.close.toStringAsFixed(2)}',
-                        style: GoogleFonts.jetBrainsMono(
-                          color: AppColors.textPrimary,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        '${isPositive ? '+' : ''}${(((series.close - series.open) / series.open) * 100).toStringAsFixed(2)}%',
-                        style: TextStyle(
-                          color: isPositive ? AppColors.success : AppColors.danger,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (var i = 0; i < _rangeLabels.length; i++) _rangeChip(i, _rangeLabels[i]),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: 'Chart settings',
-                onPressed: () => _openChartSettings(context),
-                icon: const Icon(LucideIcons.slidersHorizontal, size: 18),
-              ),
-            ],
-          ),
-          if (isMobile)
-            Row(
-              children: [
-                IconButton(
-                  onPressed: _mobileVisibleCandles > 18
-                      ? () => setState(() => _mobileVisibleCandles -= 6)
-                      : null,
-                  icon: const Icon(LucideIcons.zoomIn, size: 16),
-                  tooltip: 'Zoom In',
-                ),
-                IconButton(
-                  onPressed: _mobileVisibleCandles < 90
-                      ? () => setState(() => _mobileVisibleCandles += 6)
-                      : null,
-                  icon: const Icon(LucideIcons.zoomOut, size: 16),
-                  tooltip: 'Zoom Out',
-                ),
-                const SizedBox(width: 4),
-                Text('Pinch to zoom · Drag to pan', style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 280,
-            child: _buildPrimaryChart(series),
-          ),
-          if (_showVolume) ...[
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 90,
-              child: _buildVolumeChart(series),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 12,
-            runSpacing: 6,
-            children: [
-              _chartStat('O', series.open),
-              _chartStat('H', series.high),
-              _chartStat('L', series.low),
-              _chartStat('C', series.close),
-              _chartLabel('VWAP ${series.vwap.toStringAsFixed(2)}'),
-              _chartLabel('RSI14 ${series.rsi14.toStringAsFixed(1)}'),
-              _chartLabel('Vol ${(series.volume / 100000).toStringAsFixed(2)}L'),
-            ],
-          ),
-          if (showInlineActions) ...[
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _openOrderSheet(context, stock.symbol, OrderType.sell),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-                    child: const Text('SELL'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _openOrderSheet(context, stock.symbol, OrderType.buy),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
-                    child: const Text('BUY'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: () => _openStockDetail(context, stock.symbol),
-                  icon: const Icon(LucideIcons.expand, size: 16),
-                  label: const Text('Detail'),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWatchlistPanel(BuildContext context, List<Stock> stocks, Stock selectedStock) {
-    return CustomCard(
-      padding: const EdgeInsets.all(0),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Market Watch', style: Theme.of(context).textTheme.titleMedium),
-                    Text(
-                      '${stocks.length} symbols',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  onChanged: (value) => setState(() => _query = value.trim()),
-                  decoration: const InputDecoration(
-                    hintText: 'Search symbol or company',
-                    prefixIcon: Icon(LucideIcons.search, size: 18),
-                    isDense: true,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          SizedBox(
-            height: 460,
-            child: stocks.isEmpty
-                ? Center(
-                    child: Text('No symbols match your search.', style: Theme.of(context).textTheme.bodySmall),
-                  )
-                : ListView.separated(
-                    itemCount: stocks.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final stock = stocks[index];
-                      final selected = stock.symbol == selectedStock.symbol;
-
-                      return InkWell(
-                        onTap: () {
-                          setState(() => _selectedSymbol = stock.symbol);
-                          _openStockDetail(context, stock.symbol);
-                        },
-                        child: Container(
-                          color: selected ? AppColors.surfaceAlt : Colors.transparent,
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 30,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  stock.symbol.characters.first,
-                                  style: const TextStyle(
-                                    color: AppColors.primary,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(stock.symbol, style: Theme.of(context).textTheme.titleMedium),
-                                    Text(stock.name, style: Theme.of(context).textTheme.bodySmall, overflow: TextOverflow.ellipsis),
-                                  ],
-                                ),
-                              ),
-                              PriceText(
-                                price: stock.currentPrice,
-                                change: stock.changePercentage,
-                                isChangePositive: stock.isPositive,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDepthAndTape(BuildContext context, Stock stock, {required bool horizontal}) {
-    final depth = _orderBook(stock.currentPrice);
-    final trades = _recentTrades(stock.currentPrice);
-
-    final orderBookCard = CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Order Book', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          _bookHeader(),
-          const SizedBox(height: 8),
-          for (final row in depth)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      row.$1,
-                      style: GoogleFonts.jetBrainsMono(color: AppColors.success, fontSize: 12),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      row.$2,
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.jetBrainsMono(color: AppColors.textSecondary, fontSize: 12),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      row.$3,
-                      textAlign: TextAlign.right,
-                      style: GoogleFonts.jetBrainsMono(color: AppColors.danger, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-
-    final tapeCard = CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Recent Trades', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              _subHeader('Time', align: TextAlign.left),
-              _subHeader('Price', align: TextAlign.center),
-              _subHeader('Qty', align: TextAlign.right),
-            ],
-          ),
-          const SizedBox(height: 8),
-          for (final row in trades)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  Expanded(child: Text(row.$1, style: Theme.of(context).textTheme.bodySmall)),
-                  Expanded(
-                    child: Text(
-                      row.$2,
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.jetBrainsMono(
-                        color: row.$4 ? AppColors.success : AppColors.danger,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      row.$3,
-                      textAlign: TextAlign.right,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-
-    if (horizontal) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: orderBookCard),
-          const SizedBox(width: 16),
-          Expanded(child: tapeCard),
-        ],
-      );
-    }
-
-    return Column(
-      children: [
-        orderBookCard,
-        const SizedBox(height: 16),
-        tapeCard,
-      ],
-    );
-  }
-
-  Widget _bookHeader() {
-    return Row(
-      children: [
-        _subHeader('Bid', align: TextAlign.left),
-        _subHeader('Qty', align: TextAlign.center),
-        _subHeader('Ask', align: TextAlign.right),
-      ],
-    );
-  }
-
-  Widget _subHeader(String label, {required TextAlign align}) {
-    return Expanded(
-      child: Text(
-        label,
-        textAlign: align,
-        style: GoogleFonts.sora(
-          color: AppColors.textSecondary,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.3,
-        ),
-      ),
-    );
-  }
-
-  Widget _rangeChip(int index, String label) {
-    final selected = _selectedRange == index;
-
-    return InkWell(
-      onTap: () {
-        _chartTransformController.value = Matrix4.identity();
-        setState(() => _selectedRange = index);
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: AnimatedContainer(
-        duration: 220.ms,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary.withValues(alpha: 0.2) : AppColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? AppColors.primary : AppColors.border,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? AppColors.textPrimary : AppColors.textSecondary,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            fontSize: 12,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _smallChip({required IconData icon, required String label, required Color color}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPrimaryChart(TradingChartSeries series) {
-    if (_chartType == ChartType.candles) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: CandlestickChart(
-          _buildCandlestickData(series),
-          duration: 350.ms,
-          transformationConfig: FlTransformationConfig(
-            scaleAxis: FlScaleAxis.horizontal,
-            minScale: 1,
-            maxScale: 7,
-            panEnabled: true,
-            scaleEnabled: true,
-            transformationController: _chartTransformController,
-          ),
-        ),
-      );
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: LineChart(
-        _buildChartData(series, isArea: _chartType == ChartType.area),
-        duration: 350.ms,
-        transformationConfig: FlTransformationConfig(
-          scaleAxis: FlScaleAxis.horizontal,
-          minScale: 1,
-          maxScale: 7,
-          panEnabled: true,
-          scaleEnabled: true,
-          transformationController: _chartTransformController,
-        ),
-      ),
-    );
-  }
-
-  LineChartData _buildChartData(TradingChartSeries series, {required bool isArea}) {
-    final points = series.closeSpots;
-    final primaryColor = series.close >= series.open ? AppColors.success : AppColors.danger;
-    final bounds = _viewportBounds(series.closeSpots.length);
-
-    return LineChartData(
-      minX: bounds.$1,
-      maxX: bounds.$2,
-      minY: points.map((e) => e.y).reduce(math.min) - 18,
-      maxY: points.map((e) => e.y).reduce(math.max) + 18,
-      clipData: const FlClipData.all(),
-      gridData: FlGridData(
-        show: true,
-        drawVerticalLine: true,
-        horizontalInterval: 20,
-        getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.5),
-        getDrawingVerticalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.4),
-      ),
-      titlesData: FlTitlesData(
-        leftTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 56,
-            getTitlesWidget: (value, _) => Text(
-              '₹${value.toStringAsFixed(0)}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 24,
-            interval: math.max(1, points.length / 4),
-            getTitlesWidget: (value, _) {
-              final index = value.toInt();
-              if (index < 0 || index >= series.xLabels.length) {
-                return const SizedBox.shrink();
-              }
-              return Text(
-                series.xLabels[index],
-                style: Theme.of(context).textTheme.bodySmall,
-              );
-            },
-          ),
-        ),
-      ),
-      borderData: FlBorderData(show: false),
-      lineTouchData: LineTouchData(
-        enabled: true,
-        touchTooltipData: LineTouchTooltipData(
-          getTooltipColor: (_) => AppColors.surfaceAlt,
-          tooltipPadding: const EdgeInsets.all(8),
-          getTooltipItems: (touchedSpots) {
-            return touchedSpots
-                .map(
-                  (spot) => LineTooltipItem(
-                    '₹${spot.y.toStringAsFixed(2)}',
-                    GoogleFonts.jetBrainsMono(color: AppColors.textPrimary, fontWeight: FontWeight.w700),
-                  ),
-                )
-                .toList();
-          },
-        ),
-      ),
-      lineBarsData: [
-        LineChartBarData(
-          spots: points,
-          isCurved: true,
-          color: primaryColor,
-          barWidth: 2.8,
-          dotData: const FlDotData(show: false),
-          belowBarData: BarAreaData(
-            show: isArea,
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                primaryColor.withValues(alpha: 0.25),
-                Colors.transparent,
-              ],
-            ),
-          ),
-        ),
-        if (_showSma20)
-          LineChartBarData(
-            spots: series.sma20Spots,
-            isCurved: true,
-            color: AppColors.warning,
-            barWidth: 1.4,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(show: false),
-          ),
-        if (_showSma50)
-          LineChartBarData(
-            spots: series.sma50Spots,
-            isCurved: true,
-            color: AppColors.accent,
-            barWidth: 1.2,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(show: false),
-          ),
-      ],
-    );
-  }
-
-  CandlestickChartData _buildCandlestickData(TradingChartSeries series) {
-    return CandlestickChartData(
-      candlestickSpots: series.candlestickSpots,
-      minX: _viewportBounds(series.candlestickSpots.length).$1,
-      maxX: _viewportBounds(series.candlestickSpots.length).$2,
-      clipData: const FlClipData.all(),
-      gridData: FlGridData(
-        show: true,
-        drawVerticalLine: true,
-        getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.5),
-        getDrawingVerticalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.4),
-      ),
-      titlesData: FlTitlesData(
-        leftTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 56,
-            getTitlesWidget: (value, _) => Text(
-              '₹${value.toStringAsFixed(0)}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 24,
-            interval: math.max(1, series.candlestickSpots.length / 4),
-            getTitlesWidget: (value, _) {
-              final index = value.toInt();
-              if (index < 0 || index >= series.xLabels.length) {
-                return const SizedBox.shrink();
-              }
-              return Text(series.xLabels[index], style: Theme.of(context).textTheme.bodySmall);
-            },
-          ),
-        ),
-      ),
-      borderData: FlBorderData(show: false),
-      candlestickTouchData: CandlestickTouchData(
-        enabled: true,
-        touchTooltipData: CandlestickTouchTooltipData(
-          getTooltipColor: (_) => AppColors.surfaceAlt,
-        ),
-      ),
-    );
-  }
-
-  (double, double) _viewportBounds(int length) {
-    final isMobile = MediaQuery.of(context).size.width < 760;
-    if (!isMobile || length <= _mobileVisibleCandles) {
-      return (0, (length - 1).toDouble());
-    }
-    final start = (length - _mobileVisibleCandles).toDouble();
-    return (start, (length - 1).toDouble());
-  }
-
-  Widget _buildVolumeChart(TradingChartSeries series) {
-    final maxVolume = series.volumeBars
-        .map((item) => item.barRods.first.toY)
-        .reduce(math.max);
-
-    return BarChart(
-      BarChartData(
-        minY: 0,
-        maxY: maxVolume * 1.1,
-        barGroups: series.volumeBars,
-        alignment: BarChartAlignment.spaceBetween,
-        gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(
-          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        ),
-        borderData: FlBorderData(show: false),
-        barTouchData: BarTouchData(enabled: false),
-      ),
-    );
-  }
-
-  Widget _chartStat(String key, double value) {
-    return Text(
-      '$key ${value.toStringAsFixed(2)}',
-      style: GoogleFonts.jetBrainsMono(
-        color: AppColors.textPrimary,
-        fontSize: 11,
-        fontWeight: FontWeight.w600,
-      ),
-    );
-  }
-
-  Widget _chartLabel(String text) {
-    return Text(
-      text,
-      style: Theme.of(context).textTheme.bodySmall,
-    );
-  }
-
-  List<(String, String, String)> _orderBook(double price) {
-    return List.generate(8, (index) {
-      final spread = (8 - index) * 0.55;
-      final bid = (price - spread).toStringAsFixed(2);
-      final ask = (price + spread).toStringAsFixed(2);
-      final qty = (120 + (index * 45)).toString();
-      return (bid, qty, ask);
-    });
-  }
-
-  List<(String, String, String, bool)> _recentTrades(double price) {
-    return List.generate(10, (index) {
-      final up = index.isEven;
-      final p = (price + (up ? index * 0.35 : -index * 0.28)).toStringAsFixed(2);
-      final qty = (50 + (index * 15)).toString();
-      final minute = 42 - index;
-      return ('14:${minute.toString().padLeft(2, '0')}:17', p, qty, up);
-    });
-  }
-
-  List<Stock> _filteredStocks(List<Stock> source) {
-    if (_query.isEmpty) {
-      return source;
-    }
-    final query = _query.toLowerCase();
-    return source
-        .where(
-          (stock) =>
-              stock.symbol.toLowerCase().contains(query) ||
-              stock.name.toLowerCase().contains(query),
-        )
-        .toList();
-  }
-
-  Stock _resolveSelectedStock({
-    required Stock fallback,
-    required List<Stock> all,
-    required List<Stock> filtered,
-  }) {
-    final selected = all.where((stock) => stock.symbol == _selectedSymbol).toList();
-    if (selected.isNotEmpty) {
-      return selected.first;
-    }
-    if (filtered.isNotEmpty) {
-      return filtered.first;
-    }
-    return fallback;
-  }
-
-  void _openSearchSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        final controller = TextEditingController(text: _query);
-        return Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Find in watchlist',
-                  prefixIcon: Icon(LucideIcons.search, size: 18),
-                ),
-                onChanged: (value) => setState(() => _query = value.trim()),
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() => _query = controller.text.trim());
-                  Navigator.pop(context);
-                },
-                child: const Text('Apply Search'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _openChartSettings(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Chart Settings', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 12),
-                  SegmentedButton<ChartType>(
-                    segments: const [
-                      ButtonSegment(value: ChartType.candles, label: Text('Candles')),
-                      ButtonSegment(value: ChartType.line, label: Text('Line')),
-                      ButtonSegment(value: ChartType.area, label: Text('Area')),
-                    ],
-                    selected: {_chartType},
-                    onSelectionChanged: (selection) {
-                      setState(() => _chartType = selection.first);
-                      setModalState(() {});
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Show SMA 20'),
-                    value: _showSma20,
-                    onChanged: (value) {
-                      setState(() => _showSma20 = value);
-                      setModalState(() {});
-                    },
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Show SMA 50'),
-                    value: _showSma50,
-                    onChanged: (value) {
-                      setState(() => _showSma50 = value);
-                      setModalState(() {});
-                    },
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Show Volume'),
-                    value: _showVolume,
-                    onChanged: (value) {
-                      setState(() => _showVolume = value);
-                      setModalState(() {});
-                    },
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _openOrderSheet(BuildContext context, String symbol, OrderType type) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _QuickOrderSheet(symbol: symbol, type: type),
-    );
-  }
-
-  void _openStockDetail(BuildContext context, String symbol) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: symbol)),
-    );
-  }
-
-  Widget _buildMobileCtaBar(BuildContext context, Stock stock) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        decoration: const BoxDecoration(
-          color: AppColors.surface,
-          border: Border(top: BorderSide(color: AppColors.border)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _openStockDetail(context, stock.symbol),
-                child: const Text('DETAIL'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: () => _openOrderSheet(context, stock.symbol, OrderType.sell),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-                child: const Text('SELL'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: () => _openOrderSheet(context, stock.symbol, OrderType.buy),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
-                child: const Text('BUY'),
-              ),
-            ),
+            // 7. Indices strip
+            _IndicesStrip(),
           ],
         ),
       ),
@@ -1175,91 +142,520 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-const _rangeLabels = ['1D', '1W', '1M', '3M', '1Y'];
+// ─── AppBar ───────────────────────────────────────────────────────────────────
 
-class _QuickOrderSheet extends StatefulWidget {
-  final String symbol;
-  final OrderType type;
+class _DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final String greeting;
+  final int unreadCount;
 
-  const _QuickOrderSheet({required this.symbol, required this.type});
+  const _DashboardAppBar({required this.greeting, required this.unreadCount});
 
   @override
-  State<_QuickOrderSheet> createState() => _QuickOrderSheetState();
-}
-
-class _QuickOrderSheetState extends State<_QuickOrderSheet> {
-  final _qtyController = TextEditingController(text: '10');
-
-  double get _margin {
-    final stock = TradingScope.of(context).stockBySymbol(widget.symbol);
-    final qty = int.tryParse(_qtyController.text) ?? 0;
-    return (stock.currentPrice * qty) / 5;
-  }
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final stock = store.stockBySymbol(widget.symbol);
-    final isBuy = widget.type == OrderType.buy;
-
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '${isBuy ? 'Buy' : 'Sell'} ${stock.symbol}',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(LucideIcons.x),
-              ),
-            ],
+    return AppBar(
+      titleSpacing: 16,
+      title: Text(greeting, style: Theme.of(context).textTheme.titleLarge),
+      actions: [
+        IconButton(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const UniversalSearchScreen()),
           ),
-          Text('LTP ₹${stock.currentPrice.toStringAsFixed(2)}', style: Theme.of(context).textTheme.bodyMedium),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _qtyController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Quantity', suffixText: 'Qty'),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 16),
-          CustomCard(
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Required Margin'),
-                    Text(
-                      '₹${_margin.toStringAsFixed(2)}',
-                      style: GoogleFonts.jetBrainsMono(
-                        color: AppColors.textPrimary,
+          icon: const Icon(LucideIcons.search),
+          tooltip: 'Search',
+        ),
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const NotificationsCenterScreen(),
+                ),
+              ),
+              icon: const Icon(LucideIcons.bell),
+              tooltip: 'Notifications',
+            ),
+            if (unreadCount > 0)
+              Positioned(
+                right: 6,
+                top: 6,
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: const BoxDecoration(
+                    color: AppColors.danger,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      unreadCount > 9 ? '9+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 8),
+              ),
+          ],
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+}
+
+// ─── Net Worth Card ───────────────────────────────────────────────────────────
+
+class _NetWorthCard extends StatelessWidget {
+  final double netWorth;
+  final double dayPnl;
+  final double dayPnlPct;
+  final double balance;
+
+  const _NetWorthCard({
+    required this.netWorth,
+    required this.dayPnl,
+    required this.dayPnlPct,
+    required this.balance,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = dayPnl >= 0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1A3A6B), Color(0xFF387ED1)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Net Worth',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '₹${_fmt(netWorth)}',
+            style: GoogleFonts.jetBrainsMono(
+              color: Colors.white,
+              fontSize: 32,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Text(
+                "Today's P&L  ",
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              _PnlChip(
+                value: dayPnl,
+                pct: dayPnlPct,
+                isPos: isPos,
+                light: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text(
+                'Available Cash  ',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              Text(
+                '₹${balance.toStringAsFixed(2)}',
+                style: GoogleFonts.jetBrainsMono(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmt(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(2)}Cr';
+    if (v >= 100000) return '${(v / 100000).toStringAsFixed(2)}L';
+    return v.toStringAsFixed(0);
+  }
+}
+
+// ─── Quick Actions ────────────────────────────────────────────────────────────
+
+class _QuickActionsRow extends StatelessWidget {
+  const _QuickActionsRow();
+  @override
+  Widget build(BuildContext context) {
+    final actions = [
+      (LucideIcons.barChart2, 'Markets', AppColors.primary),
+      (LucideIcons.listTodo, 'Orders', AppColors.accent),
+      (LucideIcons.fileText, 'IPO', AppColors.warning),
+      (LucideIcons.moreHorizontal, 'More', AppColors.textSecondary),
+    ];
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceAround,
+      children: actions.map((a) {
+        return _QuickActionButton(
+          icon: a.$1,
+          label: a.$2,
+          color: a.$3,
+          onTap: () {
+            if (a.$2 == 'Markets') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
+              );
+            } else if (a.$2 == 'Orders') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const OrdersScreen()),
+              );
+            } else if (a.$2 == 'IPO') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const IPOScreen()),
+              );
+            } else if (a.$2 == 'More') {
+              _showMoreActions(context);
+            }
+          },
+        );
+      }).toList(),
+    );
+  }
+
+  void _showMoreActions(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            _sheetItem(
+              ctx,
+              'Market Watch',
+              const MarketWatchScreen(),
+              icon: Icons.view_list,
+            ),
+            _sheetItem(
+              ctx,
+              'Advanced Chart',
+              const AdvancedChartScreen(symbol: 'REL'),
+              icon: Icons.show_chart,
+            ),
+            _sheetItem(
+              ctx,
+              'Top Gainers / Losers',
+              const TopGainersLosersScreen(),
+              icon: Icons.trending_up,
+            ),
+            _sheetItem(
+              ctx,
+              'Sector Heatmap',
+              const SectorHeatmapScreen(),
+              icon: Icons.grid_view,
+            ),
+            _sheetItem(
+              ctx,
+              'Options Chain',
+              const OptionsChainScreen(),
+              icon: Icons.stacked_bar_chart,
+            ),
+            _sheetItem(
+              ctx,
+              'F&O Dashboard',
+              const FnoDashboardScreen(),
+              icon: LucideIcons.activity,
+            ),
+            _sheetItem(
+              ctx,
+              'Market Depth',
+              const MarketDepthScreen(),
+              icon: Icons.layers,
+            ),
+            _sheetItem(
+              ctx,
+              'Time & Sales',
+              const TimeAndSalesScreen(),
+              icon: LucideIcons.clock3,
+            ),
+            _sheetItem(
+              ctx,
+              'Universal Search',
+              const UniversalSearchScreen(),
+              icon: LucideIcons.search,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetItem(
+    BuildContext context,
+    String title,
+    Widget destination, {
+    required IconData icon,
+  }) {
+    return ListTile(
+      leading: Icon(icon, size: 18, color: AppColors.textPrimary),
+      title: Text(title),
+      onTap: () {
+        Navigator.pop(context);
+        Navigator.push(context, MaterialPageRoute(builder: (_) => destination));
+      },
+    );
+  }
+}
+
+class _QuickActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _QuickActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── P&L Strip ────────────────────────────────────────────────────────────────
+
+class _PnlStrip extends StatelessWidget {
+  final double realized;
+  final double unrealized;
+
+  const _PnlStrip({required this.realized, required this.unrealized});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(AppColors.cardRadius),
+        boxShadow: AppColors.softShadow,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _PnlItem(label: "Realized P&L", value: realized),
+          ),
+          Container(width: 1, height: 36, color: AppColors.border),
+          Expanded(
+            child: _PnlItem(label: "Unrealized P&L", value: unrealized),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PnlItem extends StatelessWidget {
+  final String label;
+  final double value;
+
+  const _PnlItem({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = value >= 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${isPos ? '+' : ''}₹${value.abs().toStringAsFixed(0)}',
+          style: GoogleFonts.jetBrainsMono(
+            color: isPos ? AppColors.success : AppColors.danger,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Section Header ───────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final VoidCallback? onViewAll;
+
+  const _SectionHeader({required this.title, this.onViewAll});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        if (onViewAll != null)
+          GestureDetector(
+            onTap: onViewAll,
+            child: const Text(
+              'View all',
+              style: TextStyle(
+                color: AppColors.primary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ─── Positions Snapshot ───────────────────────────────────────────────────────
+
+class _PositionsSnapshot extends StatelessWidget {
+  final List<Position> positions;
+
+  const _PositionsSnapshot({required this.positions});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppColors.cardRadius),
+        boxShadow: AppColors.softShadow,
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < positions.length; i++) ...[
+            _PositionRow(position: positions[i]),
+            if (i < positions.length - 1)
+              const Divider(height: 1, indent: 16, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PositionRow extends StatelessWidget {
+  final Position position;
+
+  const _PositionRow({required this.position});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = position;
+    final isPos = p.unrealizedPnl >= 0;
+    final productLabel = p.product == ProductType.mis ? 'MIS' : 'CNC';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  p.symbol,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 3),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Available Margin'),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        productLabel,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
                     Text(
-                      '₹${store.balance.toStringAsFixed(2)}',
-                      style: GoogleFonts.jetBrainsMono(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w700,
+                      '${p.quantity} qty',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
                       ),
                     ),
                   ],
@@ -1267,27 +663,333 @@ class _QuickOrderSheetState extends State<_QuickOrderSheet> {
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: () {
-              final qty = int.tryParse(_qtyController.text) ?? 0;
-              final result = store.placeOrder(
-                symbol: stock.symbol,
-                quantity: qty,
-                type: widget.type,
-              );
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(result.message),
-                  backgroundColor: result.success ? (isBuy ? AppColors.success : AppColors.danger) : AppColors.warning,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '₹${p.currentPrice.toStringAsFixed(2)}',
+                style: GoogleFonts.jetBrainsMono(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
                 ),
-              );
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: isBuy ? AppColors.success : AppColors.danger),
-            child: Text(isBuy ? 'CONFIRM BUY' : 'CONFIRM SELL'),
+              ),
+              const SizedBox(height: 3),
+              _PnlChip(
+                value: p.unrealizedPnl,
+                pct: p.pnlPercentage,
+                isPos: isPos,
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Top Movers ───────────────────────────────────────────────────────────────
+
+class _TopMoversRow extends StatelessWidget {
+  final List<Stock> stocks;
+
+  const _TopMoversRow({required this.stocks});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 110,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: stocks.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        itemBuilder: (context, index) => _MoverCard(stock: stocks[index]),
+      ),
+    );
+  }
+}
+
+class _MoverCard extends StatelessWidget {
+  final Stock stock;
+
+  const _MoverCard({required this.stock});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = stock.changePercentage >= 0;
+    final sign = isPos ? '+' : '';
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppColors.cardRadius),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
+      ),
+      child: Container(
+        width: 140,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppColors.cardRadius),
+          boxShadow: AppColors.softShadow,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              stock.symbol,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: AppColors.textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              '₹${stock.currentPrice.toStringAsFixed(2)}',
+              style: GoogleFonts.jetBrainsMono(
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: isPos
+                    ? AppColors.success.withValues(alpha: 0.12)
+                    : AppColors.danger.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$sign${stock.changePercentage.toStringAsFixed(2)}%',
+                style: TextStyle(
+                  color: isPos ? AppColors.success : AppColors.danger,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Watchlist Preview ────────────────────────────────────────────────────────
+
+class _WatchlistPreview extends StatelessWidget {
+  final List<Stock> stocks;
+
+  const _WatchlistPreview({required this.stocks});
+
+  @override
+  Widget build(BuildContext context) {
+    if (stocks.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppColors.cardRadius),
+        boxShadow: AppColors.softShadow,
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < stocks.length; i++) ...[
+            _WatchlistPreviewRow(stock: stocks[i]),
+            if (i < stocks.length - 1)
+              const Divider(height: 1, indent: 16, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _WatchlistPreviewRow extends StatelessWidget {
+  final Stock stock;
+
+  const _WatchlistPreviewRow({required this.stock});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = stock.changePercentage >= 0;
+    final sign = isPos ? '+' : '';
+    final changeColor = isPos ? AppColors.success : AppColors.danger;
+
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                stock.symbol,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            PriceFlashWidget(
+              price: stock.currentPrice,
+              child: Text(
+                '₹${stock.currentPrice.toStringAsFixed(2)}',
+                style: GoogleFonts.jetBrainsMono(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: changeColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$sign${stock.changePercentage.toStringAsFixed(2)}%',
+                style: TextStyle(
+                  color: changeColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Indices Strip ────────────────────────────────────────────────────────────
+
+class _IndicesStrip extends StatelessWidget {
+  const _IndicesStrip();
+
+  static const _indices = [
+    ('NIFTY 50', '22,814.65', '+0.84%', true),
+    ('SENSEX', '75,091.11', '+0.59%', true),
+    ('BANK NIFTY', '48,115.30', '-0.44%', false),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppColors.cardRadius),
+        boxShadow: AppColors.softShadow,
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < _indices.length; i++) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _indices[i].$1,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _indices[i].$2,
+                    style: GoogleFonts.jetBrainsMono(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _indices[i].$4
+                          ? AppColors.success.withValues(alpha: 0.12)
+                          : AppColors.danger.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _indices[i].$3,
+                      style: TextStyle(
+                        color: _indices[i].$4
+                            ? AppColors.success
+                            : AppColors.danger,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (i < _indices.length - 1)
+              const Divider(height: 1, indent: 16, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─── P&L Chip ─────────────────────────────────────────────────────────────────
+
+class _PnlChip extends StatelessWidget {
+  final double value;
+  final double pct;
+  final bool isPos;
+  final bool light;
+
+  const _PnlChip({
+    required this.value,
+    required this.pct,
+    required this.isPos,
+    this.light = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isPos ? AppColors.success : AppColors.danger;
+    final sign = isPos ? '+' : '';
+    final bgColor = light
+        ? Colors.white.withValues(alpha: 0.2)
+        : color.withValues(alpha: 0.15);
+    final textColor = light ? Colors.white : color;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '$sign₹${value.abs().toStringAsFixed(0)}  ($sign${pct.toStringAsFixed(2)}%)',
+        style: TextStyle(
+          color: textColor,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
       ),
     );
   }

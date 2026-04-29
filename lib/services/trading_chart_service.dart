@@ -1,17 +1,30 @@
 import 'dart:math' as math;
+import '../models/trading_models.dart';
 
-import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter/widgets.dart';
+class TradingCandle {
+  final DateTime time;
+  final double open;
+  final double high;
+  final double low;
+  final double close;
+  final double volume;
+  final double? sma20;
+  final double? sma50;
 
-enum ChartType { candles, line, area }
+  const TradingCandle({
+    required this.time,
+    required this.open,
+    required this.high,
+    required this.low,
+    required this.close,
+    required this.volume,
+    this.sma20,
+    this.sma50,
+  });
+}
 
 class TradingChartSeries {
-  final List<FlSpot> closeSpots;
-  final List<CandlestickSpot> candlestickSpots;
-  final List<FlSpot> sma20Spots;
-  final List<FlSpot> sma50Spots;
-  final List<BarChartGroupData> volumeBars;
-  final List<String> xLabels;
+  final List<TradingCandle> data;
   final double open;
   final double high;
   final double low;
@@ -21,12 +34,7 @@ class TradingChartSeries {
   final double rsi14;
 
   const TradingChartSeries({
-    required this.closeSpots,
-    required this.candlestickSpots,
-    required this.sma20Spots,
-    required this.sma50Spots,
-    required this.volumeBars,
-    required this.xLabels,
+    required this.data,
     required this.open,
     required this.high,
     required this.low,
@@ -41,7 +49,9 @@ class TradingChartService {
   static TradingChartSeries buildSeries({
     required String symbol,
     required double basePrice,
-    required int rangeIndex,
+    int rangeIndex = 2,
+    ChartTimeframe timeframe = ChartTimeframe.d1,
+    ChartDateRange dateRange = ChartDateRange.mo1,
   }) {
     final count = _countForRange(rangeIndex);
     final minutesStep = _minutesStepForRange(rangeIndex);
@@ -59,7 +69,8 @@ class TradingChartService {
       final trend = (rangeIndex - 1.5) * 0.035;
       final cyclical = math.sin((i + seed % 11) / (4.0 + rangeIndex)) * 0.55;
       final noise = (random.nextDouble() - 0.5) * (1.2 + rangeIndex * 0.28);
-      final delta = (trend + cyclical + noise) * math.max(1, previousClose * 0.0018);
+      final delta =
+          (trend + cyclical + noise) * math.max(1, previousClose * 0.0018);
 
       final open = previousClose;
       var close = (open + delta).clamp(1.0, double.infinity);
@@ -71,7 +82,8 @@ class TradingChartService {
       final wickDown = random.nextDouble() * (0.3 + rangeIndex * 0.1);
       final high = math.max(open, close) + wickUp;
       final low = math.max(0.1, math.min(open, close) - wickDown);
-      final volume = (90000 + random.nextDouble() * 240000) * (1 + i / (count * 3));
+      final volume =
+          (90000 + random.nextDouble() * 240000) * (1 + i / (count * 3));
 
       opens.add(open);
       closes.add(close);
@@ -81,40 +93,22 @@ class TradingChartService {
       previousClose = close;
     }
 
-    final closeSpots = <FlSpot>[];
-    final candlestickSpots = <CandlestickSpot>[];
-    final sma20Spots = <FlSpot>[];
-    final sma50Spots = <FlSpot>[];
-    final volumeBars = <BarChartGroupData>[];
+    final candles = <TradingCandle>[];
+    final now = DateTime.now();
+    final start = now.subtract(Duration(minutes: minutesStep * (count - 1)));
 
     for (var i = 0; i < count; i++) {
-      final x = i.toDouble();
-      closeSpots.add(FlSpot(x, closes[i]));
-      candlestickSpots.add(
-        CandlestickSpot(
-          x: x,
+      final time = start.add(Duration(minutes: minutesStep * i));
+      candles.add(
+        TradingCandle(
+          time: time,
           open: opens[i],
           high: highs[i],
           low: lows[i],
           close: closes[i],
-        ),
-      );
-      final sma20 = _sma(closes, i, 20);
-      final sma50 = _sma(closes, i, 50);
-      if (sma20 != null) sma20Spots.add(FlSpot(x, sma20));
-      if (sma50 != null) sma50Spots.add(FlSpot(x, sma50));
-
-      volumeBars.add(
-        BarChartGroupData(
-          x: i,
-          barRods: [
-            BarChartRodData(
-              toY: volumes[i],
-              width: 3,
-              color: closes[i] >= opens[i] ? const Color(0xFF22C55E) : const Color(0xFFEF4444),
-              borderRadius: BorderRadius.zero,
-            ),
-          ],
+          volume: volumes[i],
+          sma20: _sma(closes, i, 20),
+          sma50: _sma(closes, i, 50),
         ),
       );
     }
@@ -130,12 +124,7 @@ class TradingChartService {
     }
 
     return TradingChartSeries(
-      closeSpots: closeSpots,
-      candlestickSpots: candlestickSpots,
-      sma20Spots: sma20Spots,
-      sma50Spots: sma50Spots,
-      volumeBars: volumeBars,
-      xLabels: _buildLabels(count: count, minutesStep: minutesStep),
+      data: candles,
       open: opens.first,
       high: seriesHigh,
       low: seriesLow,
@@ -145,6 +134,229 @@ class TradingChartService {
       rsi14: _rsi(closes, 14),
     );
   }
+
+  // ─── Heikin-Ashi ────────────────────────────────────────────────────────────
+
+  static List<TradingCandle> toHeikinAshi(List<TradingCandle> candles) {
+    if (candles.isEmpty) return [];
+    final result = <TradingCandle>[];
+
+    double prevHaOpen = (candles.first.open + candles.first.close) / 2;
+    double prevHaClose =
+        (candles.first.open +
+            candles.first.high +
+            candles.first.low +
+            candles.first.close) /
+        4;
+
+    for (var i = 0; i < candles.length; i++) {
+      final c = candles[i];
+      final haClose = (c.open + c.high + c.low + c.close) / 4;
+      final haOpen = i == 0
+          ? (c.open + c.close) / 2
+          : (prevHaOpen + prevHaClose) / 2;
+      final haHigh = math.max(c.high, math.max(haOpen, haClose));
+      final haLow = math.min(c.low, math.min(haOpen, haClose));
+
+      result.add(
+        TradingCandle(
+          time: c.time,
+          open: haOpen,
+          high: haHigh,
+          low: haLow,
+          close: haClose,
+          volume: c.volume,
+          sma20: c.sma20,
+          sma50: c.sma50,
+        ),
+      );
+
+      prevHaOpen = haOpen;
+      prevHaClose = haClose;
+    }
+
+    return result;
+  }
+
+  // ─── Indicator Calculations ─────────────────────────────────────────────────
+
+  /// Exponential Moving Average
+  static List<double?> ema(List<double> prices, int period) {
+    if (prices.length < period) return List.filled(prices.length, null);
+    final result = List<double?>.filled(prices.length, null);
+    final k = 2.0 / (period + 1);
+
+    // Seed with SMA of first `period` values
+    double sum = 0;
+    for (var i = 0; i < period; i++) {
+      sum += prices[i];
+    }
+    result[period - 1] = sum / period;
+
+    for (var i = period; i < prices.length; i++) {
+      result[i] = prices[i] * k + result[i - 1]! * (1 - k);
+    }
+    return result;
+  }
+
+  /// Bollinger Bands — returns (upper, middle, lower)
+  static List<(double?, double?, double?)> bollingerBands(
+    List<double> prices,
+    int period,
+    double stdDev,
+  ) {
+    final result = <(double?, double?, double?)>[];
+    for (var i = 0; i < prices.length; i++) {
+      if (i + 1 < period) {
+        result.add((null, null, null));
+        continue;
+      }
+      final slice = prices.sublist(i + 1 - period, i + 1);
+      final mean = slice.reduce((a, b) => a + b) / period;
+      final variance =
+          slice.map((v) => (v - mean) * (v - mean)).reduce((a, b) => a + b) /
+          period;
+      final sd = math.sqrt(variance);
+      result.add((mean + stdDev * sd, mean, mean - stdDev * sd));
+    }
+    return result;
+  }
+
+  /// MACD (12, 26, 9) — returns (macd, signal, histogram)
+  static List<(double?, double?, double?)> macd(List<double> prices) {
+    const fastPeriod = 12;
+    const slowPeriod = 26;
+    const signalPeriod = 9;
+
+    final fastEma = ema(prices, fastPeriod);
+    final slowEma = ema(prices, slowPeriod);
+
+    final macdLine = List<double?>.filled(prices.length, null);
+    for (var i = 0; i < prices.length; i++) {
+      if (fastEma[i] != null && slowEma[i] != null) {
+        macdLine[i] = fastEma[i]! - slowEma[i]!;
+      }
+    }
+
+    // Signal line: EMA(9) of MACD line
+    final macdValues = <double>[];
+    final macdStartIndex = <int>[];
+    for (var i = 0; i < macdLine.length; i++) {
+      if (macdLine[i] != null) {
+        macdValues.add(macdLine[i]!);
+        macdStartIndex.add(i);
+      }
+    }
+
+    final signalValues = ema(macdValues, signalPeriod);
+    final signalMap = <int, double?>{};
+    for (var i = 0; i < macdStartIndex.length; i++) {
+      signalMap[macdStartIndex[i]] = signalValues[i];
+    }
+
+    final result = <(double?, double?, double?)>[];
+    for (var i = 0; i < prices.length; i++) {
+      final m = macdLine[i];
+      final s = signalMap[i];
+      final h = (m != null && s != null) ? m - s : null;
+      result.add((m, s, h));
+    }
+    return result;
+  }
+
+  /// Stochastic %K
+  static List<double?> stochastic(List<TradingCandle> candles, int period) {
+    final result = List<double?>.filled(candles.length, null);
+    for (var i = period - 1; i < candles.length; i++) {
+      final slice = candles.sublist(i + 1 - period, i + 1);
+      final highestHigh = slice.map((c) => c.high).reduce(math.max);
+      final lowestLow = slice.map((c) => c.low).reduce(math.min);
+      final range = highestHigh - lowestLow;
+      result[i] = range == 0
+          ? 50
+          : (candles[i].close - lowestLow) / range * 100;
+    }
+    return result;
+  }
+
+  /// Commodity Channel Index
+  static List<double?> cci(List<TradingCandle> candles, int period) {
+    final result = List<double?>.filled(candles.length, null);
+    for (var i = period - 1; i < candles.length; i++) {
+      final slice = candles.sublist(i + 1 - period, i + 1);
+      final typicals = slice
+          .map((c) => (c.high + c.low + c.close) / 3)
+          .toList();
+      final mean = typicals.reduce((a, b) => a + b) / period;
+      final meanDev =
+          typicals.map((t) => (t - mean).abs()).reduce((a, b) => a + b) /
+          period;
+      result[i] = meanDev == 0 ? 0 : (typicals.last - mean) / (0.015 * meanDev);
+    }
+    return result;
+  }
+
+  /// Williams %R
+  static List<double?> williamsR(List<TradingCandle> candles, int period) {
+    final result = List<double?>.filled(candles.length, null);
+    for (var i = period - 1; i < candles.length; i++) {
+      final slice = candles.sublist(i + 1 - period, i + 1);
+      final highestHigh = slice.map((c) => c.high).reduce(math.max);
+      final lowestLow = slice.map((c) => c.low).reduce(math.min);
+      final range = highestHigh - lowestLow;
+      result[i] = range == 0
+          ? -50
+          : (highestHigh - candles[i].close) / range * -100;
+    }
+    return result;
+  }
+
+  /// On-Balance Volume
+  static List<double?> obv(List<TradingCandle> candles) {
+    if (candles.isEmpty) return [];
+    final result = List<double?>.filled(candles.length, null);
+    result[0] = candles[0].volume;
+    for (var i = 1; i < candles.length; i++) {
+      final prev = result[i - 1]!;
+      if (candles[i].close > candles[i - 1].close) {
+        result[i] = prev + candles[i].volume;
+      } else if (candles[i].close < candles[i - 1].close) {
+        result[i] = prev - candles[i].volume;
+      } else {
+        result[i] = prev;
+      }
+    }
+    return result;
+  }
+
+  /// Average True Range
+  static List<double?> atr(List<TradingCandle> candles, int period) {
+    if (candles.length < 2) return List.filled(candles.length, null);
+    final result = List<double?>.filled(candles.length, null);
+
+    final trValues = <double>[];
+    for (var i = 1; i < candles.length; i++) {
+      final hl = candles[i].high - candles[i].low;
+      final hc = (candles[i].high - candles[i - 1].close).abs();
+      final lc = (candles[i].low - candles[i - 1].close).abs();
+      trValues.add(math.max(hl, math.max(hc, lc)));
+    }
+
+    if (trValues.length < period) return result;
+
+    // First ATR = simple average of first `period` TRs
+    double atrVal =
+        trValues.sublist(0, period).reduce((a, b) => a + b) / period;
+    result[period] = atrVal;
+
+    for (var i = period; i < trValues.length; i++) {
+      atrVal = (atrVal * (period - 1) + trValues[i]) / period;
+      result[i + 1] = atrVal;
+    }
+    return result;
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
 
   static int _countForRange(int rangeIndex) {
     switch (rangeIndex) {
@@ -228,23 +440,5 @@ class TradingChartService {
 
     final rs = avgGain / avgLoss;
     return 100 - (100 / (1 + rs));
-  }
-
-  static List<String> _buildLabels({required int count, required int minutesStep}) {
-    final now = DateTime.now();
-    final end = DateTime(now.year, now.month, now.day, now.hour, now.minute);
-    final start = end.subtract(Duration(minutes: minutesStep * (count - 1)));
-
-    return List.generate(count, (index) {
-      final time = start.add(Duration(minutes: minutesStep * index));
-      if (minutesStep < 120) {
-        final hh = time.hour.toString().padLeft(2, '0');
-        final mm = time.minute.toString().padLeft(2, '0');
-        return '$hh:$mm';
-      }
-      final day = time.day.toString().padLeft(2, '0');
-      final month = time.month.toString().padLeft(2, '0');
-      return '$day/$month';
-    });
   }
 }

@@ -1,0 +1,653 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../domain/pricing/price_provider.dart';
+import 'firestore_service.dart';
+
+/// Production-grade execution engine.
+///
+/// Firestore schema:
+///   users/{uid}
+///     available_balance, reserved_balance, tradingEnabled
+///
+///   orders/{clientOrderId}           ← deterministic doc ID = clientOrderId
+///     userId, stock, type, qty, price, executed_price, total
+///     status: EXECUTED | FAILED
+///     execution_meta: { attempt, lastError, source }
+///     createdAt, executedAt
+///
+///   portfolios/{uid}/holdings/{stock}
+///     qty, avg_price, last_price, unrealized_pnl, updatedAt
+///
+///   ledger/{entryId}
+///     userId, type, subType, amount, before_balance, balance_after,
+///     referenceType, referenceId, stock, qty, price, createdAt
+///
+///   trades/{tradeId}
+///     orderId, userId, stock, type, qty, price, total, createdAt
+///
+///   trade_feed/{tradeId}             ← denormalized admin feed (same ID as trade)
+///     userId, stock, type, qty, price, total, createdAt
+///
+///   audit_logs/{logId}
+///     action, adminId, targetId, metadata, timestamp
+///
+/// Fixes applied (Phase 1 + 2):
+///   1. addBalance ledger write is inside the same transaction (atomic)
+///   2. clientOrderId is required — UI must generate it (cross-tab idempotency)
+///   3. globalTradingHalt read inside transaction before execution
+///   4. stocks/{symbol}.tradable checked inside transaction
+///   5. approveOrder / rejectOrder removed (auto-execution model)
+///   6. Transaction body is pure — no external calls, no randomness inside
+///   7. All doc IDs pre-computed outside transaction
+///   8. avg_price field name standardized (snake_case everywhere)
+///   9. In-flight guard REMOVED (was causing deadlocks on Firestore errors)
+///   10. Firestore retry logic added for internal assertion failures
+class TradingService {
+  TradingService({
+    required FirestoreService firestore,
+    required PriceProvider priceProvider,
+  })  : _firestore = firestore,
+        _priceProvider = priceProvider;
+
+  final FirestoreService _firestore;
+  final PriceProvider _priceProvider;
+  final _uuid = const Uuid();
+
+  /// Retry wrapper for Firestore operations that may hit internal assertion failures.
+  /// This is a workaround for Firestore SDK instability under heavy listener load.
+  Future<T> _retryFirestore<T>(Future<T> Function() fn) async {
+    try {
+      return await fn();
+    } catch (e) {
+      final errorStr = e.toString();
+      if (errorStr.contains('INTERNAL ASSERTION') ||
+          errorStr.contains('WatchChangeAggregator') ||
+          errorStr.contains('PersistentListenStream')) {
+        // Wait briefly and retry once
+        await Future.delayed(const Duration(milliseconds: 300));
+        return await fn();
+      }
+      rethrow;
+    }
+  }
+
+  // ── Streams ────────────────────────────────────────────────────────────────
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> ordersStreamForUser(String uid) =>
+      _firestore.raw
+          .collection('orders')
+          .where('userId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots();
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> tradesStreamForUser(String uid) =>
+      _firestore.raw
+          .collection('trades')
+          .where('userId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots();
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> holdingsStreamForUser(
+          String uid) =>
+      _firestore.getCollectionStream('portfolios/$uid/holdings');
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> ledgerStreamForUser(String uid) =>
+      _firestore.raw
+          .collection('ledger')
+          .where('userId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .snapshots();
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> usersStream() =>
+      _firestore.raw
+          .collection('users')
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .snapshots();
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> ordersStream() =>
+      _firestore.raw
+          .collection('orders')
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .snapshots();
+
+  /// Live trade feed for admin — denormalized, no joins needed.
+  Stream<QuerySnapshot<Map<String, dynamic>>> tradeFeedStream() =>
+      _firestore.raw
+          .collection('trade_feed')
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots();
+
+  // Backward-compat alias
+  Stream<QuerySnapshot<Map<String, dynamic>>> positionsStreamForUser(
+          String uid) =>
+      holdingsStreamForUser(uid);
+
+  // ── Place Order ────────────────────────────────────────────────────────────
+
+  /// Places and executes an order atomically.
+  ///
+  /// [clientOrderId] MUST be generated by the caller (UI) before calling this
+  /// method. This is the cross-tab idempotency key:
+  ///   - Same clientOrderId from two tabs → second call is a no-op (order exists)
+  ///   - Network retry with same clientOrderId → safe no-op
+  ///
+  /// The transaction reads admin_config/platform and stocks/{symbol} to enforce
+  /// globalTradingHalt and per-stock tradable flags atomically.
+  Future<String> placeOrder({
+    required String userId,
+    required String stock,
+    required int qty,
+    required String type,
+    double? requestPrice, // always ignored — price from PriceProvider
+    required String clientOrderId, // REQUIRED — caller must generate
+  }) async {
+    if (qty <= 0) throw Exception('Quantity must be greater than zero.');
+
+    final symbol = stock.toUpperCase();
+    final side = type.toUpperCase();
+    if (side != 'BUY' && side != 'SELL') {
+      throw Exception('Order type must be BUY or SELL.');
+    }
+
+    // ── Price authority — fetched BEFORE transaction ───────────────────
+    // Transaction body must be pure (no async external calls inside).
+    // Price staleness is acceptable for simulated mode; document it.
+    final executedPrice = await _priceProvider
+        .getPrice(symbol)
+        .first
+        .timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => throw Exception('Price feed timeout for $symbol.'),
+        );
+
+      if (executedPrice <= 0) throw Exception('Invalid price for $symbol.');
+
+      final priceTimestamp = DateTime.now().millisecondsSinceEpoch;
+      final total = qty * executedPrice;
+
+      // ── Pre-compute all doc refs and IDs outside transaction ──────────
+      // Firestore transactions must not contain randomness or external I/O.
+      final orderRef = _firestore.raw.doc('orders/$clientOrderId');
+      final userRef = _firestore.raw.doc('users/$userId');
+      final holdingRef =
+          _firestore.raw.doc('portfolios/$userId/holdings/$symbol');
+      final configRef = _firestore.raw.doc('admin_config/platform');
+      final stockRef = _firestore.raw.doc('stocks/$symbol');
+      final tradeId = _uuid.v4();
+      final tradeRef = _firestore.raw.doc('trades/$tradeId');
+      final tradeFeedRef = _firestore.raw.doc('trade_feed/$tradeId');
+      final ledgerId = _uuid.v4();
+      final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
+      final serverTs = FieldValue.serverTimestamp();
+
+      // ── Atomic transaction with retry logic ───────────────────────────
+      await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
+        // 1. Idempotency: if order already exists, abort silently
+        final existingOrder = await tx.get(orderRef);
+        if (existingOrder.exists) return;
+
+        // 2. Global trading halt check
+        final configSnap = await tx.get(configRef);
+        final configData = configSnap.data() ?? {};
+        if ((configData['globalTradingHalt'] as bool?) == true) {
+          throw Exception(
+              'Trading is currently halted by the platform. Please try again later.');
+        }
+
+        // 3. Per-stock tradable check
+        final stockSnap = await tx.get(stockRef);
+        if (stockSnap.exists) {
+          final tradable = (stockSnap.data()?['tradable'] as bool?) ?? true;
+          if (!tradable) {
+            throw Exception('$symbol is currently not available for trading.');
+          }
+        }
+
+        // 4. User data — balance + per-user trading flag
+        final userSnap = await tx.get(userRef);
+        final userData = userSnap.data() ?? {};
+
+        final tradingEnabled = (userData['tradingEnabled'] as bool?) ?? true;
+        if (!tradingEnabled) {
+          throw Exception('Trading is disabled for your account.');
+        }
+
+        // 5. Holding snapshot (needed for both BUY avg-price and SELL qty check)
+        final holdingSnap = await tx.get(holdingRef);
+
+        if (side == 'BUY') {
+          _writeBuy(
+            tx: tx,
+            userRef: userRef,
+            holdingRef: holdingRef,
+            holdingSnap: holdingSnap,
+            orderRef: orderRef,
+            tradeRef: tradeRef,
+            tradeFeedRef: tradeFeedRef,
+            ledgerRef: ledgerRef,
+            userData: userData,
+            userId: userId,
+            symbol: symbol,
+            qty: qty,
+            executedPrice: executedPrice,
+            priceTimestamp: priceTimestamp,
+            total: total,
+            orderId: clientOrderId,
+            tradeId: tradeId,
+            serverTs: serverTs,
+          );
+        } else {
+          _writeSell(
+            tx: tx,
+            userRef: userRef,
+            holdingRef: holdingRef,
+            holdingSnap: holdingSnap,
+            orderRef: orderRef,
+            tradeRef: tradeRef,
+            tradeFeedRef: tradeFeedRef,
+            ledgerRef: ledgerRef,
+            userData: userData,
+            userId: userId,
+            symbol: symbol,
+            qty: qty,
+            executedPrice: executedPrice,
+            priceTimestamp: priceTimestamp,
+            total: total,
+            orderId: clientOrderId,
+            tradeId: tradeId,
+            serverTs: serverTs,
+          );
+        }
+      }));
+
+      return clientOrderId;
+  }
+
+  // ── BUY (pure — synchronous, no external calls) ───────────────────────────
+
+  void _writeBuy({
+    required Transaction tx,
+    required DocumentReference userRef,
+    required DocumentReference holdingRef,
+    required DocumentSnapshot holdingSnap,
+    required DocumentReference orderRef,
+    required DocumentReference tradeRef,
+    required DocumentReference tradeFeedRef,
+    required DocumentReference ledgerRef,
+    required Map<String, dynamic> userData,
+    required String userId,
+    required String symbol,
+    required int qty,
+    required double executedPrice,
+    required int priceTimestamp,
+    required double total,
+    required String orderId,
+    required String tradeId,
+    required FieldValue serverTs,
+  }) {
+    final available = _balance(userData);
+
+    if (available < total) {
+      throw Exception(
+          'Insufficient balance. Required ₹${total.toStringAsFixed(2)}, '
+          'available ₹${available.toStringAsFixed(2)}.');
+    }
+
+    final balanceAfter = available - total;
+
+    // Wallet
+    tx.set(userRef, {
+      'available_balance': balanceAfter,
+      'balance': balanceAfter,
+      'reserved_balance': 0,
+      'updatedAt': serverTs,
+    }, SetOptions(merge: true));
+
+    // Holding — weighted avg price: (Q_old × P_old + Q_new × P_buy) / Q_total
+    final holdingData = holdingSnap.data() as Map<String, dynamic>?;
+    final oldQty = _int(holdingData?['qty']);
+    final oldAvg = _double(holdingData?['avg_price']); // snake_case
+    final newQty = oldQty + qty;
+    final newAvg = newQty == 0
+        ? 0.0
+        : ((oldQty * oldAvg) + (qty * executedPrice)) / newQty;
+    final unrealizedPnl = (executedPrice - newAvg) * newQty;
+
+    tx.set(holdingRef, {
+      'stock': symbol,
+      'qty': newQty,
+      'avg_price': newAvg, // snake_case — canonical field name
+      'last_price': executedPrice,
+      'unrealized_pnl': unrealizedPnl,
+      'updatedAt': serverTs,
+    }, SetOptions(merge: true));
+
+    // Order
+    tx.set(orderRef, {
+      'clientOrderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'BUY',
+      'qty': qty,
+      'price': executedPrice,
+      'executed_price': executedPrice,
+      'price_source': 'SIMULATED',
+      'price_timestamp': priceTimestamp,
+      'total': total,
+      'status': 'EXECUTED',
+      'execution_meta': {
+        'attempt': 1,
+        'lastError': null,
+        'source': 'SIMULATED',
+      },
+      'executedAt': serverTs,
+      'createdAt': serverTs,
+    });
+
+    // Trade record
+    tx.set(tradeRef, {
+      'orderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'BUY',
+      'qty': qty,
+      'price': executedPrice,
+      'total': total,
+      'createdAt': serverTs,
+    });
+
+    // Denormalized trade feed — same transaction, guaranteed consistency
+    tx.set(tradeFeedRef, {
+      'orderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'BUY',
+      'qty': qty,
+      'price': executedPrice,
+      'total': total,
+      'createdAt': serverTs,
+    });
+
+    // Ledger DEBIT — inside transaction (atomic with balance update)
+    tx.set(ledgerRef, {
+      'userId': userId,
+      'type': 'DEBIT',
+      'subType': 'BUY',
+      'amount': total,
+      'before_balance': available,
+      'balance_after': balanceAfter,
+      'referenceType': 'ORDER',
+      'referenceId': orderId,
+      'stock': symbol,
+      'qty': qty,
+      'price': executedPrice,
+      'createdAt': serverTs,
+    });
+  }
+
+  // ── SELL (pure) ────────────────────────────────────────────────────────────
+
+  void _writeSell({
+    required Transaction tx,
+    required DocumentReference userRef,
+    required DocumentReference holdingRef,
+    required DocumentSnapshot holdingSnap,
+    required DocumentReference orderRef,
+    required DocumentReference tradeRef,
+    required DocumentReference tradeFeedRef,
+    required DocumentReference ledgerRef,
+    required Map<String, dynamic> userData,
+    required String userId,
+    required String symbol,
+    required int qty,
+    required double executedPrice,
+    required int priceTimestamp,
+    required double total,
+    required String orderId,
+    required String tradeId,
+    required FieldValue serverTs,
+  }) {
+    final holdingData = holdingSnap.data() as Map<String, dynamic>?;
+    final currentQty = _int(holdingData?['qty']);
+
+    if (currentQty < qty) {
+      throw Exception(
+          'Insufficient holdings. You have $currentQty shares of $symbol, '
+          'tried to sell $qty.');
+    }
+
+    final newQty = currentQty - qty;
+    final avgPrice = _double(holdingData?['avg_price']); // snake_case
+
+    if (newQty == 0) {
+      tx.delete(holdingRef);
+    } else {
+      final unrealizedPnl = (executedPrice - avgPrice) * newQty;
+      tx.update(holdingRef, {
+        'qty': newQty,
+        'last_price': executedPrice,
+        'unrealized_pnl': unrealizedPnl,
+        'updatedAt': serverTs,
+      });
+    }
+
+    final available = _balance(userData);
+    final balanceAfter = available + total;
+
+    tx.set(userRef, {
+      'available_balance': balanceAfter,
+      'balance': balanceAfter,
+      'updatedAt': serverTs,
+    }, SetOptions(merge: true));
+
+    tx.set(orderRef, {
+      'clientOrderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'SELL',
+      'qty': qty,
+      'price': executedPrice,
+      'executed_price': executedPrice,
+      'price_source': 'SIMULATED',
+      'price_timestamp': priceTimestamp,
+      'total': total,
+      'status': 'EXECUTED',
+      'execution_meta': {
+        'attempt': 1,
+        'lastError': null,
+        'source': 'SIMULATED',
+      },
+      'executedAt': serverTs,
+      'createdAt': serverTs,
+    });
+
+    tx.set(tradeRef, {
+      'orderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'SELL',
+      'qty': qty,
+      'price': executedPrice,
+      'total': total,
+      'createdAt': serverTs,
+    });
+
+    // Trade feed — same transaction
+    tx.set(tradeFeedRef, {
+      'orderId': orderId,
+      'userId': userId,
+      'stock': symbol,
+      'type': 'SELL',
+      'qty': qty,
+      'price': executedPrice,
+      'total': total,
+      'createdAt': serverTs,
+    });
+
+    // Ledger CREDIT — inside transaction (atomic with balance update)
+    tx.set(ledgerRef, {
+      'userId': userId,
+      'type': 'CREDIT',
+      'subType': 'SELL',
+      'amount': total,
+      'before_balance': available,
+      'balance_after': balanceAfter,
+      'referenceType': 'ORDER',
+      'referenceId': orderId,
+      'stock': symbol,
+      'qty': qty,
+      'price': executedPrice,
+      'createdAt': serverTs,
+    });
+  }
+
+  // ── Admin: Add Balance ─────────────────────────────────────────────────────
+
+  Future<void> addBalance({
+    required String adminId,
+    required String userId,
+    required double amount,
+  }) async {
+    if (amount <= 0) throw Exception('Amount must be positive.');
+
+    double before = 0;
+    double after = 0;
+    final ledgerId = _uuid.v4();
+    final serverTs = FieldValue.serverTimestamp();
+
+    // Balance update AND ledger entry in the same transaction — atomic.
+    // If either fails, both roll back. No orphaned balance changes.
+    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
+      final userRef = _firestore.raw.doc('users/$userId');
+      final snap = await tx.get(userRef);
+      before = _balance(snap.data() ?? {});
+      after = before + amount;
+
+      tx.set(userRef, {
+        'available_balance': after,
+        'balance': after,
+        'updatedAt': serverTs,
+      }, SetOptions(merge: true));
+
+      final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
+      tx.set(ledgerRef, {
+        'userId': userId,
+        'type': 'CREDIT',
+        'subType': 'DEPOSIT',
+        'amount': amount,
+        'before_balance': before,
+        'balance_after': after,
+        'referenceType': 'ADMIN',
+        'referenceId': adminId,
+        'createdAt': serverTs,
+      });
+    }));
+
+    // Audit log is best-effort — failure here does not affect financial data
+    await _logAudit(
+      action: 'ADD_BALANCE',
+      adminId: adminId,
+      targetId: userId,
+      metadata: {'amount': amount, 'before': before, 'after': after},
+    );
+  }
+
+  // ── Admin: Toggle Trading ──────────────────────────────────────────────────
+
+  Future<void> setTradingEnabled({
+    required String adminId,
+    required String userId,
+    required bool enabled,
+  }) async {
+    await _firestore.updateDocument('users/$userId', {
+      'tradingEnabled': enabled,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await _logAudit(
+      action: 'SET_TRADING_ENABLED',
+      adminId: adminId,
+      targetId: userId,
+      metadata: {'enabled': enabled},
+    );
+  }
+
+  // ── Admin: Broadcast ──────────────────────────────────────────────────────
+
+  Future<void> broadcast({
+    required String adminId,
+    required String message,
+  }) async {
+    await _firestore.addDocument('notifications', {
+      'message': message,
+      'type': 'BROADCAST',
+      'createdBy': adminId,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    await _logAudit(
+      action: 'BROADCAST',
+      adminId: adminId,
+      targetId: 'notifications',
+      metadata: {'message': message},
+    );
+  }
+
+  // ── Admin: Set Leverage ────────────────────────────────────────────────────
+
+  Future<void> setUserLeverage({
+    required String adminId,
+    required String userId,
+    required String stock,
+    required double leverage,
+  }) async {
+    await _firestore.setDocument(
+      'user_stock_leverage/${userId}_${stock.toUpperCase()}',
+      {
+        'userId': userId,
+        'stock': stock.toUpperCase(),
+        'leverage': leverage,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+    );
+    await _logAudit(
+      action: 'SET_LEVERAGE',
+      adminId: adminId,
+      targetId: userId,
+      metadata: {'stock': stock, 'leverage': leverage},
+    );
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  double _balance(Map<String, dynamic> data) =>
+      ((data['available_balance'] as num?) ??
+              (data['balance'] as num?) ??
+              0)
+          .toDouble();
+
+  int _int(dynamic v) => (v as num?)?.toInt() ?? 0;
+  double _double(dynamic v) => (v as num?)?.toDouble() ?? 0.0;
+
+  Future<void> _logAudit({
+    required String action,
+    required String adminId,
+    required String targetId,
+    required Map<String, dynamic> metadata,
+  }) {
+    return _firestore.addDocument('audit_logs', {
+      'action': action,
+      'adminId': adminId,
+      'targetId': targetId,
+      'metadata': metadata,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+}

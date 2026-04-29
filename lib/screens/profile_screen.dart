@@ -2,10 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../main.dart';
 import '../state/security_scope.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/shared_widgets.dart';
+import '../models/trading_models.dart';
+import 'settings_hub_screen.dart';
+import 'settings/about_screen.dart';
+import 'settings/app_permissions_screen.dart';
+import 'settings/appearance_settings_screen.dart';
+import 'settings/brokerage_plan_screen.dart';
+import 'settings/help_support_screen.dart';
+import 'settings/linked_accounts_screen.dart';
+import 'settings/security_settings_screen.dart';
+import 'admin/admin_shell.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -15,10 +26,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  String _name = 'John Doe';
-  String _email = 'johndoe@example.com';
-  String _phone = '+91 98765 43210';
-
   bool _emailVerified = true;
   bool _phoneVerified = true;
   bool _panVerified = false;
@@ -27,20 +34,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _tradeAlerts = true;
   bool _priceAlerts = true;
 
-  DateTime _lastLogin = DateTime.now().subtract(const Duration(hours: 2, minutes: 18));
-
+  DateTime _lastLogin = DateTime.now().subtract(
+    const Duration(hours: 2, minutes: 18),
+  );
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
+    final user = store.currentUser;
     final security = SecurityScope.of(context);
-    final completion = _profileCompletion;
+    final completion = _profileCompletion(user);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile & Settings'),
         actions: [
           IconButton(
-            onPressed: _openEditProfile,
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsHubScreen()),
+            ),
+            icon: const Icon(LucideIcons.settings2),
+            tooltip: 'Settings',
+          ),
+          IconButton(
+            onPressed: () => _openEditProfile(user),
             icon: const Icon(LucideIcons.userCog2),
             tooltip: 'Edit Profile',
           ),
@@ -50,7 +67,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            _buildHeaderCard(context),
+            _buildHeaderCard(context, user),
             const SizedBox(height: 14),
             _buildStatsRow(store),
             const SizedBox(height: 14),
@@ -60,30 +77,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 14),
             _buildActionsCard(context),
             const SizedBox(height: 14),
-            _buildSessionCard(context),
+            _buildSessionCard(context, user),
             const SizedBox(height: 14),
             _buildSecurityQuickActions(context, security),
             const SizedBox(height: 14),
             _buildLogoutButton(context),
             const SizedBox(height: 30),
-            Text('v1.0.0 (Client Demo Build)', style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              'v1.0.0 (Client Build)',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ],
         ),
       ),
     );
   }
 
-  int get _profileCompletion {
+  int _profileCompletion(User user) {
     var completed = 0;
-    if (_name.trim().isNotEmpty) completed++;
+    if (user.name.trim().isNotEmpty) completed++;
     if (_emailVerified) completed++;
     if (_phoneVerified) completed++;
     if (_panVerified) completed++;
     return ((completed / 4) * 100).round();
   }
 
-  Widget _buildHeaderCard(BuildContext context) {
-    final initials = _name
+  Widget _buildHeaderCard(BuildContext context, User user) {
+    final initials = user.name
         .split(' ')
         .where((item) => item.isNotEmpty)
         .take(2)
@@ -98,12 +118,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
             height: 68,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(20),
-              gradient: const LinearGradient(colors: [AppColors.primary, AppColors.accent]),
+              gradient: const LinearGradient(
+                colors: [AppColors.primary, AppColors.accent],
+              ),
             ),
             alignment: Alignment.center,
             child: Text(
               initials.isEmpty ? 'U' : initials,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 24,
+              ),
             ),
           ),
           const SizedBox(width: 14),
@@ -111,16 +137,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_name, style: Theme.of(context).textTheme.titleMedium),
+                Text(user.name, style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 2),
-                Text(_email, style: Theme.of(context).textTheme.bodySmall, overflow: TextOverflow.ellipsis),
+                Text(
+                  user.email,
+                  style: Theme.of(context).textTheme.bodySmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 const SizedBox(height: 2),
-                Text(_phone, style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  'Client ID: ${user.clientId}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Account: ${user.isAdmin ? 'Admin' : 'Standard'} • Plan: ${user.brokeragePlan}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
           IconButton(
-            onPressed: _openEditProfile,
+            onPressed: () => _openEditProfile(user),
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit',
           ),
@@ -144,9 +183,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(stats[i].$1, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  Text(
+                    stats[i].$1,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 5),
-                  Text(stats[i].$2, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text(
+                    stats[i].$2,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ],
               ),
             ),
@@ -165,8 +213,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Account Verification', style: Theme.of(context).textTheme.titleMedium),
-              Text('$completion%', style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                'Account Verification',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              Text(
+                '$completion%',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -180,8 +234,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _statusRow('Email', _emailVerified, onTap: () => setState(() => _emailVerified = true)),
-          _statusRow('Phone', _phoneVerified, onTap: () => setState(() => _phoneVerified = true)),
+          _statusRow(
+            'Email',
+            _emailVerified,
+            onTap: () => setState(() => _emailVerified = true),
+          ),
+          _statusRow(
+            'Phone',
+            _phoneVerified,
+            onTap: () => setState(() => _phoneVerified = true),
+          ),
           _statusRow('PAN / KYC', _panVerified, onTap: _openKycSheet),
         ],
       ),
@@ -216,12 +278,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
             value: _priceAlerts,
             onChanged: (value) => setState(() => _priceAlerts = value),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Appearance'),
+            subtitle: const Text('Dark Mode (BETA)'),
+            value: Theme.of(context).brightness == Brightness.dark,
+            onChanged: (value) {
+              ThemeController.of(context)?.onThemeToggle();
+            },
+          ),
         ],
       ),
     );
   }
 
   Widget _buildActionsCard(BuildContext context) {
+    final user = TradingScope.of(context).currentUser;
+
     return CustomCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -230,28 +303,90 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: LucideIcons.shieldCheck,
             title: 'Security Center',
             subtitle: 'Password, trusted devices, sessions',
-            onTap: () => _openChangePinSheet(context),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SecuritySettingsScreen()),
+            ),
           ),
           const Divider(height: 1, indent: 56),
           _actionTile(
-            icon: LucideIcons.fileCheck,
-            title: 'Tax & Statements',
-            subtitle: 'P&L report, ledger, contract notes',
-            onTap: () => _showMessage('Statement download will be available in next build.'),
+            icon: LucideIcons.palette,
+            title: 'Appearance',
+            subtitle: 'Theme, font size, and chart preferences',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const AppearanceSettingsScreen(),
+              ),
+            ),
           ),
           const Divider(height: 1, indent: 56),
           _actionTile(
-            icon: Icons.support_agent,
+            icon: Icons.currency_rupee,
+            title: 'Brokerage Plan',
+            subtitle: 'View and compare current plan charges',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BrokeragePlanScreen()),
+            ),
+          ),
+          const Divider(height: 1, indent: 56),
+          _actionTile(
+            icon: LucideIcons.link2,
+            title: 'Linked Accounts',
+            subtitle: 'Banks, demat, and third-party integrations',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LinkedAccountsScreen()),
+            ),
+          ),
+          const Divider(height: 1, indent: 56),
+          _actionTile(
+            icon: LucideIcons.shield,
+            title: 'App Permissions',
+            subtitle: 'Manage notification and device permissions',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AppPermissionsScreen()),
+            ),
+          ),
+          const Divider(height: 1, indent: 56),
+          _actionTile(
+            icon: LucideIcons.headphones,
             title: 'Help & Support',
-            subtitle: 'Raise ticket or live chat',
-            onTap: () => _showMessage('Support center opened.'),
+            subtitle: 'Raise ticket, FAQs, and contact options',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HelpSupportScreen()),
+            ),
           ),
+          const Divider(height: 1, indent: 56),
+          _actionTile(
+            icon: LucideIcons.info,
+            title: 'About',
+            subtitle: 'Version, terms, and product information',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AboutScreen()),
+            ),
+          ),
+          if (user.isAdmin) ...[
+            const Divider(height: 1, indent: 56),
+            _actionTile(
+              icon: LucideIcons.settings2,
+              title: 'Admin Panel',
+              subtitle: 'Backend management and monitoring',
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const AdminShell())),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildSessionCard(BuildContext context) {
+  Widget _buildSessionCard(BuildContext context, User user) {
     return CustomCard(
       child: Row(
         children: [
@@ -261,8 +396,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Last Login', style: TextStyle(fontWeight: FontWeight.w600)),
-                Text(DateFormat('dd MMM yyyy, hh:mm a').format(_lastLogin), style: Theme.of(context).textTheme.bodySmall),
+                const Text(
+                  'Last Login',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  DateFormat(
+                    'dd MMM yyyy, hh:mm a',
+                  ).format(user.lastLoginAt ?? _lastLogin),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ],
             ),
           ),
@@ -320,7 +463,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _statusRow(String label, bool verified, {required VoidCallback onTap}) {
+  Widget _statusRow(
+    String label,
+    bool verified, {
+    required VoidCallback onTap,
+  }) {
     return InkWell(
       onTap: verified ? null : onTap,
       child: Padding(
@@ -358,15 +505,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
       leading: Icon(icon, color: AppColors.textPrimary),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-      trailing: const Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 20),
+      trailing: const Icon(
+        Icons.chevron_right,
+        color: AppColors.textSecondary,
+        size: 20,
+      ),
       onTap: onTap,
     );
   }
 
-  void _openEditProfile() {
-    final nameController = TextEditingController(text: _name);
-    final emailController = TextEditingController(text: _email);
-    final phoneController = TextEditingController(text: _phone);
+  void _openEditProfile(User user) {
+    final nameController = TextEditingController(text: user.name);
+    final emailController = TextEditingController(text: user.email);
+    final store = TradingScope.of(context);
 
     showModalBottomSheet(
       context: context,
@@ -378,25 +529,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
             color: AppColors.surface,
             borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
-          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            MediaQuery.of(context).viewInsets.bottom + 16,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Edit Profile', style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Edit Profile',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 12),
-              TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Full Name')),
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Full Name'),
+              ),
               const SizedBox(height: 10),
-              TextField(controller: emailController, decoration: const InputDecoration(labelText: 'Email')),
-              const SizedBox(height: 10),
-              TextField(controller: phoneController, decoration: const InputDecoration(labelText: 'Phone')),
+              TextField(
+                controller: emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+              ),
               const SizedBox(height: 14),
               ElevatedButton(
                 onPressed: () {
-                  setState(() {
-                    _name = nameController.text.trim().isEmpty ? _name : nameController.text.trim();
-                    _email = emailController.text.trim().isEmpty ? _email : emailController.text.trim();
-                    _phone = phoneController.text.trim().isEmpty ? _phone : phoneController.text.trim();
-                  });
+                  final updated = user.copyWith(
+                    name: nameController.text.trim().isEmpty
+                        ? user.name
+                        : nameController.text.trim(),
+                    email: emailController.text.trim().isEmpty
+                        ? user.email
+                        : emailController.text.trim(),
+                  );
+                  store.updateUser(updated);
                   Navigator.pop(context);
                   _showMessage('Profile updated successfully.');
                 },
@@ -424,9 +591,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Complete KYC', style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Complete KYC',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
-              const Text('Upload PAN and identity proof to unlock all trading features.'),
+              const Text(
+                'Upload PAN and identity proof to unlock all trading features.',
+              ),
               const SizedBox(height: 14),
               ElevatedButton(
                 onPressed: () {
@@ -462,18 +634,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 color: AppColors.surface,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
               ),
-              padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                MediaQuery.of(context).viewInsets.bottom + 16,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('Change App PIN', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Change App PIN',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: currentController,
                     obscureText: true,
                     keyboardType: TextInputType.number,
                     maxLength: 4,
-                    decoration: const InputDecoration(labelText: 'Current PIN', counterText: ''),
+                    decoration: const InputDecoration(
+                      labelText: 'Current PIN',
+                      counterText: '',
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -481,7 +664,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     obscureText: true,
                     keyboardType: TextInputType.number,
                     maxLength: 4,
-                    decoration: const InputDecoration(labelText: 'New PIN', counterText: ''),
+                    decoration: const InputDecoration(
+                      labelText: 'New PIN',
+                      counterText: '',
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -489,12 +675,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     obscureText: true,
                     keyboardType: TextInputType.number,
                     maxLength: 4,
-                    decoration: const InputDecoration(labelText: 'Confirm New PIN', counterText: ''),
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm New PIN',
+                      counterText: '',
+                    ),
                   ),
                   if (error.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
-                      child: Text(error, style: const TextStyle(color: AppColors.danger)),
+                      child: Text(
+                        error,
+                        style: const TextStyle(color: AppColors.danger),
+                      ),
                     ),
                   const SizedBox(height: 12),
                   ElevatedButton(
@@ -504,13 +696,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       final confirm = confirmController.text.trim();
 
                       if (next != confirm) {
-                        setModalState(() => error = 'New PIN and confirm PIN do not match.');
+                        setModalState(
+                          () => error = 'New PIN and confirm PIN do not match.',
+                        );
                         return;
                       }
 
-                      final changed = security.changePin(currentPin: current, newPin: next);
+                      final changed = security.changePin(
+                        currentPin: current,
+                        newPin: next,
+                      );
                       if (!changed) {
-                        setModalState(() => error = 'Invalid PIN details. Use 4 digits.');
+                        setModalState(
+                          () => error = 'Invalid PIN details. Use 4 digits.',
+                        );
                         return;
                       }
 
@@ -533,13 +732,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Logout?'),
-        content: const Text('You will need to login again to continue trading.'),
+        content: const Text(
+          'You will need to login again to continue trading.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              _showMessage('Logged out from this demo session.');
+              _showMessage('Logged out from this session.');
             },
             child: const Text('Logout'),
           ),
@@ -549,6 +753,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }

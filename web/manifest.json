@@ -1,11 +1,11 @@
 {
-    "name": "box_trading_web",
-    "short_name": "box_trading_web",
+    "name": "Trade Kosh",
+    "short_name": "Trade Kosh",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#387ED1",
+    "theme_color": "#387ED1",
+    "description": "Professional-grade trading platform for Indian equity, F&O, and more.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

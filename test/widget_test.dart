@@ -4,10 +4,12 @@ import 'package:box_trading_web/main.dart';
 
 void main() {
   testWidgets('renders trading dashboard shell', (WidgetTester tester) async {
-    await tester.pumpWidget(const BoxTradingApp());
-    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const BoxTradingApp());
+      await tester.pump();
+    });
 
-    expect(find.text('Box Trading Pro'), findsOneWidget);
-    expect(find.text('Market Watch'), findsOneWidget);
+    // The splash screen shows the app name
+    expect(find.text('Trade Kosh'), findsOneWidget);
   });
 }

@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/backend_error_widget.dart';
 import 'holdings_screen.dart';
 import 'positions_screen.dart';
 import 'realised_pnl_screen.dart';
@@ -13,6 +14,17 @@ class PortfolioScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
+
+    if (store.backendError) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Portfolio')),
+        body: BackendErrorWidget(
+          message: store.backendErrorMessage,
+          onRetry: () => store.connectLiveBackend(),
+        ),
+      );
+    }
+
     final totalValue =
         store.holdings.fold(0.0, (s, h) => s + h.currentValue) +
             store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice);

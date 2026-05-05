@@ -3,10 +3,12 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
+import '../data/services/live_market_service.dart';
 import '../models/trading_models.dart';
 import '../services/alert_service.dart';
 import '../services/market_data_service.dart';
-import '../services/mock_data_service.dart';
 
 class OrderResult {
   final bool success;
@@ -22,10 +24,8 @@ class OrderResult {
 
 class TradingStore extends ChangeNotifier {
   TradingStore()
-    : _watchlist = List<Stock>.of(MockData.watchlist),
-      _watchlistUniverse = {
-        for (final stock in MockData.watchlist) stock.symbol: stock,
-      },
+    : _watchlist = <Stock>[],
+      _watchlistUniverse = {},
       _orders = <Order>[],
       _portfolio = <PortfolioItem>[],
       _positions = <Position>[],
@@ -42,19 +42,146 @@ class TradingStore extends ChangeNotifier {
         registeredAt: DateTime.fromMillisecondsSinceEpoch(0),
       ),
       _balance = 0.0 {
-    _marketDataService = MarketDataService(
-      Map.fromEntries(
-        MockData.watchlist.map((s) => MapEntry(s.symbol, s.currentPrice)),
-      ),
-    );
-    _priceSubscription = _marketDataService.priceUpdates.listen(_onPriceUpdate);
+    // Stub service — no random prices. Live backend fills the watchlist.
+    _marketDataService = MarketDataService({});
     _alertService = AlertService(this, _marketDataService);
   }
 
   late final MarketDataService _marketDataService;
   MarketDataService get marketDataService => _marketDataService;
   late final AlertService _alertService;
+  // No mock price subscription — live backend is the only price source.
   StreamSubscription<Map<String, double>>? _priceSubscription;
+
+  // ── Live backend wiring ────────────────────────────────────────────────────
+  LiveMarketService? _liveMarketService;
+  StreamSubscription<List<Stock>>? _liveStockSub;
+  bool _usingLiveBackend = false;
+  bool get usingLiveBackend => _usingLiveBackend;
+
+  /// Call this once after the store is created to switch from mock prices
+  /// to live prices from the Node.js backend.
+  ///
+  /// Safe to call multiple times — idempotent.
+  void connectLiveBackend({String? baseUrl}) {
+    if (_usingLiveBackend) return;
+
+    final api = BackendApiService(
+      baseUrl: baseUrl ?? BackendConfig.backendBaseUrl,
+    );
+    _liveMarketService = LiveMarketService(
+      api: api,
+      onError: (isError, message) {
+        setBackendError(isError, message: message);
+      },
+    );
+
+    // Stop mock price timer — live service takes over
+    _priceSubscription?.cancel();
+    _marketDataService.dispose();
+
+    _liveStockSub = _liveMarketService!.stockUpdates.listen(_onLiveStockUpdate);
+    unawaited(_liveMarketService!.start());
+    _refreshMarketSubscriptions();
+    _usingLiveBackend = true;
+  }
+
+  /// Disconnect from live backend.
+  void disconnectLiveBackend() {
+    if (!_usingLiveBackend) return;
+    _liveStockSub?.cancel();
+    _liveMarketService?.dispose();
+    _liveMarketService = null;
+    _usingLiveBackend = false;
+  }
+
+  // ── Live backend status ────────────────────────────────────────────────────
+  bool _backendError = false;
+  bool get backendError => _backendError;
+  String _backendErrorMessage = '';
+  String get backendErrorMessage => _backendErrorMessage;
+
+  void setBackendError(bool error, {String message = ''}) {
+    if (_backendError == error && _backendErrorMessage == message) return;
+    _backendError = error;
+    _backendErrorMessage = message;
+    notifyListeners();
+  }
+
+  /// Called when the live backend emits a fresh batch of stocks.
+  void _onLiveStockUpdate(List<Stock> stocks) {
+    if (stocks.isEmpty) return;
+
+    // Clear error state — backend is responding
+    if (_backendError) {
+      _backendError = false;
+      _backendErrorMessage = '';
+    }
+
+    for (final stock in stocks) {
+      final existing = _watchlistUniverse[stock.symbol];
+      final oldPrice = existing?.currentPrice;
+
+      // Update watchlist entry
+      final idx = _watchlist.indexWhere((s) => s.symbol == stock.symbol);
+      if (idx >= 0) {
+        _watchlist[idx] = stock;
+      } else {
+        _watchlist.add(stock);
+      }
+      _watchlistUniverse[stock.symbol] = stock;
+
+      // Record direction for price flash arrows
+      if (oldPrice != null) {
+        _marketDataService.recordDirection(
+          stock.symbol,
+          oldPrice,
+          stock.currentPrice,
+        );
+      }
+
+      // Update open positions
+      for (var i = 0; i < _positions.length; i++) {
+        if (_positions[i].symbol == stock.symbol) {
+          _positions[i] = _positions[i].copyWith(
+            currentPrice: stock.currentPrice,
+          );
+        }
+      }
+
+      // Update holdings
+      for (var i = 0; i < _holdings.length; i++) {
+        if (_holdings[i].symbol == stock.symbol) {
+          _holdings[i] = _holdings[i].copyWith(
+            currentPrice: stock.currentPrice,
+          );
+        }
+      }
+    }
+    _refreshMarketSubscriptions();
+    notifyListeners();
+  }
+
+  void _refreshMarketSubscriptions() {
+    final service = _liveMarketService;
+    if (service == null) return;
+    final symbols = _watchlist.map((s) => s.symbol).toSet();
+    if (symbols.isEmpty) {
+      symbols.addAll(const [
+        'RELIANCE',
+        'TCS',
+        'INFY',
+        'HDFCBANK',
+        'ICICIBANK',
+        'SBIN',
+        'WIPRO',
+        'AXISBANK',
+        'BAJFINANCE',
+        'HINDUNILVR',
+      ]);
+    }
+    service.setSubscribedSymbols(symbols);
+  }
 
   final List<Stock> _watchlist;
   final Map<String, Stock> _watchlistUniverse;
@@ -82,52 +209,11 @@ class TradingStore extends ChangeNotifier {
   bool? getPriceDirection(String symbol) =>
       _marketDataService.getPriceDirection(symbol);
 
-  void _onPriceUpdate(Map<String, double> updates) {
-    for (var i = 0; i < _watchlist.length; i++) {
-      final newPrice = updates[_watchlist[i].symbol];
-      if (newPrice != null) {
-        _watchlist[i] = Stock(
-          symbol: _watchlist[i].symbol,
-          name: _watchlist[i].name,
-          currentPrice: newPrice,
-          changePercentage: _watchlist[i].changePercentage,
-          sector: _watchlist[i].sector,
-          exchange: _watchlist[i].exchange,
-          open: _watchlist[i].open,
-          high: _watchlist[i].high,
-          low: _watchlist[i].low,
-          prevClose: _watchlist[i].prevClose,
-          week52High: _watchlist[i].week52High,
-          week52Low: _watchlist[i].week52Low,
-          upperCircuit: _watchlist[i].upperCircuit,
-          lowerCircuit: _watchlist[i].lowerCircuit,
-          volume: _watchlist[i].volume,
-          marketCap: _watchlist[i].marketCap,
-        );
-        _watchlistUniverse[_watchlist[i].symbol] = _watchlist[i];
-      }
-    }
-
-    for (var i = 0; i < _positions.length; i++) {
-      final newPrice = updates[_positions[i].symbol];
-      if (newPrice != null) {
-        _positions[i] = _positions[i].copyWith(currentPrice: newPrice);
-      }
-    }
-
-    for (var i = 0; i < _holdings.length; i++) {
-      final newPrice = updates[_holdings[i].symbol];
-      if (newPrice != null) {
-        _holdings[i] = _holdings[i].copyWith(currentPrice: newPrice);
-      }
-    }
-
-    notifyListeners();
-  }
-
   @override
   void dispose() {
     _priceSubscription?.cancel();
+    _liveStockSub?.cancel();
+    _liveMarketService?.dispose();
     _alertService.dispose();
     _marketDataService.dispose();
     super.dispose();
@@ -189,12 +275,30 @@ class TradingStore extends ChangeNotifier {
     );
   }
 
-  Stock stockBySymbol(String symbol) => _watchlist.firstWhere(
-    (item) => item.symbol == symbol,
-    orElse: () =>
+  Stock? stockBySymbolOrNull(String symbol) {
+    // Exact match first
+    final exact =
         _watchlistUniverse[symbol] ??
-        (_watchlist.isNotEmpty ? _watchlist.first : MockData.watchlist.first),
-  );
+        _watchlist.where((s) => s.symbol == symbol).firstOrNull;
+    if (exact != null) return exact;
+    // Case-insensitive fallback (handles RELIANCE vs reliance)
+    final upper = symbol.toUpperCase();
+    return _watchlistUniverse[upper] ??
+        _watchlist.where((s) => s.symbol.toUpperCase() == upper).firstOrNull;
+  }
+
+  Stock stockBySymbol(String symbol) {
+    return stockBySymbolOrNull(symbol) ??
+        // Never fall back to _watchlist.first — return a placeholder with the
+        // correct symbol so the detail screen shows the right name/symbol.
+        Stock(
+          symbol: symbol,
+          name: symbol,
+          currentPrice: 0,
+          changePercentage: 0,
+          sector: '',
+        );
+  }
 
   bool isInWatchlist(String symbol) =>
       _watchlist.any((stock) => stock.symbol == symbol);
@@ -204,11 +308,13 @@ class TradingStore extends ChangeNotifier {
     final stock = _watchlistUniverse[symbol];
     if (stock == null) return;
     _watchlist.add(stock);
+    _refreshMarketSubscriptions();
     notifyListeners();
   }
 
   void removeFromWatchlist(String symbol) {
     _watchlist.removeWhere((stock) => stock.symbol == symbol);
+    _refreshMarketSubscriptions();
     notifyListeners();
   }
 
@@ -231,13 +337,23 @@ class TradingStore extends ChangeNotifier {
 
   /// Returns the required margin for an order.
   /// CNC and NRML: full value (quantity * price)
-  /// MIS and MTF: 1/5 of full value
-  double requiredMargin(int quantity, double price, ProductType product) {
+  /// Returns required margin for an order.
+  /// - MIS/MTF: 20% of trade value (5x leverage)
+  /// - NRML: 100% of trade value
+  /// - Overnight (carry-forward): 100% of trade value
+  /// - SELL orders: always 0 (exit trade, no new margin required)
+  double requiredMargin(
+    int quantity,
+    double price,
+    ProductType product, {
+    bool isSell = false,
+  }) {
+    if (isSell) return 0; // Exit orders never require margin
     final fullValue = quantity * price;
     if (product == ProductType.mis || product == ProductType.mtf) {
       return fullValue / 5;
     }
-    return fullValue;
+    return fullValue; // nrml, overnight
   }
 
   OrderResult placeOrder({
@@ -245,7 +361,7 @@ class TradingStore extends ChangeNotifier {
     required int quantity,
     required OrderType type,
     OrderVariety variety = OrderVariety.market,
-    ProductType product = ProductType.cnc,
+    ProductType product = ProductType.mis,
     OrderValidity validity = OrderValidity.day,
     DateTime? validityDate,
     double price = 0,
@@ -266,7 +382,7 @@ class TradingStore extends ChangeNotifier {
         ? price
         : stockBySymbol(symbol).currentPrice;
 
-    if (variety == OrderVariety.limit || variety == OrderVariety.slLimit) {
+    if (variety == OrderVariety.limit || variety == OrderVariety.sl) {
       if (price < 0) {
         return const OrderResult(
           success: false,
@@ -294,7 +410,7 @@ class TradingStore extends ChangeNotifier {
       if (product == ProductType.mis || product == ProductType.nrml) {
         _applyPositionBuy(stock, quantity, effectivePrice, product, type);
       } else {
-        // CNC or MTF -> holdings
+        // Overnight or MTF -> holdings (carry-forward delivery)
         _applyHoldingBuy(stock, quantity, effectivePrice);
       }
 
@@ -624,29 +740,7 @@ class TradingStore extends ChangeNotifier {
 
   // ─── GTT Orders ───────────────────────────────────────────────────────────
 
-  final List<GTTOrder> _gttOrders = [
-    GTTOrder(
-      id: 'GTT-001',
-      symbol: 'RELIANCE',
-      type: GTTType.single,
-      triggerPrice: 2400.0,
-      orderType: OrderType.buy,
-      quantity: 10,
-      limitPrice: 2410.0,
-      createdAt: DateTime(2024, 1, 10),
-    ),
-    GTTOrder(
-      id: 'GTT-002',
-      symbol: 'TCS',
-      type: GTTType.oco,
-      triggerPrice: 3800.0,
-      secondTriggerPrice: 3500.0,
-      orderType: OrderType.sell,
-      quantity: 5,
-      limitPrice: 3790.0,
-      createdAt: DateTime(2024, 1, 12),
-    ),
-  ];
+  final List<GTTOrder> _gttOrders = [];
 
   UnmodifiableListView<GTTOrder> get gttOrders =>
       UnmodifiableListView(_gttOrders);
@@ -671,32 +765,7 @@ class TradingStore extends ChangeNotifier {
 
   // ─── Basket Orders ────────────────────────────────────────────────────────
 
-  final List<BasketOrder> _basketOrders = [
-    BasketOrder(
-      id: 'BASKET-001',
-      name: 'Tech Basket',
-      entries: [
-        const BasketOrderEntry(
-          symbol: 'INFY',
-          type: OrderType.buy,
-          quantity: 10,
-          variety: OrderVariety.market,
-          product: ProductType.cnc,
-          estimatedMargin: 14500.0,
-        ),
-        const BasketOrderEntry(
-          symbol: 'WIPRO',
-          type: OrderType.buy,
-          quantity: 20,
-          variety: OrderVariety.limit,
-          price: 450.0,
-          product: ProductType.cnc,
-          estimatedMargin: 9000.0,
-        ),
-      ],
-      createdAt: DateTime(2024, 1, 15),
-    ),
-  ];
+  final List<BasketOrder> _basketOrders = [];
 
   UnmodifiableListView<BasketOrder> get basketOrders =>
       UnmodifiableListView(_basketOrders);
@@ -750,22 +819,7 @@ class TradingStore extends ChangeNotifier {
 
   // ─── Alerts ───────────────────────────────────────────────────────────────
 
-  final List<Alert> _alerts = [
-    Alert(
-      id: 'ALERT-001',
-      symbol: 'NIFTY',
-      type: AlertType.priceAbove,
-      targetPrice: 22000.0,
-      createdAt: DateTime(2024, 1, 8),
-    ),
-    Alert(
-      id: 'ALERT-002',
-      symbol: 'HDFC',
-      type: AlertType.priceBelow,
-      targetPrice: 1500.0,
-      createdAt: DateTime(2024, 1, 9),
-    ),
-  ];
+  final List<Alert> _alerts = [];
 
   UnmodifiableListView<Alert> get alerts => UnmodifiableListView(_alerts);
 

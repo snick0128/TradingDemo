@@ -328,8 +328,8 @@ class _AdminOrdersScreenState extends State<AdminOrdersScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
-          color: color.withValues(alpha: 0.12),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
+          color: color.withOpacity(0.12),
+          border: Border.all(color: color.withOpacity(0.4)),
         ),
         child: Text(
           label,

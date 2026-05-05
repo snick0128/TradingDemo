@@ -311,7 +311,7 @@ class _SectorPerformanceTable extends StatelessWidget {
                             decoration: BoxDecoration(
                               color:
                                   (isPos ? AppColors.success : AppColors.danger)
-                                      .withValues(alpha: 0.12),
+                                      .withOpacity(0.12),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(

@@ -162,7 +162,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
       color: AppColors.textSecondary,
     );
     return Container(
-      color: AppColors.surfaceAlt.withValues(alpha: 0.5),
+      color: AppColors.surfaceAlt.withOpacity(0.5),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: const Row(
         children: [

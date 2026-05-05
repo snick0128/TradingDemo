@@ -59,7 +59,7 @@ class AuthService {
         'role': expectedRole,
         'balance': 0.0,
         'tradingEnabled': true,
-        'createdAt': FieldValue.serverTimestamp(),
+        'createdAt': Timestamp.now(),
       });
     }
 
@@ -89,15 +89,17 @@ class AuthService {
     final firebaseUser = credential.user;
     if (firebaseUser == null) throw Exception('Registration failed.');
 
-    // Create user document in Firestore with role = "user"
+    // Write user document — include both balance field names so both
+    // the admin panel and execution engine can read it correctly.
     await _firestore.setDocument('users/${firebaseUser.uid}', {
       'uid': firebaseUser.uid,
       'name': name,
       'email': email,
       'role': 'user',
       'balance': 0.0,
+      'available_balance': 0.0,
       'tradingEnabled': true,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': Timestamp.now(),
     });
 
     return AppUserProfile(
@@ -186,7 +188,7 @@ class AuthService {
       'role': 'admin',
       'balance': 0.0,
       'tradingEnabled': true,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': Timestamp.now(),
     });
 
     return _loadProfile(firebaseUser);
@@ -208,8 +210,9 @@ class AuthService {
         'email': firebaseUser.email ?? '',
         'role': 'user',
         'balance': 0.0,
+        'available_balance': 0.0,
         'tradingEnabled': true,
-        'createdAt': FieldValue.serverTimestamp(),
+        'createdAt': Timestamp.now(),
       };
       await _firestore.setDocument('users/${firebaseUser.uid}', data);
     } else {

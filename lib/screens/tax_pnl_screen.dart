@@ -254,7 +254,7 @@ class _GainsSection extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.06),
+              color: color.withOpacity(0.06),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(4),
                 topRight: Radius.circular(4),
@@ -378,7 +378,7 @@ class _GainsSection extends StatelessWidget {
 
   Widget _tableHeader() {
     return Container(
-      color: AppColors.surfaceAlt.withValues(alpha: 0.3),
+      color: AppColors.surfaceAlt.withOpacity(0.3),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: const Row(
         children: [

@@ -22,11 +22,31 @@ import '../screens/main_shell.dart';
 ///   - role=user  on /admin/*   → /admin/login
 ///   - Already-authenticated user on login page → redirect to dashboard
 GoRouter createAppRouter(AuthSession authSession) {
+  // ── Multi-URL Detection ─────────────────────────────────────────────
+  // This allows hosting the same app on two different domains:
+  // e.g. trade-kosh.web.app (Customer) and admin.trade-kosh.web.app (Admin)
+  final String host = Uri.base.host;
+  final String currentPath = Uri.base.path;
+  final String query = Uri.base.query;
+
+  // Define what constitutes an "Admin URL"
+  // Matches: admin.trade-kosh.web.app, admin-trade-kosh.web.app, localhost with /admin path
+  final bool isAdminHost = host.contains('admin') ||
+      host.startsWith('admin.') ||
+      host.startsWith('admin-') ||
+      currentPath.startsWith('/admin');
+
+  // Set the default landing page based on the host
+  String defaultLoc = isAdminHost ? '/admin/login' : '/app/login';
+
+  final String initialLoc = (currentPath == '/' || currentPath.isEmpty)
+      ? defaultLoc
+      : (query.isEmpty ? currentPath : '$currentPath?$query');
+
   return GoRouter(
-    initialLocation: '/app/login',
+    initialLocation: initialLoc,
     refreshListenable: authSession,
     redirect: (BuildContext context, GoRouterState state) {
-      // Wait for auth state to resolve
       if (authSession.isLoading) return null;
 
       final loc = state.matchedLocation;
@@ -34,30 +54,38 @@ GoRouter createAppRouter(AuthSession authSession) {
       final isAdmin = authSession.isAdmin;
       final isUser = authSession.isUser;
 
+      // ── Host-based Enforcement ──────────────────────────────────────
+      // If user is on an Admin URL, don't let them access /app/* routes
+      if (isAdminHost && loc.startsWith('/app/')) {
+        return '/admin/login';
+      }
+      // If user is on a Customer URL, don't let them access /admin/* routes
+      if (!isAdminHost && loc.startsWith('/admin/')) {
+        return '/app/login';
+      }
+
       final isAppLogin = loc == '/app/login';
       final isAdminLogin = loc == '/admin/login';
-      final isProtectedApp =
-          loc.startsWith('/app/') && !isAppLogin;
-      final isProtectedAdmin =
-          loc.startsWith('/admin/') && !isAdminLogin;
+      final isProtectedApp = loc.startsWith('/app/') && !isAppLogin;
+      final isProtectedAdmin = loc.startsWith('/admin/') && !isAdminLogin;
 
       // Protect /app/* routes
       if (isProtectedApp) {
         if (!isAuthenticated) return '/app/login';
-        if (!isUser) return '/app/login'; // admin trying user routes
+        if (!isUser) return '/app/login';
       }
 
       // Protect /admin/* routes
       if (isProtectedAdmin) {
         if (!isAuthenticated) return '/admin/login';
-        if (!isAdmin) return '/admin/login'; // user trying admin routes
+        if (!isAdmin) return '/admin/login';
       }
 
       // Redirect authenticated users away from login pages
       if (isAppLogin && isAuthenticated && isUser) return '/app/dashboard';
       if (isAdminLogin && isAuthenticated && isAdmin) return '/admin/dashboard';
 
-      return null; // allow navigation
+      return null;
     },
     routes: [
       // ── Customer App ──────────────────────────────────────────────────

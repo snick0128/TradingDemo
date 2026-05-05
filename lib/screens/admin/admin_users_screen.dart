@@ -97,7 +97,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+        backgroundColor: AppColors.primary.withOpacity(0.1),
         child: Text(
           user.name.isEmpty ? 'U' : user.name[0].toUpperCase(),
           style: const TextStyle(
@@ -207,7 +207,22 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             onPressed: () {
               final amount = double.tryParse(controller.text.trim()) ?? 0;
               if (amount == 0) return;
-              onSubmit(amount);
+              try {
+                onSubmit(amount);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Adjustment of ₹$amount applied successfully.'),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to apply adjustment: $e'),
+                    backgroundColor: AppColors.danger,
+                  ),
+                );
+              }
               Navigator.pop(ctx);
             },
             child: const Text('Apply'),

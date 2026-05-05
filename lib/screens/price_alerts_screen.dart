@@ -96,7 +96,7 @@ class _AlertCard extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: typeColor.withValues(alpha: 0.12),
+              color: typeColor.withOpacity(0.12),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(LucideIcons.bell, color: typeColor, size: 18),

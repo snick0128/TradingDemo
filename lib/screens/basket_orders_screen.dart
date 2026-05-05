@@ -268,7 +268,7 @@ class _EntryRow extends StatelessWidget {
             width: 36,
             padding: const EdgeInsets.symmetric(vertical: 2),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
+              color: color.withOpacity(0.1),
               borderRadius: BorderRadius.circular(3),
             ),
             alignment: Alignment.center,
@@ -331,7 +331,7 @@ class _AddEntryFormState extends State<_AddEntryForm> {
 
   OrderType _type = OrderType.buy;
   OrderVariety _variety = OrderVariety.market;
-  ProductType _product = ProductType.cnc;
+  ProductType _product = ProductType.nrml;
 
   @override
   void dispose() {

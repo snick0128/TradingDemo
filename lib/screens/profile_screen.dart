@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../app/app_scope.dart';
 import '../main.dart';
 import '../state/security_scope.dart';
 import '../state/trading_scope.dart';
@@ -12,7 +14,6 @@ import 'settings_hub_screen.dart';
 import 'settings/about_screen.dart';
 import 'settings/app_permissions_screen.dart';
 import 'settings/appearance_settings_screen.dart';
-import 'settings/brokerage_plan_screen.dart';
 import 'settings/help_support_screen.dart';
 import 'settings/linked_accounts_screen.dart';
 import 'settings/security_settings_screen.dart';
@@ -151,7 +152,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Account: ${user.isAdmin ? 'Admin' : 'Standard'} • Plan: ${user.brokeragePlan}',
+                  'Account: ${user.isAdmin ? 'Admin' : 'Standard'}',
                   style: Theme.of(context).textTheme.bodySmall,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -300,54 +301,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         children: [
           _actionTile(
-            icon: LucideIcons.shieldCheck,
-            title: 'Security Center',
-            subtitle: 'Password, trusted devices, sessions',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SecuritySettingsScreen()),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
-            icon: LucideIcons.palette,
-            title: 'Appearance',
-            subtitle: 'Theme, font size, and chart preferences',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const AppearanceSettingsScreen(),
-              ),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
-            icon: Icons.currency_rupee,
-            title: 'Brokerage Plan',
-            subtitle: 'View and compare current plan charges',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BrokeragePlanScreen()),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
             icon: LucideIcons.link2,
             title: 'Linked Accounts',
             subtitle: 'Banks, demat, and third-party integrations',
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const LinkedAccountsScreen()),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
-            icon: LucideIcons.shield,
-            title: 'App Permissions',
-            subtitle: 'Manage notification and device permissions',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const AppPermissionsScreen()),
             ),
           ),
           const Divider(height: 1, indent: 56),
@@ -376,9 +335,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               icon: LucideIcons.settings2,
               title: 'Admin Panel',
               subtitle: 'Backend management and monitoring',
-              onTap: () => Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const AdminShell())),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AdminShell()),
+              ),
             ),
           ],
         ],
@@ -453,7 +412,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: ElevatedButton.icon(
         onPressed: _confirmLogout,
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.danger.withValues(alpha: 0.15),
+          backgroundColor: AppColors.danger.withOpacity(0.15),
           foregroundColor: AppColors.danger,
           elevation: 0,
         ),
@@ -741,11 +700,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showMessage('Logged out from this session.');
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () async {
+              Navigator.pop(context); // close dialog
+              try {
+                // Firebase logout
+                final appScope =
+                    context.dependOnInheritedWidgetOfExactType<AppScope>();
+                if (appScope != null) {
+                  await appScope.authService.logout();
+                  appScope.notifier?.setUser(null);
+                }
+                // Legacy security store logout
+                if (context.mounted) {
+                  SecurityScope.of(context).killAllSessions();
+                  context.go('/app/login');
+                }
+              } catch (_) {
+                // Even if Firebase logout fails, clear local session
+                if (context.mounted) {
+                  SecurityScope.of(context).killAllSessions();
+                  context.go('/app/login');
+                }
+              }
             },
-            child: const Text('Logout'),
+            child: const Text(
+              'Logout',
+              style: TextStyle(color: Colors.white),
+            ),
           ),
         ],
       ),

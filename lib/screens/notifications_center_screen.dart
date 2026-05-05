@@ -127,12 +127,12 @@ class _NotificationCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: isUnread
-              ? AppColors.primary.withValues(alpha: 0.05)
+              ? AppColors.primary.withOpacity(0.05)
               : AppColors.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isUnread
-                ? AppColors.primary.withValues(alpha: 0.2)
+                ? AppColors.primary.withOpacity(0.2)
                 : AppColors.border,
           ),
           boxShadow: AppColors.softShadow,

@@ -69,10 +69,10 @@ class AppPermissionsScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.warning.withValues(alpha: 0.1),
+                color: AppColors.warning.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                    color: AppColors.warning.withValues(alpha: 0.3)),
+                    color: AppColors.warning.withOpacity(0.3)),
               ),
               child: const Row(
                 children: [
@@ -105,7 +105,7 @@ class AppPermissionsScreen extends StatelessWidget {
                             color: (perm.isGranted
                                     ? AppColors.success
                                     : AppColors.danger)
-                                .withValues(alpha: 0.1),
+                                .withOpacity(0.1),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Icon(perm.icon,

@@ -5,6 +5,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/backend_error_widget.dart';
 import '../widgets/shared_widgets.dart';
 import 'advanced_chart_screen.dart';
 import 'fno_dashboard_screen.dart';
@@ -21,12 +22,41 @@ import 'orders_screen.dart';
 import 'portfolio_screen.dart';
 import 'stock_detail_screen.dart';
 
+// ─── Design tokens (spec-compliant) ──────────────────────────────────────────
+const _kProfit = Color(0xFF00C853);
+const _kLoss   = Color(0xFFD50000);
+const _kCta    = Color(0xFF1565C0);
+
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
+
+    // ── Error state: backend unreachable ──────────────────────────────────────
+    if (store.backendError) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Dashboard')),
+        backgroundColor: AppColors.background,
+        body: BackendErrorWidget(
+          message: store.backendErrorMessage,
+          onRetry: () => store.connectLiveBackend(),
+        ),
+      );
+    }
+
+    // ── Loading state: waiting for first data ─────────────────────────────────
+    if (store.watchlist.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Dashboard')),
+        backgroundColor: AppColors.background,
+        body: const BackendLoadingWidget(
+          message: 'Connecting to market data server...',
+        ),
+      );
+    }
+
     final hour = DateTime.now().hour;
     final greeting = hour < 12
         ? 'Good morning'
@@ -47,7 +77,7 @@ class DashboardScreen extends StatelessWidget {
       ..sort(
         (a, b) => b.changePercentage.abs().compareTo(a.changePercentage.abs()),
       );
-    final topMovers = movers.take(5).toList();
+    final topMovers = movers.take(6).toList();
 
     final positions = store.positions.take(3).toList();
     final realizedPnl = store.orders
@@ -70,73 +100,61 @@ class DashboardScreen extends StatelessWidget {
         unreadCount: store.unreadNotificationCount,
       ),
       backgroundColor: AppColors.background,
-      body: SingleChildScrollView(
+      body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1. Net Worth Card
-            _NetWorthCard(
-              netWorth: netWorth,
-              dayPnl: dayPnl,
-              dayPnlPct: dayPnlPct,
-              balance: store.balance,
-            ),
-            const SizedBox(height: 20),
+        children: [
+          // 1. Net Worth hero card (blue gradient)
+          _NetWorthCard(
+            netWorth: netWorth,
+            dayPnl: dayPnl,
+            dayPnlPct: dayPnlPct,
+            balance: store.balance,
+          ),
+          const SizedBox(height: 16),
 
-            // 2. Quick Actions
-            const _QuickActionsRow(),
-            const SizedBox(height: 20),
+          // 2. Indices row (NIFTY/SENSEX pills horizontal scroll)
+          _IndicesRow(stocks: store.watchlist),
+          const SizedBox(height: 16),
 
-            // 3. Today's P&L strip
-            _PnlStrip(realized: realizedPnl, unrealized: dayPnl),
-            const SizedBox(height: 20),
+          // 3. Quick Actions row (Markets/Orders/IPO/More, 48dp circles)
+          const _QuickActionsRow(),
+          const SizedBox(height: 24),
 
-            // 4. Positions snapshot
-            if (positions.isNotEmpty) ...[
-              _SectionHeader(
-                title: 'Positions',
-                onViewAll: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const PortfolioScreen()),
-                ),
-              ),
-              const SizedBox(height: 8),
-              _PositionsSnapshot(positions: positions),
-              const SizedBox(height: 20),
-            ],
+          // 4. P&L split row (Realized | Unrealized)
+          _PnlStrip(realized: realizedPnl, unrealized: dayPnl),
+          const SizedBox(height: 24),
 
-            // 5. Top Movers
-            _SectionHeader(title: 'Top Movers'),
-            const SizedBox(height: 8),
-            _TopMoversRow(stocks: topMovers),
-            const SizedBox(height: 20),
-
-            // 6. Quick Trade / Watchlist Preview
+          // 5. Positions preview (max 3 cards, no "N/A")
+          if (positions.isNotEmpty) ...[
             _SectionHeader(
-              title: 'Quick Trade',
+              title: 'Positions',
               onViewAll: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Watchlist',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-                fontWeight: FontWeight.w500,
+                MaterialPageRoute(builder: (_) => const PortfolioScreen()),
               ),
             ),
             const SizedBox(height: 8),
-            _WatchlistPreview(stocks: store.watchlist.take(4).toList()),
-            const SizedBox(height: 20),
-
-            // 7. Indices strip
-            _IndicesStrip(),
+            _PositionsSnapshot(positions: positions),
+            const SizedBox(height: 24),
           ],
-        ),
+
+          // 6. Top Movers 2-column grid
+          _SectionHeader(title: 'Top Movers'),
+          const SizedBox(height: 8),
+          _TopMoversGrid(stocks: topMovers),
+          const SizedBox(height: 24),
+
+          // 7. Quick Trade section
+          _SectionHeader(
+            title: 'Quick Trade',
+            onViewAll: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _WatchlistPreview(stocks: store.watchlist.take(4).toList()),
+        ],
       ),
     );
   }
@@ -234,11 +252,11 @@ class _NetWorthCard extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF1A3A6B), Color(0xFF387ED1)],
+          colors: [Color(0xFF0D2B6B), Color(0xFF1565C0)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AppColors.heroRadius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -254,10 +272,11 @@ class _NetWorthCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '₹${_fmt(netWorth)}',
-            style: GoogleFonts.jetBrainsMono(
+            style: GoogleFonts.inter(
               color: Colors.white,
-              fontSize: 32,
+              fontSize: 26,
               fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
           const SizedBox(height: 10),
@@ -284,10 +303,11 @@ class _NetWorthCard extends StatelessWidget {
               ),
               Text(
                 '₹${balance.toStringAsFixed(2)}',
-                style: GoogleFonts.jetBrainsMono(
+                style: GoogleFonts.inter(
                   color: Colors.white,
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ],
@@ -300,7 +320,7 @@ class _NetWorthCard extends StatelessWidget {
   String _fmt(double v) {
     if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(2)}Cr';
     if (v >= 100000) return '${(v / 100000).toStringAsFixed(2)}L';
-    return v.toStringAsFixed(0);
+    return v.toStringAsFixed(2);
   }
 }
 
@@ -312,7 +332,7 @@ class _QuickActionsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = [
       (LucideIcons.barChart2, 'Markets', AppColors.primary),
-      (LucideIcons.listTodo, 'Orders', AppColors.accent),
+      (LucideIcons.listTodo, 'Orders', const Color(0xFF1565C0)),
       (LucideIcons.fileText, 'IPO', AppColors.warning),
       (LucideIcons.moreHorizontal, 'More', AppColors.textSecondary),
     ];
@@ -454,20 +474,21 @@ class _QuickActionButton extends StatelessWidget {
       child: Column(
         children: [
           Container(
-            width: 56,
-            height: 56,
+            width: 48,
+            height: 48,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
+              color: color.withOpacity(0.12),
               shape: BoxShape.circle,
+              border: Border.all(color: color.withOpacity(0.25), width: 1),
             ),
-            child: Icon(icon, color: color, size: 24),
+            child: Icon(icon, color: color, size: 22),
           ),
           const SizedBox(height: 6),
           Text(
             label,
             style: const TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
               color: AppColors.textPrimary,
             ),
           ),
@@ -490,18 +511,18 @@ class _PnlStrip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.softShadow,
+        border: Border.all(color: AppColors.border, width: 1),
       ),
       child: Row(
         children: [
           Expanded(
-            child: _PnlItem(label: "Realized P&L", value: realized),
+            child: _PnlItem(label: 'Realized P&L', value: realized),
           ),
           Container(width: 1, height: 36, color: AppColors.border),
           Expanded(
-            child: _PnlItem(label: "Unrealized P&L", value: unrealized),
+            child: _PnlItem(label: 'Unrealized P&L', value: unrealized),
           ),
         ],
       ),
@@ -518,6 +539,8 @@ class _PnlItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isPos = value >= 0;
+    final arrow = isPos ? '▲' : '▼';
+    final color = isPos ? _kProfit : _kLoss;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -531,11 +554,12 @@ class _PnlItem extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '${isPos ? '+' : ''}₹${value.abs().toStringAsFixed(0)}',
-          style: GoogleFonts.jetBrainsMono(
-            color: isPos ? AppColors.success : AppColors.danger,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
+          '$arrow ₹${value.abs().toStringAsFixed(2)}',
+          style: GoogleFonts.inter(
+            color: color,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
       ],
@@ -556,7 +580,14 @@ class _SectionHeader extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textPrimary,
+          ),
+        ),
         if (onViewAll != null)
           GestureDetector(
             onTap: onViewAll,
@@ -587,7 +618,7 @@ class _PositionsSnapshot extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.softShadow,
+        border: Border.all(color: AppColors.border, width: 1),
       ),
       child: Column(
         children: [
@@ -612,6 +643,10 @@ class _PositionRow extends StatelessWidget {
     final p = position;
     final isPos = p.unrealizedPnl >= 0;
     final productLabel = p.product == ProductType.mis ? 'MIS' : 'CNC';
+    // Never show N/A — use symbol as fallback for name
+    final displayName = (p.name.isNotEmpty && p.name != 'N/A' && p.name != p.symbol)
+        ? p.name
+        : p.symbol;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -624,8 +659,8 @@ class _PositionRow extends StatelessWidget {
                 Text(
                   p.symbol,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 15,
                     color: AppColors.textPrimary,
                   ),
                 ),
@@ -638,7 +673,7 @@ class _PositionRow extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.1),
+                        color: AppColors.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
@@ -668,10 +703,11 @@ class _PositionRow extends StatelessWidget {
             children: [
               Text(
                 '₹${p.currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.jetBrainsMono(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
                   color: AppColors.textPrimary,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
               const SizedBox(height: 3),
@@ -688,23 +724,120 @@ class _PositionRow extends StatelessWidget {
   }
 }
 
-// ─── Top Movers ───────────────────────────────────────────────────────────────
+// ─── Indices Row ──────────────────────────────────────────────────────────────
 
-class _TopMoversRow extends StatelessWidget {
+class _IndicesRow extends StatelessWidget {
   final List<Stock> stocks;
-
-  const _TopMoversRow({required this.stocks});
+  const _IndicesRow({required this.stocks});
 
   @override
   Widget build(BuildContext context) {
+    // Try to find index-like symbols; fall back to first 3 stocks
+    final indices = <_IndexData>[];
+    const indexSymbols = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTYBANK'];
+    for (final sym in indexSymbols) {
+      final match = stocks.where((s) => s.symbol.toUpperCase().contains(sym)).firstOrNull;
+      if (match != null) {
+        indices.add(_IndexData(match.symbol, match.currentPrice, match.changePercentage));
+      }
+    }
+    // If no index symbols found, use first 3 stocks as proxy
+    if (indices.isEmpty) {
+      for (final s in stocks.take(3)) {
+        indices.add(_IndexData(s.symbol, s.currentPrice, s.changePercentage));
+      }
+    }
+
     return SizedBox(
-      height: 110,
+      height: 44,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: stocks.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (context, index) => _MoverCard(stock: stocks[index]),
+        itemCount: indices.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) => _IndexPill(data: indices[i]),
       ),
+    );
+  }
+}
+
+class _IndexData {
+  final String symbol;
+  final double price;
+  final double change;
+  const _IndexData(this.symbol, this.price, this.change);
+}
+
+class _IndexPill extends StatelessWidget {
+  final _IndexData data;
+  const _IndexPill({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = data.change >= 0;
+    final color = isPos ? _kProfit : _kLoss;
+    final arrow = isPos ? '▲' : '▼';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border, width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            data.symbol,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '₹${data.price.toStringAsFixed(2)}',
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '$arrow ${data.change.abs().toStringAsFixed(2)}%',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Top Movers 2-column grid ─────────────────────────────────────────────────
+
+class _TopMoversGrid extends StatelessWidget {
+  final List<Stock> stocks;
+  const _TopMoversGrid({required this.stocks});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+        childAspectRatio: 2.4,
+      ),
+      itemCount: stocks.length,
+      itemBuilder: (context, index) => _MoverCard(stock: stocks[index]),
     );
   }
 }
@@ -718,6 +851,7 @@ class _MoverCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isPos = stock.changePercentage >= 0;
     final sign = isPos ? '+' : '';
+    final color = isPos ? _kProfit : _kLoss;
 
     return InkWell(
       borderRadius: BorderRadius.circular(AppColors.cardRadius),
@@ -726,47 +860,52 @@ class _MoverCard extends StatelessWidget {
         MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
       ),
       child: Container(
-        width: 140,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(AppColors.cardRadius),
-          boxShadow: AppColors.softShadow,
+          border: Border.all(color: AppColors.border, width: 1),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Row(
           children: [
-            Text(
-              stock.symbol,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: AppColors.textPrimary,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text(
-              '₹${stock.currentPrice.toStringAsFixed(2)}',
-              style: GoogleFonts.jetBrainsMono(
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-                color: AppColors.textPrimary,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    stock.symbol,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '₹${stock.currentPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.inter(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
               ),
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: isPos
-                    ? AppColors.success.withValues(alpha: 0.12)
-                    : AppColors.danger.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(6),
+                color: color.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 '$sign${stock.changePercentage.toStringAsFixed(2)}%',
                 style: TextStyle(
-                  color: isPos ? AppColors.success : AppColors.danger,
-                  fontWeight: FontWeight.w700,
+                  color: color,
+                  fontWeight: FontWeight.w600,
                   fontSize: 12,
                 ),
               ),
@@ -787,14 +926,12 @@ class _WatchlistPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (stocks.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    if (stocks.isEmpty) return const SizedBox.shrink();
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.softShadow,
+        border: Border.all(color: AppColors.border, width: 1),
       ),
       child: Column(
         children: [
@@ -818,7 +955,8 @@ class _WatchlistPreviewRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final isPos = stock.changePercentage >= 0;
     final sign = isPos ? '+' : '';
-    final changeColor = isPos ? AppColors.success : AppColors.danger;
+    final changeColor = isPos ? _kProfit : _kLoss;
+    final arrow = isPos ? '▲' : '▼';
 
     return InkWell(
       onTap: () => Navigator.push(
@@ -833,8 +971,8 @@ class _WatchlistPreviewRow extends StatelessWidget {
               child: Text(
                 stock.symbol,
                 style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 15,
                   color: AppColors.textPrimary,
                 ),
               ),
@@ -843,9 +981,9 @@ class _WatchlistPreviewRow extends StatelessWidget {
               price: stock.currentPrice,
               child: Text(
                 '₹${stock.currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.jetBrainsMono(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
                   color: AppColors.textPrimary,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
@@ -855,99 +993,20 @@ class _WatchlistPreviewRow extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: changeColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(6),
+                color: changeColor.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                '$sign${stock.changePercentage.toStringAsFixed(2)}%',
+                '$arrow $sign${stock.changePercentage.toStringAsFixed(2)}%',
                 style: TextStyle(
                   color: changeColor,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w600,
                   fontSize: 12,
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ─── Indices Strip ────────────────────────────────────────────────────────────
-
-class _IndicesStrip extends StatelessWidget {
-  const _IndicesStrip();
-
-  static const _indices = [
-    ('NIFTY 50', '22,814.65', '+0.84%', true),
-    ('SENSEX', '75,091.11', '+0.59%', true),
-    ('BANK NIFTY', '48,115.30', '-0.44%', false),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.softShadow,
-      ),
-      child: Column(
-        children: [
-          for (var i = 0; i < _indices.length; i++) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _indices[i].$1,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    _indices[i].$2,
-                    style: GoogleFonts.jetBrainsMono(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _indices[i].$4
-                          ? AppColors.success.withValues(alpha: 0.12)
-                          : AppColors.danger.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      _indices[i].$3,
-                      style: TextStyle(
-                        color: _indices[i].$4
-                            ? AppColors.success
-                            : AppColors.danger,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (i < _indices.length - 1)
-              const Divider(height: 1, indent: 16, endIndent: 16),
-          ],
-        ],
       ),
     );
   }
@@ -970,24 +1029,25 @@ class _PnlChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isPos ? AppColors.success : AppColors.danger;
+    final color = isPos ? _kProfit : _kLoss;
+    final arrow = isPos ? '▲' : '▼';
     final sign = isPos ? '+' : '';
     final bgColor = light
-        ? Colors.white.withValues(alpha: 0.2)
-        : color.withValues(alpha: 0.15);
+        ? Colors.white.withOpacity(0.2)
+        : color.withOpacity(0.12);
     final textColor = light ? Colors.white : color;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        '$sign₹${value.abs().toStringAsFixed(0)}  ($sign${pct.toStringAsFixed(2)}%)',
+        '$arrow $sign₹${value.abs().toStringAsFixed(2)}  ($sign${pct.toStringAsFixed(2)}%)',
         style: TextStyle(
           color: textColor,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           fontSize: 12,
         ),
       ),

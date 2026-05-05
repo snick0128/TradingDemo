@@ -17,7 +17,7 @@ class BrokerageCalculatorScreen extends StatefulWidget {
 
 class _BrokerageCalculatorScreenState extends State<BrokerageCalculatorScreen> {
   final _tradeValueController = TextEditingController();
-  ProductType _productType = ProductType.cnc;
+  ProductType _productType = ProductType.mis;
   BrokerageResult? _result;
 
   @override
@@ -78,16 +78,16 @@ class _BrokerageCalculatorScreenState extends State<BrokerageCalculatorScreen> {
                 decoration: const InputDecoration(labelText: 'Product Type'),
                 items: const [
                   DropdownMenuItem(
-                    value: ProductType.cnc,
-                    child: Text('CNC (Delivery)'),
-                  ),
-                  DropdownMenuItem(
                     value: ProductType.mis,
                     child: Text('MIS (Intraday)'),
                   ),
                   DropdownMenuItem(
                     value: ProductType.nrml,
                     child: Text('NRML (F&O)'),
+                  ),
+                  DropdownMenuItem(
+                    value: ProductType.overnight,
+                    child: Text('Overnight (Carry Forward)'),
                   ),
                 ],
                 onChanged: (v) {

@@ -118,6 +118,15 @@ class _MainShellState extends State<MainShell> {
                       selectedIconTheme: const IconThemeData(
                         color: AppColors.primary,
                       ),
+                      unselectedLabelTextStyle: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 11,
+                      ),
+                      selectedLabelTextStyle: const TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
                       destinations: const [
                         NavigationRailDestination(
                           icon: Icon(LucideIcons.home),
@@ -156,36 +165,52 @@ class _MainShellState extends State<MainShell> {
                 ],
               ),
               bottomNavigationBar: !isDesktop
-                  ? NavigationBar(
-                      selectedIndex: _selectedIndex,
-                      onDestinationSelected: (idx) =>
-                          setState(() => _selectedIndex = idx),
-                      backgroundColor: AppColors.surface,
-                      indicatorColor: AppColors.primary.withValues(alpha: 0.12),
-                      labelBehavior:
-                          NavigationDestinationLabelBehavior.alwaysShow,
-                      destinations: const [
-                        NavigationDestination(
-                          icon: Icon(LucideIcons.home),
-                          label: 'Home',
+                  ? Container(
+                      decoration: const BoxDecoration(
+                        color: AppColors.surface,
+                        border: Border(
+                          top: BorderSide(color: AppColors.border, width: 1),
                         ),
-                        NavigationDestination(
-                          icon: Icon(LucideIcons.listTodo),
-                          label: 'Orders',
+                      ),
+                      child: SizedBox(
+                        height: 60,
+                        child: BottomNavigationBar(
+                          currentIndex: _selectedIndex,
+                          onTap: (idx) => setState(() => _selectedIndex = idx),
+                          backgroundColor: AppColors.surface,
+                          selectedItemColor: const Color(0xFF2962FF),
+                          unselectedItemColor: const Color(0xFF9E9E9E),
+                          type: BottomNavigationBarType.fixed,
+                          elevation: 0,
+                          selectedLabelStyle: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          unselectedLabelStyle: const TextStyle(fontSize: 11),
+                          items: const [
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.home),
+                              label: 'Home',
+                            ),
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.listTodo),
+                              label: 'Orders',
+                            ),
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.pieChart),
+                              label: 'Portfolio',
+                            ),
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.wallet),
+                              label: 'Wallet',
+                            ),
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.user),
+                              label: 'Profile',
+                            ),
+                          ],
                         ),
-                        NavigationDestination(
-                          icon: Icon(LucideIcons.pieChart),
-                          label: 'Portfolio',
-                        ),
-                        NavigationDestination(
-                          icon: Icon(LucideIcons.wallet),
-                          label: 'Wallet',
-                        ),
-                        NavigationDestination(
-                          icon: Icon(LucideIcons.user),
-                          label: 'Profile',
-                        ),
-                      ],
+                      ),
                     )
                   : null,
             ),
@@ -271,7 +296,7 @@ class _PinLockOverlayState extends State<PinLockOverlay> {
     final security = SecurityScope.of(context);
 
     return ColoredBox(
-      color: AppColors.background.withValues(alpha: 0.96),
+      color: AppColors.background.withOpacity(0.96),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 360),

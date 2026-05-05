@@ -47,7 +47,7 @@ class BrokerageCalculator {
     }
 
     final double brokerage;
-    if (productType == ProductType.cnc) {
+    if (productType == ProductType.nrml) {
       brokerage = (tradeValue * 0.0003).clamp(0, 20.0);
     } else {
       brokerage = 20.0;

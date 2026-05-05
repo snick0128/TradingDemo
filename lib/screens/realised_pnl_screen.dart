@@ -90,7 +90,7 @@ class RealisedPnlScreen extends StatelessWidget {
 
   Widget _tableHeader() {
     return Container(
-      color: AppColors.surfaceAlt.withValues(alpha: 0.3),
+      color: AppColors.surfaceAlt.withOpacity(0.3),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: const Row(
         children: [

@@ -101,7 +101,7 @@ class _ForceClosePositionsScreenState
             padding: const EdgeInsets.only(right: 8),
             child: Chip(
               label: Text('${_positions.length} open'),
-              backgroundColor: AppColors.danger.withValues(alpha: 0.12),
+              backgroundColor: AppColors.danger.withOpacity(0.12),
               labelStyle: const TextStyle(
                   color: AppColors.danger, fontWeight: FontWeight.w700),
             ),
@@ -221,7 +221,7 @@ class _ForceClosePositionsScreenState
                                     tooltip: 'Force Close',
                                     style: IconButton.styleFrom(
                                       backgroundColor: AppColors.danger
-                                          .withValues(alpha: 0.1),
+                                          .withOpacity(0.1),
                                     ),
                                   ),
                                 ],

@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import '../data/services/firestore_service.dart';
 import '../data/services/trading_service.dart';
 import '../models/trading_models.dart';
-import '../services/mock_data_service.dart';
 
 class PlatformStats {
   final double dailyVolume;
@@ -86,9 +85,7 @@ class AdminStore extends ChangeNotifier {
        _users = <User>[],
        _masterOrderBook = <AdminOrderRecord>[],
        _auditLog = [],
-       _stockEnabled = {
-         for (final stock in MockData.watchlist) stock.symbol: true,
-       },
+       _stockEnabled = {},   // populated from Firestore stocks collection
        _broadcasts = [];
 
   final TradingService? _tradingService;
@@ -231,7 +228,7 @@ class AdminStore extends ChangeNotifier {
       _fireAndForget(
         () => _firestoreService!.updateDocument('users/$userId', {
           'marginLimit': _users[index].marginLimit,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to adjust margin: $e'),
       );
@@ -248,7 +245,7 @@ class AdminStore extends ChangeNotifier {
         () => _firestoreService!.setDocument('stocks/$symbol', {
           'symbol': symbol,
           'tradable': true,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to enable stock: $e'),
       );
@@ -265,7 +262,7 @@ class AdminStore extends ChangeNotifier {
         () => _firestoreService!.setDocument('stocks/$symbol', {
           'symbol': symbol,
           'tradable': false,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to disable stock: $e'),
       );
@@ -325,7 +322,7 @@ class AdminStore extends ChangeNotifier {
           'message': message,
           'type': _alertTypeToDb(type),
           'createdBy': _currentAdminId,
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to broadcast notification: $e'),
       );
@@ -342,7 +339,7 @@ class AdminStore extends ChangeNotifier {
         () => _firestoreService!.setDocument('admin_config/platform', {
           'maintenanceMode': _maintenanceMode,
           'updatedBy': _currentAdminId,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to toggle maintenance mode: $e'),
       );
@@ -360,7 +357,7 @@ class AdminStore extends ChangeNotifier {
         () => _firestoreService!.setDocument('risk_limits/$userId', {
           limitType: value,
           'updatedBy': _currentAdminId,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to set risk limit: $e'),
       );
@@ -380,7 +377,7 @@ class AdminStore extends ChangeNotifier {
         () => _firestoreService!.setDocument('admin_config/platform', {
           'globalTradingHalt': halt,
           'updatedBy': _currentAdminId,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': Timestamp.now(),
         }),
         onError: (e) => _notifyError('Failed to toggle trading halt: $e'),
       );
@@ -422,13 +419,13 @@ class AdminStore extends ChangeNotifier {
       _users = snapshot.docs.map(_mapUserDoc).toList()
         ..sort((a, b) => b.registeredAt.compareTo(a.registeredAt));
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Users stream error: $e'));
 
     _ordersSub = tradingService.ordersStream().listen((snapshot) {
       _masterOrderBook = snapshot.docs.map(_mapOrderDoc).toList()
         ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Orders stream error: $e'));
 
     _auditSub = firestoreService.raw
         .collection('audit_logs')
@@ -438,7 +435,7 @@ class AdminStore extends ChangeNotifier {
         .listen((snapshot) {
       _auditLog = snapshot.docs.map(_mapAuditDoc).toList();
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Audit log stream error: $e'));
 
     _broadcastSub = firestoreService.raw
         .collection('notifications')
@@ -448,7 +445,7 @@ class AdminStore extends ChangeNotifier {
         .listen((snapshot) {
       _broadcasts = snapshot.docs.map(_mapNotificationDoc).toList();
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Notifications stream error: $e'));
 
     _stocksSub = firestoreService.getCollectionStream('stocks').listen((snapshot) {
       for (final doc in snapshot.docs) {
@@ -458,7 +455,7 @@ class AdminStore extends ChangeNotifier {
         _stockEnabled[symbol] = tradable;
       }
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Stocks stream error: $e'));
 
     _riskLimitsSub = firestoreService
         .getCollectionStream('risk_limits')
@@ -476,7 +473,7 @@ class AdminStore extends ChangeNotifier {
             },
         });
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Risk limits stream error: $e'));
 
     _configSub = firestoreService
         .raw
@@ -489,7 +486,7 @@ class AdminStore extends ChangeNotifier {
       _globalTradingHalt =
           (data['globalTradingHalt'] as bool?) ?? _globalTradingHalt;
       notifyListeners();
-    }, onError: (_, __) {});
+    }, onError: (e, _) => _notifyError('Platform config stream error: $e'));
   }
 
   void _unbindFirebaseStreams() {

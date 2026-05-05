@@ -4,8 +4,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'app/app_scope.dart';
-import 'data/providers/mock_price_provider.dart';
+import 'config/backend_config.dart';
+import 'data/providers/backend_price_provider.dart';
 import 'data/services/auth_service.dart';
+import 'data/services/backend_api_service.dart';
 import 'data/services/firestore_service.dart';
 import 'data/services/order_engine_service.dart';
 import 'data/services/trading_service.dart';
@@ -72,7 +74,9 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
         auth: FirebaseAuth.instance,
         firestore: firestore,
       );
-      final priceProvider = MockPriceProvider();
+      final priceProvider = BackendPriceProvider(
+        api: BackendApiService(baseUrl: BackendConfig.backendBaseUrl),
+      );
       _tradingService = TradingService(
         firestore: firestore,
         priceProvider: priceProvider,
@@ -82,7 +86,9 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
         firestore: FirebaseFirestore.instance,
         priceProvider: priceProvider,
       );
-      _orderEngineService!.start();
+      // ⚠️ Do NOT start the engine here — it must only run when an admin
+      // is authenticated. Starting before login means all Firestore reads
+      // inside processOrderRequest run as unauthenticated and fail silently.
 
       _adminStore = AdminStore(
         tradingService: _tradingService,
@@ -91,6 +97,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
 
       _authService!.authStateChanges.listen((firebaseUser) async {
         if (firebaseUser == null) {
+          _orderEngineService?.stop(); // stop engine on logout
           _authSession.setUser(null);
         } else if (!_authSession.isAuthenticated) {
           try {
@@ -108,10 +115,18 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
   }
 
   void _syncAdminContext() {
-    _adminStore.setCurrentAdminId(
-      _authSession.user?.uid,
-      isAdmin: _authSession.user?.isAdmin ?? false,
-    );
+    final user = _authSession.user;
+    final isAdmin = user?.isAdmin ?? false;
+
+    _adminStore.setCurrentAdminId(user?.uid, isAdmin: isAdmin);
+
+    // Start the order engine only when an admin is authenticated.
+    // Stop it when the admin logs out.
+    if (isAdmin && user != null) {
+      _orderEngineService?.start();
+    } else {
+      _orderEngineService?.stop();
+    }
   }
 
   @override

@@ -8,8 +8,10 @@ import 'package:flutter/material.dart';
 import 'app/app_router.dart';
 import 'firebase_options.dart';
 import 'app/app_scope.dart';
-import 'data/providers/mock_price_provider.dart';
+import 'config/backend_config.dart';
+import 'data/providers/backend_price_provider.dart';
 import 'data/services/auth_service.dart';
+import 'data/services/backend_api_service.dart';
 import 'data/services/firestore_service.dart';
 import 'data/services/trading_service.dart';
 import 'domain/auth/app_user_profile.dart';
@@ -75,6 +77,13 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     _authSession = AuthSession();
     _authSession.addListener(_syncTradingUserFromAuthSession);
 
+    // ── Connect live backend prices ──────────────────────────────────────────
+    // Replaces the mock random-walk price feed with real Angel One data.
+    // Set BackendConfig.useLiveBackend = false to run fully offline.
+    if (BackendConfig.useLiveBackend) {
+      _tradingStore.connectLiveBackend();
+    }
+
     if (widget.firebaseReady) {
       final firestore = FirestoreService(FirebaseFirestore.instance);
       _firestoreService = firestore;
@@ -84,7 +93,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       );
       _tradingService = TradingService(
         firestore: firestore,
-        priceProvider: MockPriceProvider(),
+        priceProvider: BackendPriceProvider(
+          api: BackendApiService(baseUrl: BackendConfig.backendBaseUrl),
+        ),
       );
       _adminStore = AdminStore(
         tradingService: _tradingService,
@@ -147,10 +158,11 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     required User fallback,
   }) {
     final emailLocalPart = profile.email.split('@').first.trim();
-    final uidPrefix = profile.uid.substring(0, profile.uid.length > 8 ? 8 : profile.uid.length);
-    final clientId = emailLocalPart.isNotEmpty
-        ? emailLocalPart
-        : uidPrefix;
+    final uidPrefix = profile.uid.substring(
+      0,
+      profile.uid.length > 8 ? 8 : profile.uid.length,
+    );
+    final clientId = emailLocalPart.isNotEmpty ? emailLocalPart : uidPrefix;
 
     return fallback.copyWith(
       id: profile.uid,
@@ -167,8 +179,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
 
   void _toggleTheme() {
     setState(() {
-      _themeMode =
-          _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+      _themeMode = _themeMode == ThemeMode.light
+          ? ThemeMode.dark
+          : ThemeMode.light;
     });
   }
 
@@ -186,9 +199,12 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     super.dispose();
   }
 
+  String? _boundUserId; // tracks which user's streams are currently active
+
   void _bindUserRealtime(String? userId) {
     if (_tradingService == null) return;
     if (userId == null || userId.isEmpty) {
+      _boundUserId = null;
       _ordersSub?.cancel();
       _positionsSub?.cancel();
       _holdingsSub?.cancel();
@@ -202,136 +218,229 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       return;
     }
 
-    _userSub?.cancel();
-    _userSub = _firestoreService?.raw.doc('users/$userId').snapshots().listen((doc) {
-      final data = doc.data();
-      if (data == null) return;
-      final current = _tradingStore.currentUser;
-      final name = (data['name'] as String?) ?? current.name;
-      final email = (data['email'] as String?) ?? current.email;
-      final balance = ((data['balance'] as num?) ?? current.balance).toDouble();
-      final enabled = (data['tradingEnabled'] as bool?) ?? current.isActive;
-      final role = (data['role'] as String?) ?? (current.isAdmin ? 'admin' : 'user');
+    // Guard: don't re-bind if already listening for this user.
+    // Prevents duplicate listeners when _syncTradingUserFromAuthSession and
+    // the authStateChanges listener both call _bindUserRealtime for the same uid.
+    if (_boundUserId == userId) return;
+    _boundUserId = userId;
 
-      _tradingStore.updateUser(
-        current.copyWith(
-          id: userId,
-          name: name,
-          email: email,
-          balance: balance,
-          isActive: enabled,
-          isAdmin: role == 'admin',
-        ),
-        updateBalance: true,
-      );
-    });
+    _userSub?.cancel();
+    _userSub = _firestoreService?.raw
+        .doc('users/$userId')
+        .snapshots()
+        .listen(
+          (doc) {
+            final data = doc.data();
+            if (data == null) return;
+            final current = _tradingStore.currentUser;
+            final name = (data['name'] as String?) ?? current.name;
+            final email = (data['email'] as String?) ?? current.email;
+            final balance = ((data['balance'] as num?) ?? current.balance)
+                .toDouble();
+            final enabled =
+                (data['tradingEnabled'] as bool?) ?? current.isActive;
+            final role =
+                (data['role'] as String?) ??
+                (current.isAdmin ? 'admin' : 'user');
+
+            _tradingStore.updateUser(
+              current.copyWith(
+                id: userId,
+                name: name,
+                email: email,
+                balance: balance,
+                isActive: enabled,
+                isAdmin: role == 'admin',
+              ),
+              updateBalance: true,
+            );
+          },
+          onError: (e) {
+            // Non-fatal: user profile stream error — keep showing cached data
+          },
+        );
 
     _ordersSub?.cancel();
-    _ordersSub = _tradingService!.ordersStreamForUser(userId).listen((snapshot) {
-      final List<Order> mapped = snapshot.docs.map<Order>((doc) {
-        final data = doc.data();
-        final rawType = (data['type'] as String?)?.toUpperCase() ?? 'BUY';
-        final rawStatus = (data['status'] as String?)?.toUpperCase() ?? 'PENDING';
-        final timestamp = data['createdAt'];
-        final dateTime = timestamp is Timestamp
-            ? timestamp.toDate()
-            : DateTime.now();
+    _ordersSub = _tradingService!
+        .ordersStreamForUser(userId)
+        .listen(
+          (snapshot) {
+            final List<Order> mapped = snapshot.docs.map<Order>((doc) {
+              final data = doc.data();
+              final rawType = (data['type'] as String?)?.toUpperCase() ?? 'BUY';
+              final rawStatus =
+                  (data['status'] as String?)?.toUpperCase() ?? 'PENDING';
+              final timestamp = data['createdAt'];
+              final dateTime = timestamp is Timestamp
+                  ? timestamp.toDate()
+                  : DateTime.now();
 
-        return Order(
-          id: doc.id,
-          symbol: (data['stock'] as String?) ?? 'N/A',
-          name: (data['stock'] as String?) ?? 'N/A',
-          quantity: ((data['qty'] as num?) ?? 0).toInt(),
-          price: ((data['fillPrice'] as num?) ?? (data['price'] as num?) ?? 0)
-              .toDouble(),
-          type: rawType == 'SELL' ? OrderType.sell : OrderType.buy,
-          status: _mapOrderStatus(rawStatus),
-          dateTime: dateTime,
-          rejectionReason: data['rejectionReason'] as String?,
-          executedPrice: (data['fillPrice'] as num?)?.toDouble(),
+              return Order(
+                id: doc.id,
+                symbol: (data['stock'] as String?)?.trim().isNotEmpty == true
+                    ? (data['stock'] as String).trim()
+                    : doc.id,
+                name:
+                    (data['symbolName'] as String?)?.trim() ??
+                    (data['stock'] as String?)?.trim() ??
+                    doc.id,
+                quantity: ((data['qty'] as num?) ?? 0).toInt(),
+                price:
+                    ((data['avg_executed_price'] as num?) ??
+                            (data['executed_price'] as num?) ??
+                            (data['fillPrice'] as num?) ??
+                            (data['price'] as num?) ??
+                            0)
+                        .toDouble(),
+                type: rawType == 'SELL' ? OrderType.sell : OrderType.buy,
+                status: _mapOrderStatus(rawStatus),
+                dateTime: dateTime,
+                rejectionReason: data['rejectionReason'] as String?,
+                executedPrice:
+                    ((data['avg_executed_price'] as num?) ??
+                            (data['executed_price'] as num?) ??
+                            (data['fillPrice'] as num?))
+                        ?.toDouble(),
+              );
+            }).toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+            _tradingStore.replaceOrders(mapped);
+          },
+          onError: (e) {
+            // Non-fatal: orders stream error — keep showing cached orders.
+            // Most likely cause: missing composite index (userId + createdAt).
+            // Deploy firestore.indexes.json to fix permanently.
+          },
         );
-      }).toList()
-        ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
-
-      _tradingStore.replaceOrders(mapped);
-    });
 
     _gttSub?.cancel();
-    _gttSub = _tradingService!.gttOrdersStreamForUser(userId).listen((snapshot) {
-      final List<GTTOrder> mapped = snapshot.docs.map((doc) {
-        final data = doc.data();
-        final timestamp = data['createdAt'];
-        final createdAt = timestamp is Timestamp ? timestamp.toDate() : DateTime.now();
+    _gttSub = _tradingService!
+        .gttOrdersStreamForUser(userId)
+        .listen(
+          (snapshot) {
+            final List<GTTOrder> mapped = snapshot.docs.map((doc) {
+              final data = doc.data();
+              final timestamp = data['createdAt'];
+              final createdAt = timestamp is Timestamp
+                  ? timestamp.toDate()
+                  : DateTime.now();
 
-        return GTTOrder(
-          id: doc.id,
-          symbol: (data['symbol'] as String?) ?? 'N/A',
-          type: (data['type'] as String?) == 'OCO' ? GTTType.oco : GTTType.single,
-          triggerPrice: (data['triggerPrice'] as num).toDouble(),
-          secondTriggerPrice: (data['secondTriggerPrice'] as num?)?.toDouble(),
-          orderType: (data['orderType'] as String?) == 'SELL' ? OrderType.sell : OrderType.buy,
-          quantity: (data['quantity'] as num).toInt(),
-          limitPrice: (data['limitPrice'] as num?)?.toDouble(),
-          isActive: (data['isActive'] as bool?) ?? true,
-          createdAt: createdAt,
-          triggeredAt: (data['triggeredAt'] as Timestamp?)?.toDate(),
+              return GTTOrder(
+                id: doc.id,
+                symbol: (data['symbol'] as String?) ?? 'N/A',
+                type: (data['type'] as String?) == 'OCO'
+                    ? GTTType.oco
+                    : GTTType.single,
+                triggerPrice: (data['triggerPrice'] as num).toDouble(),
+                secondTriggerPrice: (data['secondTriggerPrice'] as num?)
+                    ?.toDouble(),
+                orderType: (data['orderType'] as String?) == 'SELL'
+                    ? OrderType.sell
+                    : OrderType.buy,
+                quantity: (data['quantity'] as num).toInt(),
+                limitPrice: (data['limitPrice'] as num?)?.toDouble(),
+                isActive: (data['isActive'] as bool?) ?? true,
+                createdAt: createdAt,
+                triggeredAt: (data['triggeredAt'] as Timestamp?)?.toDate(),
+              );
+            }).toList();
+            _tradingStore.replaceGttOrders(mapped);
+          },
+          onError: (e) {
+            // Non-fatal: GTT orders stream error
+          },
         );
-      }).toList();
-      _tradingStore.replaceGttOrders(mapped);
-    });
 
     _positionsSub?.cancel();
-    _positionsSub = _tradingService!.positionsStreamForUser(userId).listen((snapshot) {
-      final List<Position> mapped = snapshot.docs.map((doc) {
-        final data = doc.data();
-        final qty = ((data['qty'] as num?) ?? 0).toInt();
-        final signedQty = qty == 0 ? 0 : qty;
-        final symbol = (data['stock'] as String?) ?? 'N/A';
-        // Field is written as 'avg_price' (snake_case) by TradingService
-        final avgPrice = ((data['avg_price'] as num?) ?? 0).toDouble();
-        final currentPrice = _tradingStore.stockBySymbol(symbol).currentPrice;
-        final updatedAt = data['updatedAt'];
-        final openedAt = updatedAt is Timestamp ? updatedAt.toDate() : DateTime.now();
+    _positionsSub = _tradingService!
+        .positionsStreamForUser(userId)
+        .listen(
+          (snapshot) {
+            final List<Position> mapped = snapshot.docs
+                .map((doc) {
+                  final data = doc.data();
+                  final qty = ((data['qty'] as num?) ?? 0).toInt();
+                  final rawSymbol = (data['stock'] as String?)?.trim() ?? '';
+                  final symbol = rawSymbol.isNotEmpty ? rawSymbol : doc.id;
+                  final symbolName =
+                      (data['symbolName'] as String?)?.trim() ??
+                      (data['name'] as String?)?.trim() ??
+                      symbol;
+                  final rawProduct =
+                      (data['product'] as String?)?.trim() ?? 'MIS';
+                  final rawSide =
+                      (data['side'] as String?)?.trim().toUpperCase() ??
+                      (qty >= 0 ? 'BUY' : 'SELL');
+                  final avgPrice = ((data['avg_price'] as num?) ?? 0)
+                      .toDouble();
+                  final currentPrice = _tradingStore
+                      .stockBySymbol(symbol)
+                      .currentPrice;
+                  final updatedAt = data['updatedAt'];
+                  final openedAt = updatedAt is Timestamp
+                      ? updatedAt.toDate()
+                      : DateTime.now();
 
-        return Position(
-          symbol: symbol,
-          name: symbol,
-          product: ProductType.nrml,
-          quantity: signedQty.abs(),
-          avgPrice: avgPrice,
-          currentPrice: currentPrice,
-          side: signedQty >= 0 ? OrderType.buy : OrderType.sell,
-          openedAt: openedAt,
+                  return Position(
+                    symbol: symbol,
+                    name: symbolName,
+                    product: _mapProductType(rawProduct),
+                    quantity: qty.abs(),
+                    avgPrice: avgPrice,
+                    currentPrice: currentPrice,
+                    side: rawSide == 'SELL' ? OrderType.sell : OrderType.buy,
+                    openedAt: openedAt,
+                  );
+                })
+                .where((p) => p.quantity > 0)
+                .toList();
+
+            _tradingStore.replacePositions(mapped);
+          },
+          onError: (e) {
+            // Non-fatal: positions stream error
+          },
         );
-      }).where((p) => p.quantity > 0).toList();
-
-      _tradingStore.replacePositions(mapped);
-    });
 
     // Holdings stream — reads from portfolios/{uid}/holdings/{stock}
     _holdingsSub?.cancel();
-    _holdingsSub = _tradingService!.holdingsStreamForUser(userId).listen((snapshot) {
-      final List<Holding> mapped = snapshot.docs.map((doc) {
-        final data = doc.data();
-        final symbol = (data['stock'] as String?) ?? doc.id;
-        final qty = ((data['qty'] as num?) ?? 0).toInt();
-        final avgPrice = ((data['avg_price'] as num?) ?? 0).toDouble();
-        final currentPrice = _tradingStore.stockBySymbol(symbol).currentPrice;
-        final updatedAt = data['updatedAt'];
-        final purchaseDate = updatedAt is Timestamp ? updatedAt.toDate() : DateTime.now();
+    _holdingsSub = _tradingService!
+        .holdingsStreamForUser(userId)
+        .listen(
+          (snapshot) {
+            final List<Holding> mapped = snapshot.docs
+                .map((doc) {
+                  final data = doc.data();
+                  final symbol = (data['stock'] as String?) ?? doc.id;
+                  final qty = ((data['qty'] as num?) ?? 0).toInt();
+                  final avgPrice = ((data['avg_price'] as num?) ?? 0)
+                      .toDouble();
+                  final currentPrice = _tradingStore
+                      .stockBySymbol(symbol)
+                      .currentPrice;
+                  final updatedAt = data['updatedAt'];
+                  final purchaseDate = updatedAt is Timestamp
+                      ? updatedAt.toDate()
+                      : DateTime.now();
 
-        return Holding(
-          symbol: symbol,
-          name: symbol,
-          quantity: qty,
-          avgPrice: avgPrice,
-          currentPrice: currentPrice,
-          purchaseDate: purchaseDate,
+                  return Holding(
+                    symbol: symbol,
+                    name: symbol,
+                    quantity: qty,
+                    avgPrice: avgPrice,
+                    currentPrice: currentPrice,
+                    purchaseDate: purchaseDate,
+                  );
+                })
+                .where((h) => h.quantity > 0)
+                .toList();
+
+            _tradingStore.replaceHoldings(mapped);
+          },
+          onError: (e) {
+            // Non-fatal: holdings stream error
+          },
         );
-      }).where((h) => h.quantity > 0).toList();
-
-      _tradingStore.replaceHoldings(mapped);
-    });
   }
 
   OrderStatus _mapOrderStatus(String status) {
@@ -346,8 +455,25 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         return OrderStatus.executed;
       case 'PARTIALLY_EXECUTED':
         return OrderStatus.partiallyExecuted;
+      case 'FAILED':
+        return OrderStatus.rejected;
       default:
         return OrderStatus.pending;
+    }
+  }
+
+  ProductType _mapProductType(String product) {
+    switch (product.toUpperCase()) {
+      case 'MIS':
+        return ProductType.mis;
+      case 'NRML':
+        return ProductType.nrml;
+      case 'OVERNIGHT':
+        return ProductType.overnight;
+      case 'MTF':
+        return ProductType.mtf;
+      default:
+        return ProductType.mis;
     }
   }
 
@@ -376,10 +502,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
           notifier: _tradingStore,
           child: ThemeController(
             onThemeToggle: _toggleTheme,
-            child: ThemeControllerRef(
-              onThemeToggle: _toggleTheme,
-              child: app,
-            ),
+            child: ThemeControllerRef(onThemeToggle: _toggleTheme, child: app),
           ),
         ),
       ),
@@ -400,9 +523,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         final ts = TradingScope.of(context);
         final mq = MediaQuery.of(context);
         return MediaQuery(
-          data: mq.copyWith(
-            textScaler: TextScaler.linear(ts.textScaleFactor),
-          ),
+          data: mq.copyWith(textScaler: TextScaler.linear(ts.textScaleFactor)),
           child: child ?? const SizedBox.shrink(),
         );
       },

@@ -242,14 +242,14 @@ class _OptionsChainView extends StatelessWidget {
                     dataSource: chain.strikes,
                     xValueMapper: (s, _) => s.strike,
                     yValueMapper: (s, _) => s.ce.oi,
-                    color: AppColors.danger.withValues(alpha: 0.7),
+                    color: AppColors.danger.withOpacity(0.7),
                   ),
                   ColumnSeries<OptionStrike, double>(
                     name: 'PE OI',
                     dataSource: chain.strikes,
                     xValueMapper: (s, _) => s.strike,
                     yValueMapper: (s, _) => s.pe.oi,
-                    color: AppColors.success.withValues(alpha: 0.7),
+                    color: AppColors.success.withOpacity(0.7),
                   ),
                 ],
               ),
@@ -268,7 +268,7 @@ class _OptionsChainView extends StatelessWidget {
       letterSpacing: 0.3,
     );
     return Container(
-      color: AppColors.surfaceAlt.withValues(alpha: 0.5),
+      color: AppColors.surfaceAlt.withOpacity(0.5),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       child: Row(
         children: [
@@ -296,7 +296,7 @@ class _OptionsChainView extends StatelessWidget {
   Widget _strikeRow(BuildContext context, OptionStrike s) {
     final isAtm = s.isAtm;
     final bg = isAtm
-        ? AppColors.primary.withValues(alpha: 0.08)
+        ? AppColors.primary.withOpacity(0.08)
         : Colors.transparent;
 
     return Column(

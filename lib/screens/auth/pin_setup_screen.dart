@@ -109,7 +109,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
         Container(
           width: 64, height: 64,
           decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.1),
+            color: AppColors.primary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(20),
           ),
           child: const Icon(LucideIcons.shieldCheck, color: AppColors.primary, size: 32),
@@ -163,7 +163,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.danger.withValues(alpha: 0.08),
+              color: AppColors.danger.withOpacity(0.08),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Row(
@@ -193,9 +193,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: AppColors.warning.withValues(alpha: 0.08),
+            color: AppColors.warning.withOpacity(0.08),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+            border: Border.all(color: AppColors.warning.withOpacity(0.3)),
           ),
           child: Row(
             children: [
@@ -249,7 +249,7 @@ class _PinBrandingPanel extends StatelessWidget {
                 children: [
                   Container(
                     width: 44, height: 44,
-                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
                     child: const Icon(LucideIcons.candlestickChart, color: Colors.white, size: 24),
                   ),
                   const SizedBox(width: 12),
@@ -259,7 +259,7 @@ class _PinBrandingPanel extends StatelessWidget {
               const Spacer(),
               Container(
                 width: 80, height: 80,
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(24)),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(24)),
                 child: const Icon(LucideIcons.shieldCheck, color: Colors.white, size: 40),
               ),
               const SizedBox(height: 24),
@@ -267,7 +267,7 @@ class _PinBrandingPanel extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 'Your PIN protects your account from\nunauthorized access.',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 16, height: 1.6),
+                style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 16, height: 1.6),
               ),
               const Spacer(),
             ],
@@ -299,7 +299,7 @@ class _MobilePinHeader extends StatelessWidget {
             children: [
               Container(
                 width: 40, height: 40,
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(LucideIcons.candlestickChart, color: Colors.white, size: 20),
               ),
               const SizedBox(width: 10),
@@ -309,7 +309,7 @@ class _MobilePinHeader extends StatelessWidget {
           const SizedBox(height: 24),
           const Text('Secure Your Account', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
           const SizedBox(height: 6),
-          Text('Set a 4-digit PIN to protect your session', style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 15)),
+          Text('Set a 4-digit PIN to protect your session', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15)),
         ],
       ),
     );

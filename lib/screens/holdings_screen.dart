@@ -84,83 +84,100 @@ class _SummaryStrip extends StatelessWidget {
     final totalInv = holdings.fold(0.0, (s, h) => s + h.investedValue);
     final totalCur = holdings.fold(0.0, (s, h) => s + h.currentValue);
     final totalPnl = totalCur - totalInv;
-    final totalDiv = holdings.fold(
-      0.0,
-      (s, h) => s + (h.dividendReceived ?? 0),
-    );
     final isPos = totalPnl >= 0;
     final pnlPct = totalInv == 0 ? 0.0 : (totalPnl / totalInv) * 100;
+    final arrow = isPos ? '▲' : '▼';
+    final pnlColor =
+        isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      color: Theme.of(context).colorScheme.surface,
-      child: Wrap(
-        spacing: 48,
-        runSpacing: 16,
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Column(
         children: [
-          _stat(
-            'Total investment',
-            '₹${totalInv.toStringAsFixed(2)}',
-            AppColors.textPrimary,
+          // Top 2-col grid
+          Row(
+            children: [
+              Expanded(
+                child: _statCell('Total investment',
+                    '₹${totalInv.toStringAsFixed(2)}'),
+              ),
+              Expanded(
+                child: _statCell('Current value',
+                    '₹${totalCur.toStringAsFixed(2)}'),
+              ),
+            ],
           ),
-          _stat(
-            'Current value',
-            '₹${totalCur.toStringAsFixed(2)}',
-            AppColors.textPrimary,
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE0E0E0)),
+          const SizedBox(height: 12),
+          // Full-width P&L row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Total P&L',
+                style: TextStyle(fontSize: 11, color: Color(0xFF757575)),
+              ),
+              Row(
+                children: [
+                  Text(
+                    '$arrow ₹${totalPnl.abs().toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: pnlColor,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isPos
+                          ? const Color(0xFFE8F5E9)
+                          : const Color(0xFFFFEBEE),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$arrow ${pnlPct.abs().toStringAsFixed(2)}%',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: pnlColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-          _stat(
-            'Total P&L',
-            '${isPos ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)}',
-            isPos ? AppColors.success : AppColors.danger,
-            sub: '${isPos ? '+' : ''}${pnlPct.toStringAsFixed(2)}%',
-          ),
-          if (totalDiv > 0)
-            _stat(
-              'Dividends received',
-              '₹${totalDiv.toStringAsFixed(2)}',
-              AppColors.primary,
-            ),
         ],
       ),
     );
   }
 
-  Widget _stat(String label, String value, Color color, {String? sub}) {
+  Widget _statCell(String label, String value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-        ),
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF757575))),
         const SizedBox(height: 4),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text(
-              value,
-              style: AppTheme.tabular(
-                TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
-              ),
-            ),
-            if (sub != null) ...[
-              const SizedBox(width: 8),
-              Text(
-                sub,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
-              ),
-            ],
-          ],
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF0D0D0D),
+            fontFeatures: [FontFeature.tabularFigures()],
+          ),
         ),
       ],
     );
@@ -231,26 +248,58 @@ class _HoldingCard extends StatelessWidget {
 
   const _HoldingCard({required this.holding});
 
+  // Generate a consistent color from the symbol string
+  Color _avatarColor(String symbol) {
+    const colors = [
+      Color(0xFF1565C0), Color(0xFF00695C), Color(0xFF6A1B9A),
+      Color(0xFFAD1457), Color(0xFF558B2F), Color(0xFFE65100),
+    ];
+    return colors[symbol.codeUnitAt(0) % colors.length];
+  }
+
   @override
   Widget build(BuildContext context) {
     final h = holding;
     final isPos = h.pnl >= 0;
-    final pnlColor = isPos ? AppColors.success : AppColors.danger;
+    final pnlColor =
+        isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final arrow = isPos ? '▲' : '▼';
+    final avatarColor = _avatarColor(h.symbol);
 
     return Container(
+      constraints: const BoxConstraints(minHeight: 88),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppColors.softShadow,
+        border: Border.all(color: const Color(0xFFE0E0E0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top row: symbol + name + sell button
+          // Top row: avatar + symbol/name + Sell chip
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Letter avatar
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: avatarColor,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  h.symbol.isNotEmpty ? h.symbol[0] : '?',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -258,96 +307,72 @@ class _HoldingCard extends StatelessWidget {
                     Text(
                       h.symbol,
                       style: const TextStyle(
-                        fontWeight: FontWeight.w700,
                         fontSize: 15,
-                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF0D0D0D),
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       h.name,
                       style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        color: Color(0xFF757575),
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
-              OutlinedButton(
-                onPressed: () => _openSellDrawer(context, h),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.danger,
-                  side: const BorderSide(color: AppColors.danger),
+              // Sell chip
+              GestureDetector(
+                onTap: () => _openSellDrawer(context, h),
+                child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 6),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  textStyle: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600),
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFD50000)),
+                  ),
+                  child: const Text(
+                    'Sell',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFFD50000),
+                    ),
+                  ),
                 ),
-                child: const Text('Sell'),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          // Middle row: Qty + Avg
+          const SizedBox(height: 6),
+          // Mid row: qty + avg
           Text(
-            'Qty: ${h.quantity}  •  Avg: ₹${h.avgPrice.toStringAsFixed(2)}',
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-            ),
+            'Qty: ${h.quantity}  ·  Avg: ₹${h.avgPrice.toStringAsFixed(2)}',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
           ),
           const SizedBox(height: 8),
-          // Bottom row: LTP + P&L
+          // Bottom row: LTP left + P&L right
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'LTP: ₹${h.currentPrice.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  Text(
-                    '(${isPos ? '+' : ''}${h.pnlPercentage.toStringAsFixed(2)}%)',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: pnlColor,
-                    ),
-                  ),
-                ],
+              Text(
+                'LTP: ₹${h.currentPrice.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF0D0D0D),
+                ),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    'P&L: ${isPos ? '+' : ''}₹${h.pnl.abs().toStringAsFixed(2)}',
-                    style: AppTheme.tabular(
-                      TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: pnlColor,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '(${isPos ? '+' : ''}${h.pnlPercentage.toStringAsFixed(2)}%)',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: pnlColor,
-                    ),
-                  ),
-                ],
+              Text(
+                'P&L: $arrow₹${h.pnl.abs().toStringAsFixed(2)} (${h.pnlPercentage.toStringAsFixed(2)}%)',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: pnlColor,
+                ),
               ),
             ],
           ),
@@ -358,7 +383,6 @@ class _HoldingCard extends StatelessWidget {
 
   void _openSellDrawer(BuildContext context, Holding h) {
     final store = TradingScope.of(context);
-    // Look up the stock from the watchlist; fall back to a synthetic Stock from holding data
     Stock stock;
     try {
       stock = store.stockBySymbol(h.symbol);
@@ -372,7 +396,6 @@ class _HoldingCard extends StatelessWidget {
       );
     }
 
-    Scaffold.of(context).openEndDrawer();
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -496,52 +519,98 @@ class _AnalyticsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final xirr = _computeXirr();
     final cagr = _computeCagr();
-    final xirrPos = xirr >= 0;
-    final cagrPos = cagr >= 0;
 
     final totalDiv = holdings.fold(
       0.0,
       (s, h) => s + (h.dividendReceived ?? 0),
     );
 
+    // Guard: values beyond ±999% are meaningless (insufficient data)
+    final xirrValid = xirr.abs() <= 999;
+    final cagrValid = cagr.abs() <= 999;
+
+    final xirrPos = xirr >= 0;
+    final cagrPos = cagr >= 0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Portfolio Analytics',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
+        Row(
           children: [
-            _AnalyticsCard(
-              icon: LucideIcons.trendingUp,
-              label: 'XIRR',
-              value: '${xirrPos ? '+' : ''}${xirr.toStringAsFixed(2)}%',
-              valueColor: xirrPos ? AppColors.success : AppColors.danger,
-              subtitle: 'Annualised return (approx.)',
+            const Text(
+              'Portfolio analytics',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF0D0D0D),
+              ),
             ),
-            _AnalyticsCard(
-              icon: LucideIcons.barChart2,
-              label: 'CAGR',
-              value: '${cagrPos ? '+' : ''}${cagr.toStringAsFixed(2)}%',
-              valueColor: cagrPos ? AppColors.success : AppColors.danger,
-              subtitle: 'Compound annual growth rate',
-            ),
-            _AnalyticsCard(
-              icon: LucideIcons.dollarSign,
-              label: 'Total Dividends',
-              value: '₹${totalDiv.toStringAsFixed(2)}',
-              valueColor: AppColors.primary,
-              subtitle: 'Across all holdings',
+            const SizedBox(width: 6),
+            Tooltip(
+              message: 'Values are approximate',
+              child: const Icon(
+                Icons.info_outline,
+                size: 14,
+                color: Color(0xFF9E9E9E),
+              ),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        // Use Wrap instead of GridView so cards size to their content
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cardWidth = (constraints.maxWidth - 8) / 2;
+            return Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                SizedBox(
+                  width: cardWidth,
+                  child: _AnalyticsCard(
+                    icon: LucideIcons.trendingUp,
+                    label: 'XIRR',
+                    value: xirrValid
+                        ? '${xirrPos ? '+' : ''}${xirr.toStringAsFixed(2)}%'
+                        : 'N/A',
+                    valueColor: !xirrValid
+                        ? const Color(0xFF9E9E9E)
+                        : (xirrPos
+                            ? const Color(0xFF00C853)
+                            : const Color(0xFFD50000)),
+                    insufficientData: !xirrValid,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _AnalyticsCard(
+                    icon: LucideIcons.barChart2,
+                    label: 'CAGR',
+                    value: cagrValid
+                        ? '${cagrPos ? '+' : ''}${cagr.toStringAsFixed(2)}%'
+                        : 'N/A',
+                    valueColor: !cagrValid
+                        ? const Color(0xFF9E9E9E)
+                        : (cagrPos
+                            ? const Color(0xFF00C853)
+                            : const Color(0xFFD50000)),
+                    insufficientData: !cagrValid,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _AnalyticsCard(
+                    icon: LucideIcons.dollarSign,
+                    label: 'Total Dividends',
+                    value: '₹${totalDiv.toStringAsFixed(2)}',
+                    valueColor: totalDiv == 0
+                        ? const Color(0xFF757575)
+                        : const Color(0xFF1565C0),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
         if (holdings.any((h) => (h.dividendReceived ?? 0) > 0)) ...[
           const SizedBox(height: 24),
@@ -551,6 +620,7 @@ class _AnalyticsSection extends StatelessWidget {
                 .toList(),
           ),
         ],
+        const SizedBox(height: 80),
       ],
     );
   }
@@ -561,62 +631,57 @@ class _AnalyticsCard extends StatelessWidget {
   final String label;
   final String value;
   final Color valueColor;
-  final String subtitle;
+  final bool insufficientData;
 
   const _AnalyticsCard({
     required this.icon,
     required this.label,
     required this.value,
     required this.valueColor,
-    required this.subtitle,
+    this.insufficientData = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(4),
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              Icon(icon, size: 16, color: AppColors.textSecondary),
-              const SizedBox(width: 8),
+              Icon(icon, size: 16, color: const Color(0xFF757575)),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                  color: Color(0xFF757575),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Text(
             value,
-            style: AppTheme.tabular(
-              TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: valueColor,
-              ),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: valueColor,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
+          if (insufficientData)
+            const Text(
+              'Insufficient data for this period',
+              style: TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
             ),
-          ),
         ],
       ),
     );
@@ -651,7 +716,7 @@ class _DividendTable extends StatelessWidget {
             children: [
               // Header
               Container(
-                color: AppColors.surfaceAlt.withValues(alpha: 0.3),
+                color: AppColors.surfaceAlt.withOpacity(0.3),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 10,

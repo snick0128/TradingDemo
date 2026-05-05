@@ -201,7 +201,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
   }
 
   void _convertPosition(BuildContext context, TradingStore store, Position p) {
-    final to = p.product == ProductType.mis ? ProductType.cnc : ProductType.mis;
+    final to = p.product == ProductType.mis ? ProductType.overnight : ProductType.mis;
     store.convertPositionProduct(p.symbol, p.product, to);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -223,7 +223,7 @@ class _MisWarningBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.warning.withValues(alpha: 0.08),
+      color: AppColors.warning.withOpacity(0.08),
       child: Row(
         children: [
           Icon(LucideIcons.clock, size: 13, color: AppColors.warning),
@@ -258,90 +258,42 @@ class _SummaryHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final totalPnl = positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
     final totalInvested = positions.fold(0.0, (s, p) => s + p.investedValue);
-    final isPos = totalPnl >= 0;
-    final pnlPct = totalInvested == 0 ? 0.0 : (totalPnl / totalInvested) * 100;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: const BoxDecoration(
         color: AppColors.surface,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+        border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Left: counts + invested
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${positions.length} Open Position${positions.length == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Invested ₹${_fmt(totalInvested)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
+          Text(
+            '${positions.length} open position${positions.length == 1 ? '' : 's'} · Invested ₹${_fmt(totalInvested)}',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF757575)),
           ),
-          // Right: P&L (dominant) + Square Off All
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${isPos ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)}',
-                style: GoogleFonts.jetBrainsMono(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: isPos ? AppColors.success : AppColors.danger,
-                ),
+          const Spacer(),
+          GestureDetector(
+            onTap: onSquareOffAll,
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFD50000)),
               ),
-              Text(
-                '${isPos ? '+' : ''}${pnlPct.toStringAsFixed(2)}%',
+              alignment: Alignment.center,
+              child: const Text(
+                'Square Off All',
                 style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isPos ? AppColors.success : AppColors.danger,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFFD50000),
                 ),
               ),
-              const SizedBox(height: 8),
-              GestureDetector(
-                onTap: onSquareOffAll,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.danger.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: AppColors.danger.withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: const Text(
-                    'Square Off All',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.danger,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -373,233 +325,226 @@ class _PositionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = position;
     final isPos = p.unrealizedPnl >= 0;
-    final pnlColor = isPos ? AppColors.success : AppColors.danger;
+    final pnlColor =
+        isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final barColor = pnlColor;
     final isLong = p.side == OrderType.buy;
+    final arrow = isPos ? '▲' : '▼';
     final canConvert =
-        p.product == ProductType.mis || p.product == ProductType.cnc;
-    final convertLabel = p.product == ProductType.mis ? '→CNC' : '→MIS';
+        p.product == ProductType.mis || p.product == ProductType.overnight;
+    final convertLabel =
+        p.product == ProductType.mis ? '→Overnight' : '→MIS';
 
-    return GestureDetector(
-      onTap: () => onPartialExit(p),
+    return IntrinsicHeight(
       child: Container(
-        padding: const EdgeInsets.all(16),
+        constraints: const BoxConstraints(minHeight: 96),
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          border: Border.all(color: const Color(0xFFE0E0E0)),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Row 1: Symbol + P&L (primary) ──────────────────────────
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Symbol + side tag
-                Expanded(
-                  child: Row(
+        child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Left 3dp color bar
+          Container(
+            width: 3,
+            decoration: BoxDecoration(
+              color: barColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12),
+              ),
+            ),
+          ),
+          // Content
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Top row: symbol + LONG/SHORT badge left · P&L right
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Symbol + badge
+                      Row(
+                        children: [
+                          Text(
+                            p.symbol,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF0D0D0D),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isLong
+                                  ? const Color(0xFFE8F5E9)
+                                  : const Color(0xFFFFEBEE),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              isLong ? 'LONG' : 'SHORT',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: isLong
+                                    ? const Color(0xFF2E7D32)
+                                    : const Color(0xFFC62828),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      // P&L value
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          PriceFlashWidget(
+                            price: p.unrealizedPnl,
+                            child: Text(
+                              '$arrow ₹${p.unrealizedPnl.abs().toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: pnlColor,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '$arrow ${p.pnlPercentage.abs().toStringAsFixed(2)}%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: const Color(0xFF757575),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // Mid row: LTP + qty
+                  Row(
+                    children: [
+                      PriceFlashWidget(
+                        price: p.currentPrice,
+                        child: Text(
+                          '₹${p.currentPrice.toStringAsFixed(2)} LTP',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF0D0D0D),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '${p.quantity} qty',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF757575),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // Bottom row: avg + product badge + EXIT button
+                  Row(
                     children: [
                       Text(
-                        p.symbol,
+                        'Avg ₹${p.avgPrice.toStringAsFixed(2)}',
                         style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.textPrimary,
+                          fontSize: 12,
+                          color: Color(0xFF757575),
                         ),
                       ),
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: (isLong ? AppColors.success : AppColors.danger)
-                              .withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(4),
+                          color: p.product == ProductType.mis
+                              ? const Color(0xFFFFF8E1)
+                              : const Color(0xFFE3F2FD),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          isLong ? 'LONG' : 'SHORT',
+                          p.product.name.toUpperCase(),
                           style: TextStyle(
                             fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: isLong
-                                ? AppColors.success
-                                : AppColors.danger,
+                            fontWeight: FontWeight.w600,
+                            color: p.product == ProductType.mis
+                                ? const Color(0xFFF57F17)
+                                : const Color(0xFF1565C0),
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (canConvert) ...[
+                        GestureDetector(
+                          onTap: () => onConvert(p),
+                          child: Container(
+                            height: 32,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                  color: const Color(0xFFE0E0E0)),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              convertLabel,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF757575),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      // EXIT button
+                      GestureDetector(
+                        onTap: () => onExit(p),
+                        child: Container(
+                          height: 32,
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD50000),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'EXIT',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                ),
-                // P&L — dominant, right-aligned
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    PriceFlashWidget(
-                      price: p.unrealizedPnl,
-                      child: Text(
-                        '${isPos ? '+' : ''}₹${p.unrealizedPnl.abs().toStringAsFixed(2)}',
-                        style: GoogleFonts.jetBrainsMono(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                          color: pnlColor,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      '${isPos ? '+' : ''}${p.pnlPercentage.toStringAsFixed(2)}%',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: pnlColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            // ── Row 2: LTP + Qty (secondary) ───────────────────────────
-            Row(
-              children: [
-                PriceFlashWidget(
-                  price: p.currentPrice,
-                  child: Text(
-                    '₹${p.currentPrice.toStringAsFixed(2)}',
-                    style: GoogleFonts.jetBrainsMono(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                const Text(
-                  'LTP',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Text(
-                  '${p.quantity} qty',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 6),
-
-            // ── Row 3: Avg + Product (tertiary) ────────────────────────
-            Row(
-              children: [
-                Text(
-                  'Avg ₹${p.avgPrice.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: p.product == ProductType.mis
-                        ? AppColors.warning.withValues(alpha: 0.1)
-                        : AppColors.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    p.product.name.toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: p.product == ProductType.mis
-                          ? AppColors.warning
-                          : AppColors.primary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-
-            // ── Row 4: Actions ──────────────────────────────────────────
-            Row(
-              children: [
-                // Convert — secondary, small
-                if (canConvert) ...[
-                  GestureDetector(
-                    onTap: () => onConvert(p),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AppColors.border),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        convertLabel,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                 ],
-                const Spacer(),
-                // Exit — primary, filled
-                GestureDetector(
-                  onTap: () => onExit(p),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.danger,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      'EXIT',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
+    ),  // IntrinsicHeight
     );
   }
 }

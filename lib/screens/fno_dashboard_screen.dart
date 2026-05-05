@@ -319,10 +319,10 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.warning.withValues(alpha: 0.1),
+                color: AppColors.warning.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                    color: AppColors.warning.withValues(alpha: 0.3)),
+                    color: AppColors.warning.withOpacity(0.3)),
               ),
               child: Row(
                 children: [

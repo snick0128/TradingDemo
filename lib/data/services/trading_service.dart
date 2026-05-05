@@ -49,29 +49,37 @@ class TradingService {
   TradingService({
     required FirestoreService firestore,
     required PriceProvider priceProvider,
-  })  : _firestore = firestore,
-        _priceProvider = priceProvider;
+  }) : _firestore = firestore,
+       _priceProvider = priceProvider;
 
   final FirestoreService _firestore;
   final PriceProvider _priceProvider;
   final _uuid = const Uuid();
+  static const int _defaultMaxFillQtyPerTick = 250;
 
   /// Retry wrapper for Firestore operations that may hit internal assertion failures.
-  /// This is a workaround for Firestore SDK instability under heavy listener load.
+  /// Uses exponential backoff with up to 3 attempts.
   Future<T> _retryFirestore<T>(Future<T> Function() fn) async {
-    try {
-      return await fn();
-    } catch (e) {
-      final errorStr = e.toString();
-      if (errorStr.contains('INTERNAL ASSERTION') ||
-          errorStr.contains('WatchChangeAggregator') ||
-          errorStr.contains('PersistentListenStream')) {
-        // Wait briefly and retry once
-        await Future.delayed(const Duration(milliseconds: 300));
+    const delays = [300, 800, 2000]; // ms between attempts
+    Object? lastError;
+    for (int attempt = 0; attempt <= delays.length; attempt++) {
+      try {
         return await fn();
+      } catch (e) {
+        lastError = e;
+        final errorStr = e.toString();
+        final isRetryable =
+            errorStr.contains('ASSERTION') ||
+            errorStr.contains('WatchChangeAggregator') ||
+            errorStr.contains('PersistentListenStream') ||
+            errorStr.contains('Transaction failed:') ||
+            errorStr.contains('UNAVAILABLE') ||
+            errorStr.contains('INTERNAL');
+        if (!isRetryable || attempt == delays.length) rethrow;
+        await Future.delayed(Duration(milliseconds: delays[attempt]));
       }
-      rethrow;
     }
+    throw lastError!;
   }
 
   // ── Streams ────────────────────────────────────────────────────────────────
@@ -85,12 +93,12 @@ class TradingService {
           .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> gttOrdersStreamForUser(
-          String uid) =>
-      _firestore.raw
-          .collection('gtt_orders')
-          .where('userId', isEqualTo: uid)
-          .orderBy('createdAt', descending: true)
-          .snapshots();
+    String uid,
+  ) => _firestore.raw
+      .collection('gtt_orders')
+      .where('userId', isEqualTo: uid)
+      .orderBy('createdAt', descending: true)
+      .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> tradesStreamForUser(String uid) =>
       _firestore.raw
@@ -101,8 +109,8 @@ class TradingService {
           .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> holdingsStreamForUser(
-          String uid) =>
-      _firestore.getCollectionStream('portfolios/$uid/holdings');
+    String uid,
+  ) => _firestore.getCollectionStream('portfolios/$uid/holdings');
 
   Stream<QuerySnapshot<Map<String, dynamic>>> ledgerStreamForUser(String uid) =>
       _firestore.raw
@@ -112,50 +120,54 @@ class TradingService {
           .limit(100)
           .snapshots();
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> usersStream() =>
-      _firestore.raw
-          .collection('users')
-          .orderBy('createdAt', descending: true)
-          .limit(100)
-          .snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> usersStream() => _firestore.raw
+      .collection('users')
+      .orderBy('createdAt', descending: true)
+      .limit(100)
+      .snapshots();
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> ordersStream() =>
+  Stream<QuerySnapshot<Map<String, dynamic>>> ordersStream() => _firestore.raw
+      .collection('orders')
+      .orderBy('createdAt', descending: true)
+      .limit(100)
+      .snapshots();
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> orderRequestsStream() =>
       _firestore.raw
-          .collection('orders')
-          .orderBy('createdAt', descending: true)
-          .limit(100)
+          .collection('order_requests')
+          .where('status', isEqualTo: 'QUEUED')
           .snapshots();
 
   /// Live trade feed for admin — denormalized, no joins needed.
-  Stream<QuerySnapshot<Map<String, dynamic>>> tradeFeedStream() =>
-      _firestore.raw
-          .collection('trade_feed')
-          .orderBy('createdAt', descending: true)
-          .limit(50)
-          .snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> tradeFeedStream() => _firestore
+      .raw
+      .collection('trade_feed')
+      .orderBy('createdAt', descending: true)
+      .limit(50)
+      .snapshots();
 
-  // Backward-compat alias
+  // Intraday/net positions are stored separately from delivery holdings.
   Stream<QuerySnapshot<Map<String, dynamic>>> positionsStreamForUser(
-          String uid) =>
-      holdingsStreamForUser(uid);
+    String uid,
+  ) => _firestore.getCollectionStream('portfolios/$uid/positions');
 
   // ── Place Order ────────────────────────────────────────────────────────────
 
-  /// Places and executes an order atomically.
+  /// Customer-side order submission.
   ///
-  /// [clientOrderId] MUST be generated by the caller (UI) before calling this
-  /// method. This is the cross-tab idempotency key:
-  ///   - Same clientOrderId from two tabs → second call is a no-op (order exists)
-  ///   - Network retry with same clientOrderId → safe no-op
+  /// This method only writes to `order_requests/{clientOrderId}`.
+  /// Financial execution is performed by an admin-side processor via
+  /// [processOrderRequest].
   ///
-  /// The transaction reads admin_config/platform and stocks/{symbol} to enforce
-  /// globalTradingHalt and per-stock tradable flags atomically.
+  /// [clientOrderId] is a deterministic idempotency key generated by UI.
   Future<String> placeOrder({
     required String userId,
     required String stock,
     required int qty,
     required String type,
     String variety = 'MARKET',
+    String product = 'MIS',
+    String validity = 'DAY',
     double? price,
     double? triggerPrice,
     required String clientOrderId,
@@ -164,172 +176,621 @@ class TradingService {
 
     final symbol = stock.toUpperCase();
     final side = type.toUpperCase();
-    final orderVariety = variety.toUpperCase();
+    final orderVariety = _normalizeVariety(variety);
+    final orderProduct = _normalizeProduct(product);
+    final orderValidity = _normalizeValidity(validity);
 
     if (side != 'BUY' && side != 'SELL') {
       throw Exception('Order type must be BUY or SELL.');
     }
+    _validateOrderInputs(
+      variety: orderVariety,
+      price: price,
+      triggerPrice: triggerPrice,
+    );
 
-    // ── Price authority ──
-    final currentPrice = await _priceProvider.getPrice(symbol).first.timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => throw Exception('Price feed timeout for $symbol.'),
+    // Use client-side Timestamp.now() instead of FieldValue.serverTimestamp().
+    // FieldValue sentinels cause a JS interop error on Firestore Web SDK 11.x.
+    // Timestamp.now() is accurate enough for the order request queue.
+    final now = Timestamp.now();
+
+    // Do NOT wrap set() in _retryFirestore — the generic void return causes
+    // a Dart→JS interop error. Call directly with manual retry.
+    Exception? lastError;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        print(
+          '[TradingService] Placing order request for $userId: $symbol $qty@$price (Attempt ${attempt + 1})',
         );
 
-    if (currentPrice <= 0) throw Exception('Invalid price for $symbol.');
+        final docRef = _firestore.raw
+            .collection('order_requests')
+            .doc(clientOrderId);
 
-    // ── Execution Logic ──
+        // Use a simple get() then set() to avoid runTransaction interop issues on Web.
+        // clientOrderId is a unique UUID per click, so race conditions are minimal.
+        final snap = await docRef.get();
+        if (snap.exists) {
+          print(
+            '[TradingService] Order request $clientOrderId already exists. Skipping write.',
+          );
+          return clientOrderId;
+        }
+
+        await docRef.set({
+          'clientOrderId': clientOrderId,
+          'userId': userId,
+          'stock': symbol,
+          'type': side,
+          'qty': qty,
+          'variety': orderVariety,
+          'product': orderProduct,
+          'validity': orderValidity,
+          'price': price,
+          'triggerPrice': triggerPrice,
+          'status': 'QUEUED',
+          'attempt': 0,
+          'source': 'CUSTOMER_APP',
+          'createdAt': now,
+          'updatedAt': now,
+        });
+
+        print(
+          '[TradingService] Order request created successfully: $clientOrderId',
+        );
+        return clientOrderId;
+      } catch (e) {
+        print('[TradingService] Order request failed: $e');
+        final msg = e.toString();
+        final retryable =
+            msg.contains('UNAVAILABLE') ||
+            msg.contains('INTERNAL') ||
+            msg.contains('WatchChangeAggregator');
+        if (!retryable || attempt == 2) {
+          rethrow;
+        }
+        lastError = Exception(msg);
+        await Future.delayed(Duration(milliseconds: 300 * (attempt + 1)));
+      }
+    }
+    throw lastError ?? Exception('Order submission failed.');
+  }
+
+  // ── Instant Execution (Direct Transaction) ──────────────────────────────
+
+  Future<void> buyStock({
+    required String userId,
+    required String stock,
+    required int qty,
+    required double price,
+  }) async {
+    final total = qty * price;
+    final symbol = stock.toUpperCase();
+
+    final userRef = _firestore.raw.doc('users/$userId');
+    final holdingRef = _firestore.raw.doc(
+      'portfolios/$userId/holdings/$symbol',
+    );
+    final orderRef = _firestore.raw.collection('orders').doc();
+
+    await _firestore.raw.runTransaction((tx) async {
+      final userSnap = await tx.get(userRef);
+      final userData = userSnap.data() ?? {};
+      final balance = _double(
+        userData['balance'] ?? userData['available_balance'],
+      );
+
+      if (balance < total) {
+        throw Exception(
+          "Insufficient balance. Required: ₹${total.toStringAsFixed(2)}, Available: ₹${balance.toStringAsFixed(2)}",
+        );
+      }
+
+      final holdingSnap = await tx.get(holdingRef);
+      final holdingData = holdingSnap.data() ?? {};
+      final oldQty = _int(holdingData['qty']);
+      final oldAvg = _double(holdingData['avg_price']);
+
+      final newQty = oldQty + qty;
+      final newAvg = newQty == 0
+          ? 0.0
+          : ((oldQty * oldAvg) + (qty * price)) / newQty;
+
+      tx.update(userRef, {
+        'balance': balance - total,
+        'available_balance': balance - total,
+        'updatedAt': Timestamp.now(),
+      });
+
+      tx.set(holdingRef, {
+        'qty': newQty,
+        'avg_price': newAvg,
+        'updatedAt': Timestamp.now(),
+      }, SetOptions(merge: true));
+
+      tx.set(orderRef, {
+        'userId': userId,
+        'stock': symbol,
+        'qty': qty,
+        'price': price,
+        'type': 'BUY',
+        'status': 'EXECUTED',
+        'createdAt': Timestamp.now(),
+      });
+    });
+  }
+
+  Future<void> sellStock({
+    required String userId,
+    required String stock,
+    required int qty,
+    required double price,
+  }) async {
+    final total = qty * price;
+    final symbol = stock.toUpperCase();
+
+    final userRef = _firestore.raw.doc('users/$userId');
+    final holdingRef = _firestore.raw.doc(
+      'portfolios/$userId/holdings/$symbol',
+    );
+    final orderRef = _firestore.raw.collection('orders').doc();
+
+    await _firestore.raw.runTransaction((tx) async {
+      final holdingSnap = await tx.get(holdingRef);
+
+      if (!holdingSnap.exists) {
+        throw Exception("No holdings found for $symbol");
+      }
+
+      final holdingData = holdingSnap.data() ?? {};
+      final currentQty = _int(holdingData['qty']);
+
+      if (currentQty < qty) {
+        throw Exception(
+          "Not enough shares. You have $currentQty, trying to sell $qty.",
+        );
+      }
+
+      final userSnap = await tx.get(userRef);
+      final userData = userSnap.data() ?? {};
+      final balance = _double(
+        userData['balance'] ?? userData['available_balance'],
+      );
+
+      final newQty = currentQty - qty;
+
+      if (newQty == 0) {
+        tx.delete(holdingRef);
+      } else {
+        tx.update(holdingRef, {'qty': newQty, 'updatedAt': Timestamp.now()});
+      }
+
+      tx.update(userRef, {
+        'balance': balance + total,
+        'available_balance': balance + total,
+        'updatedAt': Timestamp.now(),
+      });
+
+      tx.set(orderRef, {
+        'userId': userId,
+        'stock': symbol,
+        'qty': qty,
+        'price': price,
+        'type': 'SELL',
+        'status': 'EXECUTED',
+        'createdAt': Timestamp.now(),
+      });
+    });
+  }
+
+  /// Admin-side execution path for queued requests.
+  Future<bool> processOrderRequest(
+    String requestId, {
+    String processorId = 'SYSTEM',
+  }) async {
+    final requestRef = _firestore.raw.doc('order_requests/$requestId');
+    final now = Timestamp.now();
+
+    final claimed = await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        print('[TradingService] Attempting to claim request: $requestId');
+        final requestSnap = await tx.get(requestRef);
+        if (!requestSnap.exists) {
+          print('[TradingService] Request not found: $requestId');
+          return false;
+        }
+        final requestData = requestSnap.data() ?? {};
+        final status = (requestData['status'] as String?)?.toUpperCase() ?? '';
+        final processedAt = requestData['processedAt'];
+
+        // IDEMPOTENCY: Don't process if already COMPLETED, FAILED, or currently PROCESSING by another node.
+        if (status != 'QUEUED' || processedAt != null) {
+          print(
+            '[TradingService] Request $requestId skip: status=$status, processedAt=$processedAt',
+          );
+          return false;
+        }
+
+        tx.update(requestRef, {
+          'status': 'PROCESSING',
+          'attempt': _int(requestData['attempt']) + 1,
+          'processorId': processorId,
+          'processingStartedAt': now,
+          'updatedAt': now,
+        });
+        print('[TradingService] Request $requestId claimed by $processorId');
+        return true;
+      }),
+    );
+
+    if (!claimed) return false;
+
+    final requestSnap = await requestRef.get();
+    if (!requestSnap.exists) return false;
+    final requestData = requestSnap.data() ?? {};
+
+    try {
+      print('[TradingService] Processing order request $requestId...');
+      final orderId = await _executeOrderRequest(
+        requestData,
+        fallbackOrderId: requestId,
+      );
+      print(
+        '[TradingService] Order request $requestId execution successful: $orderId',
+      );
+
+      await requestRef.update({
+        'status': 'COMPLETED',
+        'orderId': orderId,
+        'processedAt': Timestamp.now(),
+        'lastError': null,
+        'updatedAt': Timestamp.now(),
+      });
+      return true;
+    } catch (e, stack) {
+      print('[TradingService] Order request $requestId failed: $e');
+      print(stack);
+
+      final retryCount = _int(requestData['attempt']);
+      final isRetryable =
+          e.toString().contains('Price feed timeout') ||
+          e.toString().contains('UNAVAILABLE');
+
+      if (isRetryable && retryCount < 3) {
+        print(
+          '[TradingService] Transient error for $requestId, resetting to QUEUED for retry.',
+        );
+        await requestRef.update({
+          'status': 'QUEUED',
+          'lastError': 'Retryable error: $e',
+          'updatedAt': Timestamp.now(),
+        });
+      } else {
+        await _writeFailedOrderFromRequest(
+          requestData: requestData,
+          fallbackOrderId: requestId,
+          error: e.toString(),
+        );
+
+        await requestRef.update({
+          'status': 'FAILED',
+          'lastError': e.toString(),
+          'failedAt': Timestamp.now(),
+          'updatedAt': Timestamp.now(),
+        });
+      }
+      return false;
+    }
+  }
+
+  Future<String> _executeOrderRequest(
+    Map<String, dynamic> requestData, {
+    required String fallbackOrderId,
+  }) async {
+    final userId = (requestData['userId'] as String?)?.trim();
+    final symbol = (requestData['stock'] as String?)?.trim().toUpperCase();
+    final side = (requestData['type'] as String?)?.trim().toUpperCase();
+    final qty = _int(requestData['qty']);
+    final orderVariety = _normalizeVariety(
+      (requestData['variety'] as String?) ?? 'MARKET',
+    );
+    final orderProduct = _normalizeProduct(
+      (requestData['product'] as String?) ?? 'MIS',
+    );
+    final orderValidity = _normalizeValidity(
+      (requestData['validity'] as String?) ?? 'DAY',
+    );
+    final price = requestData['price'] is num
+        ? (requestData['price'] as num).toDouble()
+        : null;
+    final triggerPrice = requestData['triggerPrice'] is num
+        ? (requestData['triggerPrice'] as num).toDouble()
+        : null;
+    final orderId =
+        (requestData['clientOrderId'] as String?)?.trim().isNotEmpty == true
+        ? (requestData['clientOrderId'] as String).trim()
+        : fallbackOrderId;
+
+    if (userId == null || userId.isEmpty) {
+      throw Exception('Invalid request payload: missing userId.');
+    }
+    if (symbol == null || symbol.isEmpty) {
+      throw Exception('Invalid request payload: missing stock.');
+    }
+    if (side != 'BUY' && side != 'SELL') {
+      throw Exception('Invalid request payload: type must be BUY or SELL.');
+    }
+    if (qty <= 0) {
+      throw Exception(
+        'Invalid request payload: qty must be greater than zero.',
+      );
+    }
+
+    // Promote nullable locals to non-nullable after validation
+    final nonNullUserId = userId;
+    final nonNullSymbol = symbol;
+    final nonNullSide = side!;
+    _validateOrderInputs(
+      variety: orderVariety,
+      price: price,
+      triggerPrice: triggerPrice,
+    );
+
+    // ── Fetch current market price ───────────────────────────────────────────
+    print('[ENGINE] Start execution for $orderId ($nonNullSymbol)');
+    print('[ENGINE] Fetching price for $nonNullSymbol...');
+
+    double currentPrice;
+    try {
+      currentPrice = await _priceProvider
+          .getPrice(nonNullSymbol)
+          .first
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      print('[ENGINE] Price fetch failed for $nonNullSymbol: $e');
+      throw Exception(
+        'Live market price unavailable for $nonNullSymbol. '
+        'Order rejected to prevent unsafe execution.',
+      );
+    }
+
+    print('[ENGINE] Execution price determined: $currentPrice');
+
+    if (currentPrice <= 0) throw Exception('Invalid price for $nonNullSymbol.');
+
     bool shouldExecute = false;
+    String? pendingReason;
     double executionPrice = currentPrice;
 
-    if (orderVariety == 'MARKET') {
+    if (orderVariety == 'MARKET' || orderVariety == 'ICEBERG') {
       shouldExecute = true;
       executionPrice = currentPrice;
     } else if (orderVariety == 'LIMIT') {
-      if (price == null) throw Exception('Price is required for LIMIT orders.');
-      if (side == 'BUY') {
-        shouldExecute = currentPrice <= price;
-      } else {
-        shouldExecute = currentPrice >= price;
-      }
-      executionPrice = price;
-    } else if (orderVariety == 'SL' || orderVariety == 'SL-M') {
-      if (triggerPrice == null) {
-        throw Exception('Trigger price is required for SL orders.');
-      }
-      if (side == 'BUY') {
-        shouldExecute = currentPrice >= triggerPrice;
-      } else {
-        shouldExecute = currentPrice <= triggerPrice;
-      }
-      executionPrice = orderVariety == 'SL' ? (price ?? triggerPrice) : currentPrice;
+      final limitPrice = price!;
+      shouldExecute = nonNullSide == 'BUY'
+          ? currentPrice <= limitPrice
+          : currentPrice >= limitPrice;
+      executionPrice = limitPrice;
+      if (!shouldExecute) pendingReason = 'LIMIT_WAIT';
+    } else if (orderVariety == 'SL') {
+      final trigger = triggerPrice!;
+      shouldExecute = nonNullSide == 'BUY'
+          ? currentPrice >= trigger
+          : currentPrice <= trigger;
+      executionPrice = price ?? trigger;
+      if (!shouldExecute) pendingReason = 'TRIGGER_WAIT';
+    } else if (orderVariety == 'AMO') {
+      shouldExecute = _isMarketHours(DateTime.now());
+      executionPrice = currentPrice;
+      if (!shouldExecute) pendingReason = 'MARKET_CLOSED';
     }
 
     final priceTimestamp = DateTime.now().millisecondsSinceEpoch;
-    final total = qty * executionPrice;
 
-    final orderRef = _firestore.raw.doc('orders/$clientOrderId');
-    final userRef = _firestore.raw.doc('users/$userId');
-    final holdingRef = _firestore.raw.doc('portfolios/$userId/holdings/$symbol');
+    final orderRef = _firestore.raw.doc('orders/$orderId');
+    final userRef = _firestore.raw.doc('users/$nonNullUserId');
+    final inventoryRef = _inventoryRefForOrder(
+      userId: nonNullUserId,
+      symbol: nonNullSymbol,
+      product: orderProduct,
+    );
     final configRef = _firestore.raw.doc('admin_config/platform');
-    final stockRef = _firestore.raw.doc('stocks/$symbol');
+    final stockRef = _firestore.raw.doc('stocks/$nonNullSymbol');
+    final serverTs = Timestamp.now();
     final tradeId = _uuid.v4();
     final tradeRef = _firestore.raw.doc('trades/$tradeId');
     final tradeFeedRef = _firestore.raw.doc('trade_feed/$tradeId');
     final ledgerId = _uuid.v4();
     final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
-    final serverTs = FieldValue.serverTimestamp();
 
-    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
-      final existingOrder = await tx.get(orderRef);
-      if (existingOrder.exists) return;
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final existingOrder = await tx.get(orderRef);
+        if (existingOrder.exists) return;
 
-      final configSnap = await tx.get(configRef);
-      final configData = configSnap.data() ?? {};
-      if ((configData['globalTradingHalt'] as bool?) == true) {
-        throw Exception('Trading is currently halted by the platform.');
-      }
+        final configSnap = await tx.get(configRef);
+        final configData = configSnap.data() ?? {};
+        if ((configData['globalTradingHalt'] as bool?) == true) {
+          throw Exception('Trading is currently halted by the platform.');
+        }
 
-      final stockSnap = await tx.get(stockRef);
-      if (stockSnap.exists) {
-        final tradable = (stockSnap.data()?['tradable'] as bool?) ?? true;
-        if (!tradable) throw Exception('$symbol is not tradable.');
-      }
+        final stockSnap = await tx.get(stockRef);
+        if (stockSnap.exists) {
+          final tradable = (stockSnap.data()?['tradable'] as bool?) ?? true;
+          if (!tradable) throw Exception('$nonNullSymbol is not tradable.');
+        }
 
-      final userSnap = await tx.get(userRef);
-      final userData = userSnap.data() ?? {};
-      if (!((userData['tradingEnabled'] as bool?) ?? true)) {
-        throw Exception('Trading is disabled for your account.');
-      }
+        final userSnap = await tx.get(userRef);
+        final userData = userSnap.data() ?? {};
+        if (!((userData['tradingEnabled'] as bool?) ?? true)) {
+          throw Exception('Trading is disabled for this account.');
+        }
+        final maxFillQty = _resolveMaxFillQty(configData['maxFillQtyPerTick']);
+        final inventorySnap = await tx.get(inventoryRef);
 
-      final holdingSnap = await tx.get(holdingRef);
+        if (!shouldExecute) {
+          _writePendingOrder(
+            tx: tx,
+            orderRef: orderRef,
+            orderId: orderId,
+            userId: nonNullUserId,
+            symbol: nonNullSymbol,
+            type: nonNullSide,
+            qty: qty,
+            price: price ?? executionPrice,
+            triggerPrice: triggerPrice,
+            variety: orderVariety,
+            product: orderProduct,
+            validity: orderValidity,
+            pendingReason: pendingReason,
+            serverTs: serverTs,
+          );
+          return;
+        }
 
-      if (shouldExecute) {
-        if (side == 'BUY') {
+        final fillQty = qty > maxFillQty ? maxFillQty : qty;
+        if (fillQty <= 0) {
+          throw Exception('Unable to execute order: zero fill quantity.');
+        }
+        final fillTotal = fillQty * executionPrice;
+
+        if (nonNullSide == 'BUY') {
           _writeBuy(
             tx: tx,
             userRef: userRef,
-            holdingRef: holdingRef,
-            holdingSnap: holdingSnap,
+            inventoryRef: inventoryRef,
+            inventorySnap: inventorySnap,
             orderRef: orderRef,
             tradeRef: tradeRef,
             tradeFeedRef: tradeFeedRef,
             ledgerRef: ledgerRef,
             userData: userData,
-            userId: userId,
-            symbol: symbol,
-            qty: qty,
+            userId: nonNullUserId,
+            symbol: nonNullSymbol,
+            orderQty: qty,
+            fillQty: fillQty,
+            previousFilledQty: 0,
+            previousFilledValue: 0,
             executedPrice: executionPrice,
             priceTimestamp: priceTimestamp,
-            total: total,
-            orderId: clientOrderId,
-            tradeId: tradeId,
+            total: fillTotal,
+            orderId: orderId,
             serverTs: serverTs,
+            product: orderProduct,
+            validity: orderValidity,
             variety: orderVariety,
           );
         } else {
           _writeSell(
             tx: tx,
             userRef: userRef,
-            holdingRef: holdingRef,
-            holdingSnap: holdingSnap,
+            inventoryRef: inventoryRef,
+            inventorySnap: inventorySnap,
             orderRef: orderRef,
             tradeRef: tradeRef,
             tradeFeedRef: tradeFeedRef,
             ledgerRef: ledgerRef,
             userData: userData,
-            userId: userId,
-            symbol: symbol,
-            qty: qty,
+            userId: nonNullUserId,
+            symbol: nonNullSymbol,
+            orderQty: qty,
+            fillQty: fillQty,
+            previousFilledQty: 0,
+            previousFilledValue: 0,
             executedPrice: executionPrice,
             priceTimestamp: priceTimestamp,
-            total: total,
-            orderId: clientOrderId,
-            tradeId: tradeId,
+            total: fillTotal,
+            orderId: orderId,
             serverTs: serverTs,
+            product: orderProduct,
+            validity: orderValidity,
             variety: orderVariety,
           );
         }
-      } else {
-        // Place as PENDING order
-        _writePendingOrder(
-          tx: tx,
-          orderRef: orderRef,
-          userId: userId,
-          symbol: symbol,
-          type: side,
-          qty: qty,
-          price: price ?? executionPrice,
-          triggerPrice: triggerPrice,
-          variety: orderVariety,
-          serverTs: serverTs,
-        );
-      }
-    }));
+      }),
+    );
 
-    return clientOrderId;
+    return orderId;
+  }
+
+  Future<void> _writeFailedOrderFromRequest({
+    required Map<String, dynamic> requestData,
+    required String fallbackOrderId,
+    required String error,
+  }) async {
+    final orderId =
+        (requestData['clientOrderId'] as String?)?.trim().isNotEmpty == true
+        ? (requestData['clientOrderId'] as String).trim()
+        : fallbackOrderId;
+    final userId = (requestData['userId'] as String?) ?? 'UNKNOWN';
+    final symbol = (requestData['stock'] as String?)?.toUpperCase() ?? 'N/A';
+    final side = (requestData['type'] as String?)?.toUpperCase() ?? 'BUY';
+    final qty = _int(requestData['qty']);
+    final price = _double(requestData['price']);
+    final variety = _normalizeVariety(
+      (requestData['variety'] as String?) ?? 'MARKET',
+    );
+    final product = _normalizeProduct(
+      (requestData['product'] as String?) ?? 'MIS',
+    );
+    final validity = _normalizeValidity(
+      (requestData['validity'] as String?) ?? 'DAY',
+    );
+    final orderRef = _firestore.raw.doc('orders/$orderId');
+
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final existing = await tx.get(orderRef);
+        if (existing.exists) return;
+
+        tx.set(orderRef, {
+          'clientOrderId': orderId,
+          'userId': userId,
+          'stock': symbol,
+          'type': side,
+          'qty': qty,
+          'price': price,
+          'variety': variety,
+          'product': product,
+          'validity': validity,
+          'total': qty * price,
+          'filled_qty': 0,
+          'remaining_qty': qty,
+          'status': 'FAILED',
+          'rejectionReason': error,
+          'rejectedAt': Timestamp.now(),
+          'execution_meta': {
+            'attempt': 1,
+            'lastError': error,
+            'source': 'ADMIN_ENGINE',
+          },
+          'createdAt': Timestamp.now(),
+          'updatedAt': Timestamp.now(),
+        });
+      }),
+    );
   }
 
   // ── Cancel Order ──────────────────────────────────────────────────────────
 
   Future<void> cancelOrder(String orderId) async {
     final orderRef = _firestore.raw.doc('orders/$orderId');
-    final serverTs = FieldValue.serverTimestamp();
-
-    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
-      final snap = await tx.get(orderRef);
-      if (!snap.exists) throw Exception('Order not found.');
-
-      final status = snap.data()?['status'] as String?;
-      if (status != 'PENDING') {
-        throw Exception('Only pending orders can be cancelled.');
-      }
-
-      tx.update(orderRef, {
-        'status': 'CANCELLED',
-        'updatedAt': serverTs,
-      });
-    }));
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final snap = await tx.get(orderRef);
+        if (!snap.exists) throw Exception('Order not found.');
+        final data = snap.data() ?? {};
+        final status = (data['status'] as String?)?.toUpperCase() ?? '';
+        if (status != 'PENDING' && status != 'PARTIALLY_EXECUTED') {
+          throw Exception('Only open orders can be cancelled.');
+        }
+        tx.update(orderRef, {
+          'status': 'CANCELLED',
+          'cancelledAt': Timestamp.now(),
+          'updatedAt': Timestamp.now(),
+        });
+      }),
+    );
   }
 
   // ── GTT Orders ────────────────────────────────────────────────────────────
@@ -345,7 +806,6 @@ class TradingService {
     double? limitPrice,
   }) async {
     final id = _uuid.v4();
-    final gttRef = _firestore.raw.doc('gtt_orders/$id');
 
     await _firestore.setDocument('gtt_orders/$id', {
       'userId': userId,
@@ -357,8 +817,8 @@ class TradingService {
       'quantity': qty,
       'limitPrice': limitPrice,
       'isActive': true,
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': Timestamp.now(),
+      'updatedAt': Timestamp.now(),
     });
 
     return id;
@@ -371,65 +831,73 @@ class TradingService {
   Future<void> processGttTrigger(String gttId, double currentPrice) async {
     final gttRef = _firestore.raw.doc('gtt_orders/$gttId');
 
-    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
-      final gttSnap = await tx.get(gttRef);
-      if (!gttSnap.exists) return;
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final gttSnap = await tx.get(gttRef);
+        if (!gttSnap.exists) return;
 
-      final data = gttSnap.data()!;
-      if (!(data['isActive'] as bool)) return;
+        final data = gttSnap.data()!;
+        if (!(data['isActive'] as bool)) return;
 
-      final userId = data['userId'] as String;
-      final symbol = data['symbol'] as String;
-      final triggerPrice = _double(data['triggerPrice']);
-      final secondTrigger = _double(data['secondTriggerPrice']);
-      final type = data['type'] as String;
-      final side = data['orderType'] as String;
-      final qty = data['quantity'] as int;
-      final limitPrice = _double(data['limitPrice']);
+        final userId = data['userId'] as String;
+        final symbol = data['symbol'] as String;
+        final triggerPrice = _double(data['triggerPrice']);
+        final secondTrigger = _double(data['secondTriggerPrice']);
+        final type = data['type'] as String;
+        final side = data['orderType'] as String;
+        final qty = data['quantity'] as int;
+        final limitPrice = _double(data['limitPrice']);
 
-      bool triggered = false;
-      if (type == 'SINGLE') {
-        if (side == 'BUY') {
-          triggered = currentPrice <= triggerPrice;
-        } else {
-          triggered = currentPrice >= triggerPrice;
+        bool triggered = false;
+        if (type == 'SINGLE') {
+          if (side == 'BUY') {
+            triggered = currentPrice <= triggerPrice;
+          } else {
+            triggered = currentPrice >= triggerPrice;
+          }
+        } else if (type == 'OCO') {
+          if (side == 'BUY') {
+            triggered =
+                currentPrice <= triggerPrice || currentPrice >= secondTrigger;
+          } else {
+            triggered =
+                currentPrice >= triggerPrice || currentPrice <= secondTrigger;
+          }
         }
-      } else if (type == 'OCO') {
-        if (side == 'BUY') {
-          triggered = currentPrice <= triggerPrice || currentPrice >= secondTrigger;
-        } else {
-          triggered = currentPrice >= triggerPrice || currentPrice <= secondTrigger;
-        }
-      }
 
-      if (!triggered) return;
+        if (!triggered) return;
 
-      // Mark GTT as triggered
-      tx.update(gttRef, {
-        'isActive': false,
-        'triggeredAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+        // Mark GTT as triggered
+        tx.update(gttRef, {
+          'isActive': false,
+          'triggeredAt': Timestamp.now(),
+          'updatedAt': Timestamp.now(),
+        });
 
-      // Place actual order - Note: we can't call placeOrder inside a transaction
-      // because placeOrder starts its own transaction.
-      // Instead, we manually write a PENDING order doc.
-      final orderId = 'ORD-GTT-${_uuid.v4()}';
-      final orderRef = _firestore.raw.doc('orders/$orderId');
+        // Place actual order - Note: we can't call placeOrder inside a transaction
+        // because placeOrder starts its own transaction.
+        // Instead, we manually write a PENDING order doc.
+        final orderId = 'ORD-GTT-${_uuid.v4()}';
+        final orderRef = _firestore.raw.doc('orders/$orderId');
 
-      _writePendingOrder(
-        tx: tx,
-        orderRef: orderRef,
-        userId: userId,
-        symbol: symbol,
-        type: side,
-        qty: qty,
-        price: limitPrice > 0 ? limitPrice : currentPrice,
-        triggerPrice: null,
-        variety: limitPrice > 0 ? 'LIMIT' : 'MARKET',
-        serverTs: FieldValue.serverTimestamp(),
-      );
-    }));
+        _writePendingOrder(
+          tx: tx,
+          orderRef: orderRef,
+          orderId: orderId,
+          userId: userId,
+          symbol: symbol,
+          type: side,
+          qty: qty,
+          price: limitPrice > 0 ? limitPrice : currentPrice,
+          triggerPrice: null,
+          variety: limitPrice > 0 ? 'LIMIT' : 'MARKET',
+          product: 'MIS',
+          validity: 'DAY',
+          pendingReason: 'GTT_TRIGGERED',
+          serverTs: Timestamp.now(),
+        );
+      }),
+    );
   }
 
   // ── BUY (pure — synchronous, no external calls) ───────────────────────────
@@ -437,8 +905,8 @@ class TradingService {
   void _writeBuy({
     required Transaction tx,
     required DocumentReference userRef,
-    required DocumentReference holdingRef,
-    required DocumentSnapshot holdingSnap,
+    required DocumentReference inventoryRef,
+    required DocumentSnapshot inventorySnap,
     required DocumentReference orderRef,
     required DocumentReference tradeRef,
     required DocumentReference tradeFeedRef,
@@ -446,101 +914,117 @@ class TradingService {
     required Map<String, dynamic> userData,
     required String userId,
     required String symbol,
-    required int qty,
+    required int orderQty,
+    required int fillQty,
+    required int previousFilledQty,
+    required double previousFilledValue,
     required double executedPrice,
     required int priceTimestamp,
     required double total,
     required String orderId,
-    required String tradeId,
-    required FieldValue serverTs,
+    required Object serverTs,
+    required String product,
+    required String validity,
     String variety = 'MARKET',
   }) {
     final available = _balance(userData);
 
     if (available < total) {
       throw Exception(
-          'Insufficient balance. Required ₹${total.toStringAsFixed(2)}, '
-          'available ₹${available.toStringAsFixed(2)}.');
+        'Insufficient balance. Required ₹${total.toStringAsFixed(2)}, '
+        'available ₹${available.toStringAsFixed(2)}.',
+      );
     }
 
     final balanceAfter = available - total;
 
     // Wallet
-    tx.set(userRef, {
+    tx.update(userRef, {
       'available_balance': balanceAfter,
       'balance': balanceAfter,
-      'reserved_balance': 0,
       'updatedAt': serverTs,
-    }, SetOptions(merge: true));
+    });
 
-    // Holding — weighted avg price: (Q_old × P_old + Q_new × P_buy) / Q_total
-    final holdingData = holdingSnap.data() as Map<String, dynamic>?;
-    final oldQty = _int(holdingData?['qty']);
-    final oldAvg = _double(holdingData?['avg_price']);
-    final newQty = oldQty + qty;
+    final inventoryData = inventorySnap.data() as Map<String, dynamic>?;
+    final oldQty = _int(inventoryData?['qty']);
+    final oldAvg = _double(inventoryData?['avg_price']);
+    final newQty = oldQty + fillQty;
     final newAvg = newQty == 0
         ? 0.0
-        : ((oldQty * oldAvg) + (qty * executedPrice)) / newQty;
-    // unrealizedPnl should be calculated based on current market price vs avg_price
+        : ((oldQty * oldAvg) + (fillQty * executedPrice)) / newQty;
     final unrealizedPnl = (executedPrice - newAvg) * newQty;
+    final isIntraday = _isIntradayProduct(product);
 
-    tx.set(holdingRef, {
+    tx.set(inventoryRef, {
       'stock': symbol,
+      'product': product,
       'qty': newQty,
-      'avg_price': newAvg, // snake_case — canonical field name
+      'avg_price': _safeDouble(newAvg),
+      if (isIntraday) 'side': 'BUY',
       'last_price': executedPrice,
-      'unrealized_pnl': unrealizedPnl,
+      'unrealized_pnl': _safeDouble(unrealizedPnl),
       'updatedAt': serverTs,
     }, SetOptions(merge: true));
 
-    // Order
-    tx.set(orderRef, {
+    final filledQty = previousFilledQty + fillQty;
+    final filledValue = previousFilledValue + total;
+    final remainingQty = orderQty - filledQty;
+    final avgExecutedPrice = filledQty == 0 ? 0.0 : filledValue / filledQty;
+    final status = remainingQty > 0 ? 'PARTIALLY_EXECUTED' : 'EXECUTED';
+    final orderMap = <String, dynamic>{
       'clientOrderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': 'BUY',
-      'qty': qty,
+      'qty': orderQty,
       'price': executedPrice,
-      'executed_price': executedPrice,
+      'product': product,
+      'validity': validity,
       'variety': variety,
-      'price_source': 'SIMULATED',
+      'executed_price': _safeDouble(avgExecutedPrice),
+      'avg_executed_price': _safeDouble(avgExecutedPrice),
+      'filled_qty': filledQty,
+      'remaining_qty': remainingQty,
+      'last_fill_qty': fillQty,
+      'last_fill_price': executedPrice,
+      'filled_total': _safeDouble(filledValue),
+      'total': _safeDouble(filledValue),
       'price_timestamp': priceTimestamp,
-      'total': total,
-      'status': 'EXECUTED',
+      'status': status,
+      'pending_reason': remainingQty > 0 ? 'PENDING_REMAINING_QTY' : null,
       'execution_meta': {
         'attempt': 1,
         'lastError': null,
-        'source': 'SIMULATED',
+        'source': 'ADMIN_ENGINE',
       },
-      'executedAt': serverTs,
-      'createdAt': serverTs,
-    });
+      'updatedAt': serverTs,
+      if (remainingQty == 0) 'executedAt': serverTs,
+      if (previousFilledQty == 0) 'createdAt': serverTs,
+    };
+    tx.set(orderRef, orderMap, SetOptions(merge: true));
 
-    // Trade record
     tx.set(tradeRef, {
       'orderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': 'BUY',
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'total': total,
       'createdAt': serverTs,
     });
 
-    // Denormalized trade feed — same transaction, guaranteed consistency
     tx.set(tradeFeedRef, {
       'orderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': 'BUY',
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'total': total,
       'createdAt': serverTs,
     });
 
-    // Ledger DEBIT — inside transaction (atomic with balance update)
     tx.set(ledgerRef, {
       'userId': userId,
       'type': 'DEBIT',
@@ -551,7 +1035,7 @@ class TradingService {
       'referenceType': 'ORDER',
       'referenceId': orderId,
       'stock': symbol,
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'createdAt': serverTs,
     });
@@ -562,8 +1046,8 @@ class TradingService {
   void _writeSell({
     required Transaction tx,
     required DocumentReference userRef,
-    required DocumentReference holdingRef,
-    required DocumentSnapshot holdingSnap,
+    required DocumentReference inventoryRef,
+    required DocumentSnapshot inventorySnap,
     required DocumentReference orderRef,
     required DocumentReference tradeRef,
     required DocumentReference tradeFeedRef,
@@ -571,33 +1055,41 @@ class TradingService {
     required Map<String, dynamic> userData,
     required String userId,
     required String symbol,
-    required int qty,
+    required int orderQty,
+    required int fillQty,
+    required int previousFilledQty,
+    required double previousFilledValue,
     required double executedPrice,
     required int priceTimestamp,
     required double total,
     required String orderId,
-    required String tradeId,
-    required FieldValue serverTs,
+    required Object serverTs,
+    required String product,
+    required String validity,
     String variety = 'MARKET',
   }) {
-    final holdingData = holdingSnap.data() as Map<String, dynamic>?;
-    final currentQty = _int(holdingData?['qty']);
+    final inventoryData = inventorySnap.data() as Map<String, dynamic>?;
+    final currentQty = _int(inventoryData?['qty']);
+    final isIntraday = _isIntradayProduct(product);
 
-    if (currentQty < qty) {
+    if (currentQty < fillQty) {
       throw Exception(
-          'Insufficient holdings. You have $currentQty shares of $symbol, '
-          'tried to sell $qty.');
+        'Insufficient holdings. You have $currentQty shares of $symbol, '
+        'tried to sell $fillQty.',
+      );
     }
 
-    final newQty = currentQty - qty;
-    final avgPrice = _double(holdingData?['avg_price']); // snake_case
+    final newQty = currentQty - fillQty;
+    final avgPrice = _double(inventoryData?['avg_price']);
 
     if (newQty == 0) {
-      tx.delete(holdingRef);
+      tx.delete(inventoryRef);
     } else {
       final unrealizedPnl = (executedPrice - avgPrice) * newQty;
-      tx.update(holdingRef, {
+      tx.update(inventoryRef, {
         'qty': newQty,
+        'product': product,
+        if (isIntraday) 'side': 'BUY',
         'last_price': executedPrice,
         'unrealized_pnl': unrealizedPnl,
         'updatedAt': serverTs,
@@ -607,40 +1099,55 @@ class TradingService {
     final available = _balance(userData);
     final balanceAfter = available + total;
 
-    tx.set(userRef, {
+    tx.update(userRef, {
       'available_balance': balanceAfter,
       'balance': balanceAfter,
       'updatedAt': serverTs,
-    }, SetOptions(merge: true));
+    });
+
+    final filledQty = previousFilledQty + fillQty;
+    final filledValue = previousFilledValue + total;
+    final remainingQty = orderQty - filledQty;
+    final avgExecutedPrice = filledQty == 0 ? 0.0 : filledValue / filledQty;
+    final status = remainingQty > 0 ? 'PARTIALLY_EXECUTED' : 'EXECUTED';
 
     tx.set(orderRef, {
       'clientOrderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': 'SELL',
-      'qty': qty,
+      'qty': orderQty,
       'price': executedPrice,
-      'executed_price': executedPrice,
+      'product': product,
+      'validity': validity,
       'variety': variety,
-      'price_source': 'SIMULATED',
+      'executed_price': _safeDouble(avgExecutedPrice),
+      'avg_executed_price': _safeDouble(avgExecutedPrice),
+      'filled_qty': filledQty,
+      'remaining_qty': remainingQty,
+      'last_fill_qty': fillQty,
+      'last_fill_price': executedPrice,
+      'filled_total': _safeDouble(filledValue),
+      'total': _safeDouble(filledValue),
       'price_timestamp': priceTimestamp,
-      'total': total,
-      'status': 'EXECUTED',
+      'status': status,
+      'pending_reason': remainingQty > 0 ? 'PENDING_REMAINING_QTY' : null,
       'execution_meta': {
         'attempt': 1,
         'lastError': null,
-        'source': 'SIMULATED',
+        'source': 'ADMIN_ENGINE',
       },
-      'executedAt': serverTs,
-      'createdAt': serverTs,
-    });
+      'updatedAt': serverTs,
+      if (remainingQty == 0) 'executedAt': serverTs,
+      if (previousFilledQty == 0) 'createdAt': serverTs,
+    }, SetOptions(merge: true));
 
     tx.set(tradeRef, {
       'orderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': 'SELL',
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'total': total,
       'createdAt': serverTs,
@@ -652,13 +1159,13 @@ class TradingService {
       'userId': userId,
       'stock': symbol,
       'type': 'SELL',
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'total': total,
       'createdAt': serverTs,
     });
 
-    final realizedPnl = (executedPrice - avgPrice) * qty;
+    final realizedPnl = (executedPrice - avgPrice) * fillQty;
 
     // Ledger CREDIT — inside transaction (atomic with balance update)
     tx.set(ledgerRef, {
@@ -672,7 +1179,7 @@ class TradingService {
       'referenceType': 'ORDER',
       'referenceId': orderId,
       'stock': symbol,
-      'qty': qty,
+      'qty': fillQty,
       'price': executedPrice,
       'createdAt': serverTs,
     });
@@ -681,6 +1188,7 @@ class TradingService {
   void _writePendingOrder({
     required Transaction tx,
     required DocumentReference orderRef,
+    required String orderId,
     required String userId,
     required String symbol,
     required String type,
@@ -688,9 +1196,13 @@ class TradingService {
     required double price,
     double? triggerPrice,
     required String variety,
-    required FieldValue serverTs,
+    required String product,
+    required String validity,
+    String? pendingReason,
+    required Object serverTs,
   }) {
     tx.set(orderRef, {
+      'clientOrderId': orderId,
       'userId': userId,
       'stock': symbol,
       'type': type,
@@ -698,7 +1210,17 @@ class TradingService {
       'price': price,
       'triggerPrice': triggerPrice,
       'variety': variety,
+      'product': product,
+      'validity': validity,
+      'filled_qty': 0,
+      'remaining_qty': qty,
       'status': 'PENDING',
+      'pending_reason': pendingReason,
+      'execution_meta': {
+        'attempt': 1,
+        'lastError': null,
+        'source': 'ADMIN_ENGINE',
+      },
       'createdAt': serverTs,
       'updatedAt': serverTs,
     });
@@ -707,106 +1229,181 @@ class TradingService {
   /// Processes a single pending order against the current market price.
   Future<void> processPendingOrder(String orderId, double currentPrice) async {
     final orderRef = _firestore.raw.doc('orders/$orderId');
-    final serverTs = FieldValue.serverTimestamp();
+    final serverTs = Timestamp.now();
 
-    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
-      final orderSnap = await tx.get(orderRef);
-      if (!orderSnap.exists) return;
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists) return;
 
-      final orderData = orderSnap.data()!;
-      if (orderData['status'] != 'PENDING') return;
+        final orderData = orderSnap.data()!;
+        final status = (orderData['status'] as String?)?.toUpperCase() ?? '';
+        if (status != 'PENDING' && status != 'PARTIALLY_EXECUTED') return;
 
-      final symbol = orderData['stock'] as String;
-      final side = orderData['type'] as String;
-      final variety = orderData['variety'] as String;
-      final qty = orderData['qty'] as int;
-      final userId = orderData['userId'] as String;
-      final limitPrice = _double(orderData['price']);
-      final triggerPrice = _double(orderData['triggerPrice']);
+        final symbol = orderData['stock'] as String;
+        final side = orderData['type'] as String;
+        final variety = _normalizeVariety(
+          (orderData['variety'] as String?) ?? 'MARKET',
+        );
+        final product = _normalizeProduct(
+          (orderData['product'] as String?) ?? 'MIS',
+        );
+        final validity = _normalizeValidity(
+          (orderData['validity'] as String?) ?? 'DAY',
+        );
+        final orderQty = _int(orderData['qty']);
+        final previousFilledQty = _int(orderData['filled_qty']);
+        final previousFilledValue = _double(orderData['filled_total']);
+        final derivedRemaining = orderQty - previousFilledQty;
+        final remainingQty = _int(orderData['remaining_qty']) > 0
+            ? _int(orderData['remaining_qty'])
+            : derivedRemaining;
+        final userId = orderData['userId'] as String;
+        final limitPrice = _double(orderData['price']);
+        final triggerPrice = _double(orderData['triggerPrice']);
+        if (remainingQty <= 0) return;
 
-      bool shouldExecute = false;
-      double executionPrice = currentPrice;
+        bool shouldExecute = false;
+        double executionPrice = currentPrice;
 
-      if (variety == 'LIMIT') {
-        if (side == 'BUY') {
-          shouldExecute = currentPrice <= limitPrice;
-        } else {
-          shouldExecute = currentPrice >= limitPrice;
+        if (variety == 'LIMIT') {
+          if (side == 'BUY') {
+            shouldExecute = currentPrice <= limitPrice;
+          } else {
+            shouldExecute = currentPrice >= limitPrice;
+          }
+          executionPrice = limitPrice;
+        } else if (variety == 'SL') {
+          if (side == 'BUY') {
+            shouldExecute = currentPrice >= triggerPrice;
+          } else {
+            shouldExecute = currentPrice <= triggerPrice;
+          }
+          executionPrice = limitPrice > 0 ? limitPrice : currentPrice;
+        } else if (variety == 'MARKET' || variety == 'ICEBERG') {
+          shouldExecute = true;
+        } else if (variety == 'AMO') {
+          shouldExecute = _isMarketHours(DateTime.now());
         }
-        executionPrice = limitPrice;
-      } else if (variety == 'SL' || variety == 'SL-M') {
-        if (side == 'BUY') {
-          shouldExecute = currentPrice >= triggerPrice;
-        } else {
-          shouldExecute = currentPrice <= triggerPrice;
+
+        if (!shouldExecute) {
+          if (validity == 'IOC') {
+            tx.update(orderRef, {
+              'status': 'REJECTED',
+              'rejectionReason': 'IOC order not executable at current price.',
+              'rejectedAt': serverTs,
+              'updatedAt': serverTs,
+            });
+          }
+          return;
         }
-        executionPrice = variety == 'SL' ? limitPrice : currentPrice;
-      }
 
-      if (!shouldExecute) return;
-
-      // ── Execution inside the same transaction ──
-      final userRef = _firestore.raw.doc('users/$userId');
-      final holdingRef = _firestore.raw.doc('portfolios/$userId/holdings/$symbol');
-      final tradeId = _uuid.v4();
-      final tradeRef = _firestore.raw.doc('trades/$tradeId');
-      final tradeFeedRef = _firestore.raw.doc('trade_feed/$tradeId');
-      final ledgerId = _uuid.v4();
-      final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
-
-      final userSnap = await tx.get(userRef);
-      final userData = userSnap.data() ?? {};
-      final holdingSnap = await tx.get(holdingRef);
-
-      final total = qty * executionPrice;
-      final priceTimestamp = DateTime.now().millisecondsSinceEpoch;
-
-      if (side == 'BUY') {
-        _writeBuy(
-          tx: tx,
-          userRef: userRef,
-          holdingRef: holdingRef,
-          holdingSnap: holdingSnap,
-          orderRef: orderRef,
-          tradeRef: tradeRef,
-          tradeFeedRef: tradeFeedRef,
-          ledgerRef: ledgerRef,
-          userData: userData,
+        // ── Execution inside the same transaction ──
+        final userRef = _firestore.raw.doc('users/$userId');
+        final inventoryRef = _inventoryRefForOrder(
           userId: userId,
           symbol: symbol,
-          qty: qty,
-          executedPrice: executionPrice,
-          priceTimestamp: priceTimestamp,
-          total: total,
-          orderId: orderId,
-          tradeId: tradeId,
-          serverTs: serverTs,
-          variety: variety,
+          product: product,
         );
-      } else {
-        _writeSell(
-          tx: tx,
-          userRef: userRef,
-          holdingRef: holdingRef,
-          holdingSnap: holdingSnap,
-          orderRef: orderRef,
-          tradeRef: tradeRef,
-          tradeFeedRef: tradeFeedRef,
-          ledgerRef: ledgerRef,
-          userData: userData,
-          userId: userId,
-          symbol: symbol,
-          qty: qty,
-          executedPrice: executionPrice,
-          priceTimestamp: priceTimestamp,
-          total: total,
-          orderId: orderId,
-          tradeId: tradeId,
-          serverTs: serverTs,
-          variety: variety,
-        );
-      }
-    }));
+        final configRef = _firestore.raw.doc('admin_config/platform');
+        final tradeId = _uuid.v4();
+        final tradeRef = _firestore.raw.doc('trades/$tradeId');
+        final tradeFeedRef = _firestore.raw.doc('trade_feed/$tradeId');
+        final ledgerId = _uuid.v4();
+        final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
+
+        final configSnap = await tx.get(configRef);
+        final configData = configSnap.data() ?? {};
+        final maxFillQty = _resolveMaxFillQty(configData['maxFillQtyPerTick']);
+        final fillQty = remainingQty > maxFillQty ? maxFillQty : remainingQty;
+        if (fillQty <= 0) return;
+
+        final userSnap = await tx.get(userRef);
+        final userData = userSnap.data() ?? {};
+        final inventorySnap = await tx.get(inventoryRef);
+
+        final total = fillQty * executionPrice;
+        final priceTimestamp = DateTime.now().millisecondsSinceEpoch;
+
+        if (side == 'BUY' && _balance(userData) < total) {
+          tx.update(orderRef, {
+            'status': 'REJECTED',
+            'rejectionReason': 'Insufficient funds at trigger time.',
+            'rejectedAt': serverTs,
+            'updatedAt': serverTs,
+          });
+          return;
+        }
+
+        if (side == 'SELL') {
+          final inventoryData = inventorySnap.data();
+          final currentQty = _int(inventoryData?['qty']);
+          if (currentQty < fillQty) {
+            tx.update(orderRef, {
+              'status': 'REJECTED',
+              'rejectionReason': 'Insufficient quantity at trigger time.',
+              'rejectedAt': serverTs,
+              'updatedAt': serverTs,
+            });
+            return;
+          }
+        }
+
+        if (side == 'BUY') {
+          _writeBuy(
+            tx: tx,
+            userRef: userRef,
+            inventoryRef: inventoryRef,
+            inventorySnap: inventorySnap,
+            orderRef: orderRef,
+            tradeRef: tradeRef,
+            tradeFeedRef: tradeFeedRef,
+            ledgerRef: ledgerRef,
+            userData: userData,
+            userId: userId,
+            symbol: symbol,
+            orderQty: orderQty,
+            fillQty: fillQty,
+            previousFilledQty: previousFilledQty,
+            previousFilledValue: previousFilledValue,
+            executedPrice: executionPrice,
+            priceTimestamp: priceTimestamp,
+            total: total,
+            orderId: orderId,
+            serverTs: serverTs,
+            product: product,
+            validity: validity,
+            variety: variety,
+          );
+        } else {
+          _writeSell(
+            tx: tx,
+            userRef: userRef,
+            inventoryRef: inventoryRef,
+            inventorySnap: inventorySnap,
+            orderRef: orderRef,
+            tradeRef: tradeRef,
+            tradeFeedRef: tradeFeedRef,
+            ledgerRef: ledgerRef,
+            userData: userData,
+            userId: userId,
+            symbol: symbol,
+            orderQty: orderQty,
+            fillQty: fillQty,
+            previousFilledQty: previousFilledQty,
+            previousFilledValue: previousFilledValue,
+            executedPrice: executionPrice,
+            priceTimestamp: priceTimestamp,
+            total: total,
+            orderId: orderId,
+            serverTs: serverTs,
+            product: product,
+            validity: validity,
+            variety: variety,
+          );
+        }
+      }),
+    );
   }
 
   // ── Admin: Add Balance ─────────────────────────────────────────────────────
@@ -816,40 +1413,42 @@ class TradingService {
     required String userId,
     required double amount,
   }) async {
-    if (amount <= 0) throw Exception('Amount must be positive.');
+    if (amount == 0) return;
 
     double before = 0;
     double after = 0;
     final ledgerId = _uuid.v4();
-    final serverTs = FieldValue.serverTimestamp();
+    final serverTs = Timestamp.now();
 
     // Balance update AND ledger entry in the same transaction — atomic.
     // If either fails, both roll back. No orphaned balance changes.
-    await _retryFirestore(() => _firestore.raw.runTransaction((tx) async {
-      final userRef = _firestore.raw.doc('users/$userId');
-      final snap = await tx.get(userRef);
-      before = _balance(snap.data() ?? {});
-      after = before + amount;
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final userRef = _firestore.raw.doc('users/$userId');
+        final snap = await tx.get(userRef);
+        before = _balance(snap.data() ?? {});
+        after = before + amount;
 
-      tx.set(userRef, {
-        'available_balance': after,
-        'balance': after,
-        'updatedAt': serverTs,
-      }, SetOptions(merge: true));
+        tx.set(userRef, {
+          'available_balance': after,
+          'balance': after,
+          'updatedAt': serverTs,
+        }, SetOptions(merge: true));
 
-      final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
-      tx.set(ledgerRef, {
-        'userId': userId,
-        'type': 'CREDIT',
-        'subType': 'DEPOSIT',
-        'amount': amount,
-        'before_balance': before,
-        'balance_after': after,
-        'referenceType': 'ADMIN',
-        'referenceId': adminId,
-        'createdAt': serverTs,
-      });
-    }));
+        final ledgerRef = _firestore.raw.doc('ledger/$ledgerId');
+        tx.set(ledgerRef, {
+          'userId': userId,
+          'type': 'CREDIT',
+          'subType': 'DEPOSIT',
+          'amount': amount,
+          'before_balance': before,
+          'balance_after': after,
+          'referenceType': 'ADMIN',
+          'referenceId': adminId,
+          'createdAt': serverTs,
+        });
+      }),
+    );
 
     // Audit log is best-effort — failure here does not affect financial data
     await _logAudit(
@@ -869,7 +1468,7 @@ class TradingService {
   }) async {
     await _firestore.updateDocument('users/$userId', {
       'tradingEnabled': enabled,
-      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedAt': Timestamp.now(),
     });
     await _logAudit(
       action: 'SET_TRADING_ENABLED',
@@ -889,7 +1488,7 @@ class TradingService {
       'message': message,
       'type': 'BROADCAST',
       'createdBy': adminId,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': Timestamp.now(),
     });
     await _logAudit(
       action: 'BROADCAST',
@@ -907,15 +1506,13 @@ class TradingService {
     required String stock,
     required double leverage,
   }) async {
-    await _firestore.setDocument(
-      'user_stock_leverage/${userId}_${stock.toUpperCase()}',
-      {
-        'userId': userId,
-        'stock': stock.toUpperCase(),
-        'leverage': leverage,
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-    );
+    await _firestore
+        .setDocument('user_stock_leverage/${userId}_${stock.toUpperCase()}', {
+          'userId': userId,
+          'stock': stock.toUpperCase(),
+          'leverage': leverage,
+          'updatedAt': Timestamp.now(),
+        });
     await _logAudit(
       action: 'SET_LEVERAGE',
       adminId: adminId,
@@ -926,14 +1523,133 @@ class TradingService {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  double _balance(Map<String, dynamic> data) =>
-      ((data['available_balance'] as num?) ??
-              (data['balance'] as num?) ??
-              0)
-          .toDouble();
+  /// Normalizes order variety strings to canonical uppercase form.
+  /// Normalizes order variety strings to canonical uppercase form.
+  String _normalizeVariety(String raw) {
+    switch (raw.trim().toUpperCase()) {
+      case 'MARKET':
+        return 'MARKET';
+      case 'LIMIT':
+        return 'LIMIT';
+      case 'SL':
+      case 'SL_LIMIT':
+      case 'SL-LIMIT':
+      case 'SLLIMIT':
+        return 'SL';
+      case 'AMO':
+        return 'AMO';
+      case 'ICEBERG':
+        return 'ICEBERG';
+      default:
+        return 'MARKET';
+    }
+  }
 
-  int _int(dynamic v) => (v as num?)?.toInt() ?? 0;
-  double _double(dynamic v) => (v as num?)?.toDouble() ?? 0.0;
+  String _normalizeProduct(String raw) {
+    switch (raw.trim().toUpperCase()) {
+      case 'MIS':
+        return 'MIS';
+      case 'NRML':
+        return 'NRML';
+      case 'OVERNIGHT':
+        return 'OVERNIGHT';
+      case 'MTF':
+        return 'MTF';
+      default:
+        return 'MIS';
+    }
+  }
+
+  String _normalizeValidity(String raw) {
+    switch (raw.trim().toUpperCase()) {
+      case 'IOC':
+        return 'IOC';
+      case 'GTC':
+        return 'GTC';
+      case 'GTD':
+        return 'GTD';
+      case 'DAY':
+      default:
+        return 'DAY';
+    }
+  }
+
+  bool _isIntradayProduct(String product) => product == 'MIS';
+
+  DocumentReference<Map<String, dynamic>> _inventoryRefForOrder({
+    required String userId,
+    required String symbol,
+    required String product,
+  }) {
+    final normalizedProduct = _normalizeProduct(product);
+    if (_isIntradayProduct(normalizedProduct)) {
+      return _firestore.raw.doc(
+        'portfolios/$userId/positions/${symbol}_$normalizedProduct',
+      );
+    }
+    return _firestore.raw.doc('portfolios/$userId/holdings/$symbol');
+  }
+
+  int _resolveMaxFillQty(dynamic configured) {
+    final parsed = _int(configured);
+    if (parsed <= 0) return _defaultMaxFillQtyPerTick;
+    return parsed;
+  }
+
+  /// Validates that required price/trigger fields are present for the variety.
+  void _validateOrderInputs({
+    required String variety,
+    double? price,
+    double? triggerPrice,
+  }) {
+    if (variety == 'LIMIT' && (price == null || price <= 0)) {
+      throw Exception('Limit price is required for LIMIT orders.');
+    }
+    if (variety == 'SL') {
+      if (triggerPrice == null || triggerPrice <= 0) {
+        throw Exception('Trigger price is required for SL orders.');
+      }
+    }
+  }
+
+  /// Returns true if the current time is within NSE market hours (09:15–15:30 IST).
+  bool _isMarketHours(DateTime now) {
+    // Convert to IST (UTC+5:30)
+    final ist = now.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final openMinutes = 9 * 60 + 15; // 09:15
+    final closeMinutes = 15 * 60 + 30; // 15:30
+    final currentMinutes = ist.hour * 60 + ist.minute;
+    final isWeekday =
+        ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
+    return isWeekday &&
+        currentMinutes >= openMinutes &&
+        currentMinutes <= closeMinutes;
+  }
+
+  double _balance(Map<String, dynamic> data) {
+    final available = data['available_balance'];
+    final balance = data['balance'];
+    return _double(available ?? balance);
+  }
+
+  int _int(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v) ?? 0;
+    return 0;
+  }
+
+  double _double(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
+  }
+
+  double _safeDouble(double v) {
+    if (v.isNaN || v.isInfinite) return 0.0;
+    return v;
+  }
 
   Future<void> _logAudit({
     required String action,
@@ -946,7 +1662,7 @@ class TradingService {
       'adminId': adminId,
       'targetId': targetId,
       'metadata': metadata,
-      'timestamp': FieldValue.serverTimestamp(),
+      'timestamp': Timestamp.now(),
     });
   }
 }

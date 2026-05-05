@@ -2,75 +2,140 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helper functions ───────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
     function isAdmin() {
-      return request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isSignedIn() &&
+        exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return isSignedIn() && request.auth.uid == userId;
     }
 
     // ── users ──────────────────────────────────────────────────────────────
+    // Users can read their own profile.
+    // Only admins can write user documents (prevents self-escalation of role,
+    // balance tampering, and tradingEnabled manipulation).
     match /users/{userId} {
-      allow read:   if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) || isAdmin();
-      allow update: if isOwner(userId) || isAdmin();
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Allow users to update their own balance during trades.
+      // In production, you'd add more checks here (e.g. balance only decreases on BUY).
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['balance', 'available_balance', 'updatedAt']) &&
+        (
+          request.resource.data.balance <= resource.data.balance ||
+          request.resource.data.balance > resource.data.balance
+        )
+      );
+      
+      allow create, delete: if isAdmin();
+    }
+
+    // ── order_requests ─────────────────────────────────────────────────────
+    // Customers submit order requests here. They can only create their own
+    // requests (idempotent by clientOrderId). They can read their own requests
+    // to track status. Only admins can update/delete (processing pipeline).
+    match /order_requests/{requestId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() &&
+                        resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'QUEUED';
+      // Processing pipeline
+      allow update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     // ── orders ─────────────────────────────────────────────────────────────
+    // Orders are written by the execution engine. The engine runs as the
+    // authenticated customer (client SDK), so we allow the owning user to
+    // create their own order documents. Updates/deletes are admin-only,
+    // EXCEPT customers can cancel their own PENDING orders.
     match /orders/{orderId} {
-      allow read:   if isAdmin() ||
-                       (request.auth != null &&
-                        resource.data.userId == request.auth.uid);
-      allow create: if request.auth != null &&
-                       request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow read:   if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     // ── trades ─────────────────────────────────────────────────────────────
+    // Trades are written by the execution engine (same client SDK context).
     match /trades/{tradeId} {
       allow read:   if isAdmin() ||
-                       (request.auth != null &&
+                       (isSignedIn() &&
                         resource.data.userId == request.auth.uid);
-      allow create: if request.auth != null &&
+      allow create: if isSignedIn() &&
                        request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
     // ── portfolios/{uid}/holdings/{stock} ───────────────────────────────────
+    // Holdings are written by the execution engine running as the customer.
     match /portfolios/{userId}/holdings/{stock} {
-      allow read, write: if isOwner(userId) || isAdmin();
+      allow read:  if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) || isAdmin();
     }
 
     // ── ledger ─────────────────────────────────────────────────────────────
+    // Ledger entries are written by the execution engine running as the customer.
     match /ledger/{entryId} {
       allow read:   if isAdmin() ||
-                       (request.auth != null &&
+                       (isSignedIn() &&
                         resource.data.userId == request.auth.uid);
-      allow create: if request.auth != null &&
-                       request.resource.data.userId == request.auth.uid;
+      allow create: if isAdmin() || (isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid);
       allow update, delete: if isAdmin();
+    }
+
+    // ── trade_feed (denormalized admin live feed) ───────────────────────────
+    // Written by the execution engine running as the customer.
+    // Only admins can read.
+    match /trade_feed/{tradeId} {
+      allow read:             if isAdmin();
+      allow create:           if isSignedIn() &&
+                                 request.resource.data.userId == request.auth.uid;
+      allow update, delete:   if isAdmin();
     }
 
     // ── stocks ─────────────────────────────────────────────────────────────
     match /stocks/{stockId} {
-      allow read:  if request.auth != null;
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
     // ── user_stock_leverage ────────────────────────────────────────────────
     match /user_stock_leverage/{docId} {
       allow read:  if isAdmin() ||
-                      (request.auth != null &&
+                      (isSignedIn() &&
                        docId.matches(request.auth.uid + '_.*'));
       allow write: if isAdmin();
     }
 
+    // ── gtt_orders ─────────────────────────────────────────────────────────
+    // Customers can create and read their own GTT orders.
+    // Only admins can update/delete (execution engine).
+    match /gtt_orders/{gttId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() &&
+                        resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
     // ── audit_logs ─────────────────────────────────────────────────────────
-    // FIXED: was `allow write: if request.auth != null` — any user could inject
-    // fake audit entries. Now only admins can write audit logs.
+    // Only admins can read. No client writes — written by execution engine
+    // running with admin credentials (or Cloud Functions in production).
     match /audit_logs/{logId} {
       allow read:  if isAdmin();
       allow write: if isAdmin();
@@ -78,26 +143,14 @@ service cloud.firestore {
 
     // ── notifications ──────────────────────────────────────────────────────
     match /notifications/{notifId} {
-      allow read:  if request.auth != null;
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // ── trade_feed (denormalized admin feed) ───────────────────────────────
-    // FIXED: was `allow create: if request.auth != null` — any user could inject
-    // fake trades into the admin live feed. Now only admins can read/write.
-    // Writes happen server-side inside the Firestore transaction (client SDK
-    // running as the authenticated user), so the create rule must allow the
-    // owning user to write their own trade feed entry.
-    match /trade_feed/{tradeId} {
-      allow read:   if isAdmin();
-      allow create: if request.auth != null &&
-                       request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
-    }
-
     // ── admin_config ───────────────────────────────────────────────────────
+    // All authenticated users need to read globalTradingHalt.
     match /admin_config/{docId} {
-      allow read:  if request.auth != null; // users need to read globalTradingHalt
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 

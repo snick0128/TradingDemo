@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../app/app_scope.dart';
 import '../../theme.dart';
@@ -109,7 +111,7 @@ class _AdminShellState extends State<AdminShell> {
               width: 28,
               height: 28,
               decoration: BoxDecoration(
-                color: AppColors.danger.withValues(alpha: 0.15),
+                color: AppColors.danger.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: const Icon(
@@ -135,22 +137,14 @@ class _AdminShellState extends State<AdminShell> {
         actions: [
           IconButton(
             onPressed: () async {
-              final nav = Navigator.of(context);
-              final security = SecurityScope.of(context);
               final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
               if (appScope != null) {
                 await appScope.authService.logout();
-                if (!mounted) return;
-                appScope.notifier!.setUser(null);
+                if (mounted) {
+                  appScope.notifier!.setUser(null);
+                }
               }
-              security.killAllSessions();
-              if (nav.canPop()) {
-                nav.pop();
-              } else {
-                nav.pushReplacement(
-                  MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
-                );
-              }
+              if (context.mounted) context.go('/admin/login');
             },
             icon: const Icon(LucideIcons.logOut),
             tooltip: 'Exit Admin Mode',
@@ -194,7 +188,7 @@ class _AdminShellState extends State<AdminShell> {
               onDestinationSelected: (idx) =>
                   setState(() => _selectedIndex = idx),
               backgroundColor: AppColors.surface,
-              indicatorColor: AppColors.primary.withValues(alpha: 0.12),
+              indicatorColor: Colors.transparent,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               destinations: _destinations
                   .map(

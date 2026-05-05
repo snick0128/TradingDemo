@@ -107,7 +107,7 @@ class _NetWorthCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.3),
+            color: AppColors.primary.withOpacity(0.3),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -416,7 +416,7 @@ class _RiskMetricsCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surfaceAlt.withValues(alpha: 0.3),
+        color: AppColors.surfaceAlt.withOpacity(0.3),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Column(
@@ -601,9 +601,9 @@ class _PnlCalendarHeatmap extends StatelessWidget {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: intensity),
+                    color: color.withOpacity(intensity),
                     borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: color.withValues(alpha: 0.3)),
+                    border: Border.all(color: color.withOpacity(0.3)),
                   ),
                   child: Center(
                     child: Text(

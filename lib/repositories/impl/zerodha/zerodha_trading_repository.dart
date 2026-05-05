@@ -72,7 +72,7 @@ class ZerodhaTradingRepository implements TradingRepository {
     required int quantity,
     required OrderType type,
     OrderVariety variety = OrderVariety.market,
-    ProductType product = ProductType.cnc,
+    ProductType product = ProductType.nrml,
     OrderValidity validity = OrderValidity.day,
     double price = 0,
     double? triggerPrice,

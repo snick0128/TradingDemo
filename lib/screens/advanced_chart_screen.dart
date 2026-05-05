@@ -3,6 +3,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 import 'package:intl/intl.dart';
 
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
@@ -17,6 +19,7 @@ class AdvancedChartScreen extends StatefulWidget {
 }
 
 class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
+  final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   ChartType _chartType = ChartType.candles;
   ChartTimeframe _timeframe = ChartTimeframe.d1;
   ChartDateRange _dateRange = ChartDateRange.mo1;
@@ -35,8 +38,16 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
   // Compare overlay
   String? _compareSymbol;
   final _compareController = TextEditingController();
+  TradingChartSeries? _series;
+  TradingChartSeries? _compareSeries;
+  bool _loading = true;
+  String? _error;
 
-  int get _rangeIndex => _dateRange.index.clamp(0, 4);
+  @override
+  void initState() {
+    super.initState();
+    _loadSeries();
+  }
 
   @override
   void dispose() {
@@ -44,33 +55,119 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
     super.dispose();
   }
 
+  Future<void> _loadSeries() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final store = TradingScope.of(context);
+      final stock = store.stockBySymbol(widget.symbol);
+      final mainRows = await _api.getHistoricalData(
+        stock.symbol,
+        interval: _apiInterval(_timeframe),
+        from: _fmtApiDate(_fromForRange(DateTime.now().toUtc(), _dateRange)),
+        to: _fmtApiDate(DateTime.now().toUtc()),
+      );
+      TradingChartSeries? compare;
+      if (_compareSymbol != null) {
+        final cmpStock = store.stockBySymbol(_compareSymbol!);
+        final cmpRows = await _api.getHistoricalData(
+          cmpStock.symbol,
+          interval: _apiInterval(_timeframe),
+          from: _fmtApiDate(_fromForRange(DateTime.now().toUtc(), _dateRange)),
+          to: _fmtApiDate(DateTime.now().toUtc()),
+        );
+        compare = TradingChartService.fromRawCandles(
+          cmpRows,
+          fallbackPrice: cmpStock.currentPrice,
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _series = TradingChartService.fromRawCandles(
+          mainRows,
+          fallbackPrice: stock.currentPrice,
+        );
+        _compareSeries = compare;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  DateTime _fromForRange(DateTime nowUtc, ChartDateRange r) {
+    switch (r) {
+      case ChartDateRange.d1:
+        return nowUtc.subtract(const Duration(days: 1));
+      case ChartDateRange.d5:
+        return nowUtc.subtract(const Duration(days: 5));
+      case ChartDateRange.mo1:
+        return nowUtc.subtract(const Duration(days: 30));
+      case ChartDateRange.mo3:
+        return nowUtc.subtract(const Duration(days: 90));
+      case ChartDateRange.mo6:
+        return nowUtc.subtract(const Duration(days: 180));
+      case ChartDateRange.y1:
+        return nowUtc.subtract(const Duration(days: 365));
+      case ChartDateRange.y3:
+        return nowUtc.subtract(const Duration(days: 365 * 3));
+      case ChartDateRange.y5:
+        return nowUtc.subtract(const Duration(days: 365 * 5));
+      case ChartDateRange.max:
+        return nowUtc.subtract(const Duration(days: 365 * 10));
+    }
+  }
+
+  String _apiInterval(ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1:
+        return '1m';
+      case ChartTimeframe.m10:
+        return '15m';
+      case ChartTimeframe.m3:
+      case ChartTimeframe.m5:
+        return '5m';
+      case ChartTimeframe.m15:
+        return '15m';
+      case ChartTimeframe.m30:
+        return '30m';
+      case ChartTimeframe.h1:
+      case ChartTimeframe.h4:
+        return '1h';
+      case ChartTimeframe.d1:
+      case ChartTimeframe.w1:
+      case ChartTimeframe.mo1:
+        return '1d';
+    }
+  }
+
+  String _fmtApiDate(DateTime utc) {
+    final d = utc.toLocal();
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    final h = d.hour.toString().padLeft(2, '0');
+    final min = d.minute.toString().padLeft(2, '0');
+    return '${d.year}-$m-$day $h:$min';
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
     final stock = store.stockBySymbol(widget.symbol);
-    final series = TradingChartService.buildSeries(
-      symbol: stock.symbol,
-      basePrice: stock.currentPrice,
-      rangeIndex: _rangeIndex,
-      timeframe: _timeframe,
-      dateRange: _dateRange,
-    );
-
-    TradingChartSeries? compareSeries;
-    if (_compareSymbol != null) {
-      try {
-        final compareStock = store.stockBySymbol(_compareSymbol!);
-        compareSeries = TradingChartService.buildSeries(
-          symbol: compareStock.symbol,
-          basePrice: compareStock.currentPrice,
-          rangeIndex: _rangeIndex,
-          timeframe: _timeframe,
-          dateRange: _dateRange,
+    final series =
+        _series ??
+        TradingChartService.fromRawCandles(
+          const [],
+          fallbackPrice: stock.currentPrice,
         );
-      } catch (_) {
-        compareSeries = null;
-      }
-    }
+    final compareSeries = _compareSeries;
 
     final chartData = _chartType == ChartType.heikinAshi
         ? TradingChartService.toHeikinAshi(series.data)
@@ -109,6 +206,15 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       body: Column(
         children: [
           _buildToolbar(),
+          if (_loading) const LinearProgressIndicator(minHeight: 2),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                'Live chart unavailable: $_error',
+                style: const TextStyle(fontSize: 12, color: AppColors.danger),
+              ),
+            ),
           Expanded(child: _buildChart(chartData, series, compareSeries)),
         ],
       ),
@@ -164,7 +270,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: selected
-                    ? AppColors.primary.withValues(alpha: 0.15)
+                    ? AppColors.primary.withOpacity(0.15)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
@@ -217,6 +323,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         padding: const EdgeInsets.only(right: 4),
         child: _toolbarChip(labels[i], selected, () {
           setState(() => _timeframe = values[i]);
+          _loadSeries();
         }),
       );
     });
@@ -241,6 +348,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         padding: const EdgeInsets.only(right: 4),
         child: _toolbarChip(labels[i], selected, () {
           setState(() => _dateRange = values[i]);
+          _loadSeries();
         }),
       );
     });
@@ -254,7 +362,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.15)
+              ? AppColors.primary.withOpacity(0.15)
               : AppColors.surfaceAlt,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
@@ -299,7 +407,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         activationMode: ActivationMode.singleTap,
         tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
         lineType: TrackballLineType.vertical,
-        lineColor: AppColors.textSecondary.withValues(alpha: 0.5),
+        lineColor: AppColors.textSecondary.withOpacity(0.5),
         lineWidth: 1,
         tooltipSettings: const InteractiveTooltip(
           enable: true,
@@ -412,7 +520,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
                 (series.close >= series.open
                         ? AppColors.success
                         : AppColors.danger)
-                    .withValues(alpha: 0.1),
+                    .withOpacity(0.1),
             borderColor: series.close >= series.open
                 ? AppColors.success
                 : AppColors.danger,
@@ -466,7 +574,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         dataSource: upper,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withValues(alpha: 0.7),
+        color: Colors.purple.withOpacity(0.7),
         width: 1,
       ),
       LineSeries<(DateTime, double), DateTime>(
@@ -474,7 +582,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         dataSource: middle,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withValues(alpha: 0.4),
+        color: Colors.purple.withOpacity(0.4),
         width: 1,
         dashArray: const [4, 2],
       ),
@@ -483,7 +591,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         dataSource: lower,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withValues(alpha: 0.7),
+        color: Colors.purple.withOpacity(0.7),
         width: 1,
       ),
     ];
@@ -579,7 +687,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       label: Text(label),
       selected: active,
       onSelected: onChanged,
-      selectedColor: AppColors.primary.withValues(alpha: 0.15),
+      selectedColor: AppColors.primary.withOpacity(0.15),
       checkmarkColor: AppColors.primary,
       labelStyle: TextStyle(
         color: active ? AppColors.primary : AppColors.textSecondary,
@@ -685,6 +793,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
             onPressed: () {
               setState(() => _compareSymbol = null);
               _compareController.clear();
+              _loadSeries();
               Navigator.pop(context);
             },
             child: const Text('Clear'),
@@ -694,6 +803,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
               final sym = _compareController.text.trim().toUpperCase();
               if (sym.isNotEmpty) {
                 setState(() => _compareSymbol = sym);
+                _loadSeries();
               }
               Navigator.pop(context);
             },

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
@@ -44,8 +45,8 @@ class FundsScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: AppColors.danger.withValues(alpha: 0.1),
-        border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+        color: AppColors.danger.withOpacity(0.1),
+        border: Border.all(color: AppColors.danger.withOpacity(0.4)),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Row(
@@ -72,93 +73,187 @@ class FundsScreen extends StatelessWidget {
   }
 
   Widget _buildSummaryRow(BuildContext context, MarginBreakdown mb) {
-    return Row(
-      children: [
-        _summaryItem(context, 'Available Cash', mb.availableCash, isHero: true),
-        const SizedBox(width: 32),
-        _summaryItem(context, 'Margin Used', mb.marginUsed),
-        const SizedBox(width: 32),
-        _summaryItem(context, 'Margin Available', mb.marginAvailable),
-      ],
-    );
-  }
-
-  Widget _summaryItem(
-    BuildContext context,
-    String label,
-    double value, {
-    bool isHero = false,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          '₹${value.toStringAsFixed(2)}',
-          style: AppTheme.tabular(
-            TextStyle(
-              fontSize: isHero ? 26 : 18,
-              fontWeight: isHero ? FontWeight.w700 : FontWeight.w500,
-              color: isHero ? AppColors.primary : AppColors.textPrimary,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBreakdownCard(BuildContext context, MarginBreakdown mb) {
-    return CustomCard(
-      child: Column(
+    // 2-column layout to prevent overflow
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Margin Breakdown',
-            style: Theme.of(context).textTheme.titleLarge,
+          // Left: Available cash (hero)
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Available cash',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF757575),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '₹${mb.availableCash.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0D0D0D),
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          InfoRow(
-            label: 'Available Cash',
-            value: '₹${mb.availableCash.toStringAsFixed(2)}',
-            valueColor: AppColors.success,
-          ),
-          InfoRow(
-            label: 'Margin Used',
-            value: '₹${mb.marginUsed.toStringAsFixed(2)}',
-            valueColor: AppColors.danger,
-          ),
-          InfoRow(
-            label: 'Margin Available',
-            value: '₹${mb.marginAvailable.toStringAsFixed(2)}',
-          ),
-          InfoRow(
-            label: 'Collateral Value',
-            value: '₹${mb.collateralValue.toStringAsFixed(2)}',
-          ),
-          InfoRow(
-            label: 'SPAN Margin',
-            value: '₹${mb.spanMargin.toStringAsFixed(2)}',
-          ),
-          InfoRow(
-            label: 'Exposure Margin',
-            value: '₹${mb.exposureMargin.toStringAsFixed(2)}',
-          ),
-          InfoRow(
-            label: 'Peak Margin',
-            value: '₹${mb.peakMargin.toStringAsFixed(2)}',
-          ),
-          const Divider(height: 24),
-          InfoRow(
-            label: 'Total Margin',
-            value: '₹${mb.totalMargin.toStringAsFixed(2)}',
-            valueColor: AppColors.primary,
+          const SizedBox(width: 16),
+          // Right: Margin used + Margin available stacked
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Margin used',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF757575)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '₹${mb.marginUsed.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF0D0D0D),
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Margin available',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF757575)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '₹${mb.marginAvailable.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF0D0D0D),
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
+
+  Widget _buildBreakdownCard(BuildContext context, MarginBreakdown mb) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Margin breakdown',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF0D0D0D),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE0E0E0)),
+          ),
+          child: Column(
+            children: [
+              _breakdownRow('Available Cash', mb.availableCash,
+                  valueColor: const Color(0xFF00C853)),
+              _divider(),
+              _breakdownRow('Margin Used', mb.marginUsed,
+                  valueColor: mb.marginUsed > 0
+                      ? const Color(0xFFD50000)
+                      : const Color(0xFF9E9E9E)),
+              _divider(),
+              _breakdownRow('Margin Available', mb.marginAvailable),
+              _divider(),
+              _breakdownRow('Collateral Value', mb.collateralValue),
+              _divider(),
+              _breakdownRow('SPAN Margin', mb.spanMargin),
+              _divider(),
+              _breakdownRow('Exposure Margin', mb.exposureMargin),
+              _divider(),
+              _breakdownRow('Peak Margin', mb.peakMargin),
+              Container(
+                height: 1,
+                color: const Color(0xFF0D0D0D).withOpacity(0.15),
+              ),
+              _breakdownRow(
+                'Total Margin',
+                mb.totalMargin,
+                labelStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF0D0D0D),
+                ),
+                valueStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1565C0),
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 80),
+      ],
+    );
+  }
+
+  Widget _breakdownRow(
+    String label,
+    double value, {
+    Color? valueColor,
+    TextStyle? labelStyle,
+    TextStyle? valueStyle,
+  }) {
+    final isZero = value == 0;
+    final effectiveColor = isZero
+        ? const Color(0xFF9E9E9E)
+        : (valueColor ?? const Color(0xFF0D0D0D));
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: labelStyle ??
+                const TextStyle(fontSize: 13, color: Color(0xFF757575)),
+          ),
+          Text(
+            '₹${value.toStringAsFixed(2)}',
+            style: valueStyle ??
+                TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: effectiveColor,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _divider() =>
+      const Divider(height: 1, thickness: 1, color: Color(0xFFF0F0F0));
 }

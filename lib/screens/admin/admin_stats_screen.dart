@@ -1,8 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
+import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
 import '../../theme.dart';
@@ -147,9 +147,9 @@ class _Kpi extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
+          color: color.withOpacity(0.08),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
+          border: Border.all(color: color.withOpacity(0.2)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,7 +243,7 @@ class _FeedRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(
         border: Border(
-            bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.5))),
+            bottom: BorderSide(color: AppColors.border.withOpacity(0.5))),
       ),
       child: Row(
         children: [
@@ -254,7 +254,7 @@ class _FeedRow extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
+              color: color.withOpacity(0.12),
               borderRadius: BorderRadius.circular(3),
             ),
             child: Text(isBuy ? 'BUY' : 'SELL',
@@ -340,10 +340,10 @@ class _OrderTableState extends State<_OrderTable> {
                     selected: _filterType == t,
                     onSelected: (_) => setState(() => _filterType = t),
                     selectedColor: t == 'BUY'
-                        ? AppColors.success.withValues(alpha: 0.2)
+                        ? AppColors.success.withOpacity(0.2)
                         : t == 'SELL'
-                            ? AppColors.danger.withValues(alpha: 0.2)
-                            : AppColors.primary.withValues(alpha: 0.2),
+                            ? AppColors.danger.withOpacity(0.2)
+                            : AppColors.primary.withOpacity(0.2),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8, vertical: 0),
                     visualDensity: VisualDensity.compact,
@@ -454,7 +454,7 @@ class _OrderRow extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border(
             bottom: BorderSide(
-                color: AppColors.border.withValues(alpha: 0.5))),
+                color: AppColors.border.withOpacity(0.5))),
       ),
       child: Row(
         children: [
@@ -481,7 +481,7 @@ class _OrderRow extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
               decoration: BoxDecoration(
-                color: typeColor.withValues(alpha: 0.12),
+                color: typeColor.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(3),
               ),
               child: Text(
@@ -519,8 +519,8 @@ class _OrderRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: isExecuted
-                    ? AppColors.success.withValues(alpha: 0.1)
-                    : AppColors.danger.withValues(alpha: 0.1),
+                    ? AppColors.success.withOpacity(0.1)
+                    : AppColors.danger.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(3),
               ),
               child: Text(
@@ -629,9 +629,9 @@ class _AnomalyPanel extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 6),
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
+            color: color.withOpacity(0.08),
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: color.withValues(alpha: 0.3)),
+            border: Border.all(color: color.withOpacity(0.3)),
           ),
           child: Row(
             children: [
@@ -659,7 +659,7 @@ class _AnomalyPanel extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
+                  color: color.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(3),
                 ),
                 child: Text(a.severity,

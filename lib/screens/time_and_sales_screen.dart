@@ -67,7 +67,7 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
       children: [
         // Header row
         Container(
-          color: AppColors.surfaceAlt.withValues(alpha: 0.5),
+          color: AppColors.surfaceAlt.withOpacity(0.5),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: const Row(
             children: [
@@ -125,7 +125,7 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                         : AppColors.danger;
                     return Container(
                       color: index == 0
-                          ? color.withValues(alpha: 0.05)
+                          ? color.withOpacity(0.05)
                           : Colors.transparent,
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),

@@ -85,7 +85,7 @@ class AdminFilterChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.15)
+              ? AppColors.primary.withOpacity(0.15)
               : AppColors.surfaceAlt,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(

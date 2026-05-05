@@ -46,6 +46,7 @@ class TradingChartSeries {
 }
 
 class TradingChartService {
+  @Deprecated('Synthetic generation removed. Use fromRawCandles instead.')
   static TradingChartSeries buildSeries({
     required String symbol,
     required double basePrice,
@@ -53,60 +54,72 @@ class TradingChartService {
     ChartTimeframe timeframe = ChartTimeframe.d1,
     ChartDateRange dateRange = ChartDateRange.mo1,
   }) {
-    final count = _countForRange(rangeIndex);
-    final minutesStep = _minutesStepForRange(rangeIndex);
-    final seed = _seed(symbol, rangeIndex);
-    final random = math.Random(seed);
+    throw UnsupportedError(
+      'Synthetic chart generation was removed. Use fromRawCandles().',
+    );
+  }
 
-    final closes = <double>[];
-    final highs = <double>[];
-    final lows = <double>[];
-    final opens = <double>[];
-    final volumes = <double>[];
+  static TradingChartSeries fromRawCandles(
+    List<Map<String, dynamic>> rawCandles, {
+    required double fallbackPrice,
+  }) {
+    final candles = <TradingCandle>[];
+    for (final row in rawCandles) {
+      final timeStr = row['time']?.toString();
+      final time = DateTime.tryParse(timeStr ?? '');
+      if (time == null) continue;
 
-    var previousClose = basePrice * (0.985 + random.nextDouble() * 0.03);
-    for (var i = 0; i < count; i++) {
-      final trend = (rangeIndex - 1.5) * 0.035;
-      final cyclical = math.sin((i + seed % 11) / (4.0 + rangeIndex)) * 0.55;
-      final noise = (random.nextDouble() - 0.5) * (1.2 + rangeIndex * 0.28);
-      final delta =
-          (trend + cyclical + noise) * math.max(1, previousClose * 0.0018);
-
-      final open = previousClose;
-      var close = (open + delta).clamp(1.0, double.infinity);
-      if (close == open) {
-        close += (random.nextDouble() - 0.5) * 0.4;
+      final open = (row['open'] as num?)?.toDouble();
+      final high = (row['high'] as num?)?.toDouble();
+      final low = (row['low'] as num?)?.toDouble();
+      final close = (row['close'] as num?)?.toDouble();
+      final volume = (row['volume'] as num?)?.toDouble() ?? 0;
+      if (open == null || high == null || low == null || close == null) {
+        continue;
       }
 
-      final wickUp = random.nextDouble() * (0.3 + rangeIndex * 0.1);
-      final wickDown = random.nextDouble() * (0.3 + rangeIndex * 0.1);
-      final high = math.max(open, close) + wickUp;
-      final low = math.max(0.1, math.min(open, close) - wickDown);
-      final volume =
-          (90000 + random.nextDouble() * 240000) * (1 + i / (count * 3));
-
-      opens.add(open);
-      closes.add(close);
-      highs.add(high);
-      lows.add(low);
-      volumes.add(volume);
-      previousClose = close;
-    }
-
-    final candles = <TradingCandle>[];
-    final now = DateTime.now();
-    final start = now.subtract(Duration(minutes: minutesStep * (count - 1)));
-
-    for (var i = 0; i < count; i++) {
-      final time = start.add(Duration(minutes: minutesStep * i));
       candles.add(
         TradingCandle(
           time: time,
-          open: opens[i],
-          high: highs[i],
-          low: lows[i],
-          close: closes[i],
-          volume: volumes[i],
+          open: open,
+          high: high,
+          low: low,
+          close: close,
+          volume: volume,
+        ),
+      );
+    }
+
+    if (candles.isEmpty) {
+      final px = fallbackPrice > 0 ? fallbackPrice : 1.0;
+      candles.add(
+        TradingCandle(
+          time: DateTime.now(),
+          open: px,
+          high: px,
+          low: px,
+          close: px,
+          volume: 0,
+        ),
+      );
+    }
+
+    final closes = candles.map((c) => c.close).toList(growable: false);
+    final highs = candles.map((c) => c.high).toList(growable: false);
+    final lows = candles.map((c) => c.low).toList(growable: false);
+    final volumes = candles.map((c) => c.volume).toList(growable: false);
+
+    final enriched = <TradingCandle>[];
+    for (var i = 0; i < candles.length; i++) {
+      final c = candles[i];
+      enriched.add(
+        TradingCandle(
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
           sma20: _sma(closes, i, 20),
           sma50: _sma(closes, i, 50),
         ),
@@ -116,21 +129,22 @@ class TradingChartService {
     final seriesHigh = highs.reduce(math.max);
     final seriesLow = lows.reduce(math.min);
     final totalVolume = volumes.fold<double>(0, (sum, item) => sum + item);
-
     var vwapNumerator = 0.0;
-    for (var i = 0; i < count; i++) {
-      final typicalPrice = (highs[i] + lows[i] + closes[i]) / 3;
-      vwapNumerator += typicalPrice * volumes[i];
+    for (var i = 0; i < enriched.length; i++) {
+      final tp = (enriched[i].high + enriched[i].low + enriched[i].close) / 3;
+      vwapNumerator += tp * enriched[i].volume;
     }
 
     return TradingChartSeries(
-      data: candles,
-      open: opens.first,
+      data: enriched,
+      open: enriched.first.open,
       high: seriesHigh,
       low: seriesLow,
-      close: closes.last,
+      close: enriched.last.close,
       volume: totalVolume,
-      vwap: totalVolume == 0 ? closes.last : vwapNumerator / totalVolume,
+      vwap: totalVolume == 0
+          ? enriched.last.close
+          : vwapNumerator / totalVolume,
       rsi14: _rsi(closes, 14),
     );
   }

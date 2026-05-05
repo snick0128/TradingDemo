@@ -74,9 +74,9 @@ class _SectorCell extends StatelessWidget {
     final magnitude = data.avgChange.abs().clamp(0.0, 5.0);
     final intensity = (magnitude / 5.0 * 0.7 + 0.15).clamp(0.0, 1.0);
     if (data.avgChange >= 0) {
-      return AppColors.success.withValues(alpha: intensity);
+      return AppColors.success.withOpacity(intensity);
     } else {
-      return AppColors.danger.withValues(alpha: intensity);
+      return AppColors.danger.withOpacity(intensity);
     }
   }
 
@@ -136,7 +136,7 @@ class _SectorCell extends StatelessWidget {
               '${data.stocks.length} stocks',
               style: TextStyle(
                 fontSize: 10,
-                color: textColor.withValues(alpha: 0.8),
+                color: textColor.withOpacity(0.8),
               ),
             ),
           ],

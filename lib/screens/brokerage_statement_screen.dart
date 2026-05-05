@@ -166,7 +166,7 @@ class BrokerageStatementScreen extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: (isBuy ? AppColors.success : AppColors.danger)
-                            .withValues(alpha: 0.1),
+                            .withOpacity(0.1),
                         borderRadius: BorderRadius.circular(3),
                       ),
                       child: Text(

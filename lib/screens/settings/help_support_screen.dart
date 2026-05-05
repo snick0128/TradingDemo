@@ -110,7 +110,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                          color: AppColors.surfaceAlt.withValues(alpha: 0.5),
+                          color: AppColors.surfaceAlt.withOpacity(0.5),
                           child: Text(
                             e.value.answer,
                             style: const TextStyle(

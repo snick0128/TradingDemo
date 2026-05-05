@@ -245,7 +245,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppColors.danger.withValues(alpha: 0.08),
+                color: AppColors.danger.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Row(
@@ -418,7 +418,7 @@ class _RegisterBrandingPanel extends StatelessWidget {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
+                      color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: const Icon(LucideIcons.candlestickChart,
@@ -445,7 +445,7 @@ class _RegisterBrandingPanel extends StatelessWidget {
               Text(
                 'Start trading Indian equities, F&O,\nand more with zero hassle.',
                 style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.8),
+                    color: Colors.white.withOpacity(0.8),
                     fontSize: 16,
                     height: 1.6),
               ),
@@ -469,7 +469,7 @@ class _RegisterBrandingPanel extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
+              color: Colors.white.withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(icon, color: Colors.white, size: 16),
@@ -510,7 +510,7 @@ class _MobileRegisterHeader extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: Colors.white.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(LucideIcons.candlestickChart,
@@ -533,7 +533,7 @@ class _MobileRegisterHeader extends StatelessWidget {
           const SizedBox(height: 6),
           Text('Start your trading journey today',
               style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.8), fontSize: 15)),
+                  color: Colors.white.withOpacity(0.8), fontSize: 15)),
         ],
       ),
     );

@@ -19,9 +19,9 @@ enum OrderStatus {
 
 enum OrderType { buy, sell }
 
-enum OrderVariety { market, limit, slLimit, slMarket, amo, iceberg }
+enum OrderVariety { market, limit, sl, amo, iceberg }
 
-enum ProductType { cnc, mis, nrml, mtf }
+enum ProductType { mis, nrml, overnight, mtf }
 
 enum OrderValidity { day, ioc, gtc, gtd }
 
@@ -73,6 +73,10 @@ class Stock {
   final double? lowerCircuit;
   final double? volume;
   final double? marketCap;
+  /// True when the price data is stale (market closed or no recent tick).
+  /// The price is still valid — it's the last known price — but the UI
+  /// can show a visual indicator (e.g. a clock icon or muted colour).
+  final bool isStale;
 
   Stock({
     required this.symbol,
@@ -91,6 +95,7 @@ class Stock {
     this.lowerCircuit,
     this.volume,
     this.marketCap,
+    this.isStale = false,
   });
 
   bool get isPositive => changePercentage >= 0;
@@ -134,7 +139,7 @@ class Order {
     required this.status,
     required this.dateTime,
     this.variety = OrderVariety.market,
-    this.product = ProductType.cnc,
+    this.product = ProductType.mis,
     this.validity = OrderValidity.day,
     this.validityDate,
     this.triggerPrice,

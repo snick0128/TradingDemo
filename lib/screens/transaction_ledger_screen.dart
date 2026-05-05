@@ -144,7 +144,7 @@ class _TransactionLedgerScreenState extends State<TransactionLedgerScreen> {
             height: 36,
             decoration: BoxDecoration(
               color: (isCredit ? AppColors.success : AppColors.danger)
-                  .withValues(alpha: 0.1),
+                  .withOpacity(0.1),
               borderRadius: BorderRadius.circular(18),
             ),
             child: Icon(

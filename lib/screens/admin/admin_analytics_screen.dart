@@ -74,7 +74,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
                       dataSource: dauData,
                       xValueMapper: (p, _) => p.date,
                       yValueMapper: (p, _) => p.value,
-                      color: AppColors.primary.withValues(alpha: 0.15),
+                      color: AppColors.primary.withOpacity(0.15),
                       borderColor: AppColors.primary,
                       borderWidth: 2,
                     ),
@@ -113,7 +113,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
                       dataSource: volData,
                       xValueMapper: (p, _) => p.date,
                       yValueMapper: (p, _) => p.value,
-                      color: AppColors.success.withValues(alpha: 0.7),
+                      color: AppColors.success.withOpacity(0.7),
                       borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(4),
                       ),

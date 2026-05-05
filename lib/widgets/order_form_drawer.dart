@@ -23,9 +23,10 @@ class OrderFormDrawer extends StatefulWidget {
 
 class _OrderFormDrawerState extends State<OrderFormDrawer> {
   late OrderType _side;
-  ProductType _product = ProductType.cnc;
+  ProductType _product = ProductType.mis;
   OrderVariety _variety = OrderVariety.market;
   bool _showAdvanced = false;
+  bool _submitting = false;
 
   int _qty = 1;
   final _priceController = TextEditingController();
@@ -49,16 +50,17 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   bool get _isBuy => _side == OrderType.buy;
   bool get _isMarket => _variety == OrderVariety.market;
   bool get _isPriceEnabled =>
-      _variety == OrderVariety.limit || _variety == OrderVariety.slLimit;
-  bool get _isTriggerEnabled =>
-      _variety == OrderVariety.slLimit || _variety == OrderVariety.slMarket;
+      _variety == OrderVariety.limit || _variety == OrderVariety.sl;
+  bool get _isTriggerEnabled => _variety == OrderVariety.sl;
 
-  double get _effectivePrice =>
-      _isPriceEnabled
-          ? (double.tryParse(_priceController.text) ?? widget.stock.currentPrice)
-          : widget.stock.currentPrice;
+  double get _effectivePrice => _isPriceEnabled
+      ? (double.tryParse(_priceController.text) ?? widget.stock.currentPrice)
+      : widget.stock.currentPrice;
 
   double get _requiredMargin {
+    // Exit orders (SELL) never require additional margin — the user is
+    // releasing an existing position, not opening a new one.
+    if (!_isBuy) return 0;
     final store = TradingScope.of(context);
     return store.requiredMargin(_qty, _effectivePrice, _product);
   }
@@ -71,14 +73,17 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     return brokerage + stt + gst;
   }
 
-  double get _totalCost => _qty * _effectivePrice + (_isBuy ? _estimatedCharges : -_estimatedCharges);
+  double get _totalCost =>
+      _qty * _effectivePrice +
+      (_isBuy ? _estimatedCharges : -_estimatedCharges);
 
   Color get _sideColor => _isBuy ? AppColors.success : AppColors.danger;
 
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final hasInsufficientMargin = _requiredMargin > store.balance;
+    // SELL orders never require margin — only BUY orders do.
+    final hasInsufficientMargin = _isBuy && _requiredMargin > store.balance;
 
     return Drawer(
       width: 380,
@@ -145,28 +150,27 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   // ─── Header ───────────────────────────────────────────────────────────────
 
   Widget _buildHeader(BuildContext context) {
+    final tagBg = _isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
+    final tagText = _isBuy ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
+
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 52, 16, 16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: const Border(bottom: BorderSide(color: AppColors.border)),
-      ),
+      padding: const EdgeInsets.fromLTRB(16, 48, 12, 14),
+      color: Colors.white,
       child: Row(
         children: [
-          // Colored side tag
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
-              color: _sideColor,
-              borderRadius: BorderRadius.circular(6),
+              color: tagBg,
+              borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
               _isBuy ? 'BUY' : 'SELL',
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: tagText,
                 fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
               ),
             ),
           ),
@@ -178,24 +182,36 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                 Text(
                   widget.stock.symbol,
                   style: const TextStyle(
-                    fontSize: 17,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
+                    color: Color(0xFF111111),
                   ),
                 ),
                 Text(
-                  'NSE  ₹${widget.stock.currentPrice.toStringAsFixed(2)}',
+                  'NSE  ·  ₹${widget.stock.currentPrice.toStringAsFixed(2)}',
                   style: const TextStyle(
                     fontSize: 12,
-                    color: AppColors.textSecondary,
+                    color: Color(0xFF666666),
                   ),
                 ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(LucideIcons.x, size: 20, color: AppColors.textSecondary),
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF5F5F5),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.close,
+                size: 16,
+                color: Color(0xFF666666),
+              ),
+            ),
           ),
         ],
       ),
@@ -205,91 +221,105 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   // ─── Product Row ──────────────────────────────────────────────────────────
 
   Widget _buildProductRow() {
+    const chips = [
+      (ProductType.mis, 'Intraday'),
+      (ProductType.nrml, 'Delivery'),
+      (ProductType.overnight, 'F&O'),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label('PRODUCT'),
         const SizedBox(height: 8),
         Row(
-          children: [
-            _productChip('CNC', ProductType.cnc),
-            const SizedBox(width: 8),
-            _productChip('MIS', ProductType.mis),
-            const SizedBox(width: 8),
-            _productChip('NRML', ProductType.nrml),
-          ],
+          children: chips.map((c) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _pill(
+                label: c.$2,
+                selected: _product == c.$1,
+                onTap: () => setState(() => _product = c.$1),
+              ),
+            );
+          }).toList(),
         ),
       ],
     );
   }
 
   Widget _productChip(String label, ProductType type) {
-    final selected = _product == type;
-    return GestureDetector(
+    // kept for compatibility — delegates to _pill
+    return _pill(
+      label: label,
+      selected: _product == type,
       onTap: () => setState(() => _product = type),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? _sideColor.withValues(alpha: 0.1) : AppColors.surfaceAlt,
-          border: Border.all(color: selected ? _sideColor : AppColors.border),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            color: selected ? _sideColor : AppColors.textSecondary,
-          ),
-        ),
-      ),
     );
   }
 
   // ─── Order Type Row ───────────────────────────────────────────────────────
 
   Widget _buildOrderTypeRow() {
-    final types = [
-      (OrderVariety.market, 'Market'),
-      (OrderVariety.limit, 'Limit'),
-      (OrderVariety.slLimit, 'SL-Limit'),
-      (OrderVariety.slMarket, 'SL-Market'),
+    const types = [
+      (OrderVariety.market, 'Instant'),
+      (OrderVariety.limit, 'Set Price'),
+      (OrderVariety.sl, 'Stop Loss'),
+      (OrderVariety.amo, 'After Market'),
     ];
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label('ORDER TYPE'),
         const SizedBox(height: 8),
-        Row(
-          children: types.map((t) {
-            final selected = _variety == t.$1;
-            return Expanded(
-              child: GestureDetector(
-                onTap: () => setState(() => _variety = t.$1),
-                child: Container(
-                  margin: EdgeInsets.only(right: t.$1 != OrderVariety.slMarket ? 6 : 0),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  decoration: BoxDecoration(
-                    color: selected ? _sideColor.withValues(alpha: 0.1) : AppColors.surfaceAlt,
-                    border: Border.all(color: selected ? _sideColor : AppColors.border),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    t.$2,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: selected ? _sideColor : AppColors.textSecondary,
-                    ),
-                  ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: types
+              .map(
+                (t) => _pill(
+                  label: t.$2,
+                  selected: _variety == t.$1,
+                  onTap: () => setState(() => _variety = t.$1),
                 ),
-              ),
-            );
-          }).toList(),
+              )
+              .toList(),
         ),
       ],
+    );
+  }
+
+  // ─── Shared pill ──────────────────────────────────────────────────────────
+
+  Widget _pill({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final selBg = _isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
+    final selText = _isBuy ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
+    final selBorder = _isBuy
+        ? const Color(0xFF81C784)
+        : const Color(0xFFEF9A9A);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? selBg : Colors.white,
+          border: Border.all(
+            color: selected ? selBorder : const Color(0xFFE0E0E0),
+          ),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? selText : const Color(0xFF666666),
+          ),
+        ),
+      ),
     );
   }
 
@@ -303,43 +333,50 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         const SizedBox(height: 8),
         Row(
           children: [
-            // Quick qty presets
-            ...[1, 5, 10, 50].map((q) => Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: GestureDetector(
-                onTap: () => setState(() => _qty = q),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _qty == q ? _sideColor.withValues(alpha: 0.1) : AppColors.surfaceAlt,
-                    border: Border.all(color: _qty == q ? _sideColor : AppColors.border),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '$q',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _qty == q ? _sideColor : AppColors.textSecondary,
+            ...[1, 5, 10, 50].map((q) {
+              final sel = _qty == q;
+              return Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: GestureDetector(
+                  onTap: () => setState(() => _qty = q),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: sel ? _sideColor.withOpacity(0.08) : Colors.white,
+                      border: Border.all(
+                        color: sel ? _sideColor : const Color(0xFFE0E0E0),
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$q',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: sel ? _sideColor : const Color(0xFF666666),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            )),
-            // Stepper
+              );
+            }),
             const Spacer(),
             _stepperButton(LucideIcons.minus, () {
               if (_qty > 1) setState(() => _qty--);
             }),
-            Container(
-              width: 48,
-              alignment: Alignment.center,
+            SizedBox(
+              width: 44,
               child: Text(
                 '$_qty',
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+                  color: Color(0xFF111111),
                 ),
               ),
             ),
@@ -354,14 +391,14 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 36,
-        height: 36,
+        width: 34,
+        height: 34,
         decoration: BoxDecoration(
-          color: AppColors.surfaceAlt,
-          border: Border.all(color: AppColors.border),
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE0E0E0)),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Icon(icon, size: 16, color: AppColors.textPrimary),
+        child: Icon(icon, size: 15, color: const Color(0xFF111111)),
       ),
     );
   }
@@ -375,23 +412,19 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         _label('PRICE'),
         const SizedBox(height: 8),
         if (_isMarket)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceAlt,
-              border: Border.all(color: AppColors.border),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(LucideIcons.zap, size: 14, color: AppColors.textSecondary),
-                const SizedBox(width: 8),
-                Text(
-                  'Market price will be used',
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          Row(
+            children: [
+              Icon(LucideIcons.zap, size: 13, color: _sideColor),
+              const SizedBox(width: 6),
+              Text(
+                'Best available market price',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: _sideColor,
+                  fontWeight: FontWeight.w500,
                 ),
-              ],
-            ),
+              ),
+            ],
           )
         else
           TextField(
@@ -401,9 +434,20 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
             decoration: InputDecoration(
               hintText: '0.00',
               prefixText: '₹ ',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.border)),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.border)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _sideColor, width: 1.5)),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: _sideColor, width: 1.5),
+              ),
             ),
           ),
       ],
@@ -424,9 +468,20 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
           decoration: InputDecoration(
             hintText: '0.00',
             prefixText: '₹ ',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.border)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.border)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _sideColor, width: 1.5)),
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: _sideColor, width: 1.5),
+            ),
           ),
         ),
       ],
@@ -442,16 +497,16 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         children: [
           Icon(
             _showAdvanced ? LucideIcons.chevronUp : LucideIcons.chevronDown,
-            size: 14,
-            color: AppColors.primary,
+            size: 13,
+            color: const Color(0xFF9E9E9E),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 5),
           Text(
-            _showAdvanced ? 'Hide advanced options' : 'Advanced options (AMO, Iceberg, Validity)',
+            _showAdvanced ? 'Hide advanced options' : 'More options',
             style: const TextStyle(
               fontSize: 12,
-              color: AppColors.primary,
-              fontWeight: FontWeight.w600,
+              color: Color(0xFF9E9E9E),
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -462,46 +517,58 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   // ─── Advanced Options ─────────────────────────────────────────────────────
 
   Widget _buildAdvancedOptions() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _label('VALIDITY'),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<OrderValidity>(
-            value: OrderValidity.day,
-            decoration: InputDecoration(
-              isDense: true,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label('VALIDITY'),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<OrderValidity>(
+          value: OrderValidity.day,
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
             ),
-            items: const [
-              DropdownMenuItem(value: OrderValidity.day, child: Text('Day')),
-              DropdownMenuItem(value: OrderValidity.ioc, child: Text('IOC')),
-              DropdownMenuItem(value: OrderValidity.gtc, child: Text('GTC')),
-            ],
-            onChanged: (_) {},
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              _advancedChip('AMO', _variety == OrderVariety.amo, () {
-                setState(() => _variety = _variety == OrderVariety.amo ? OrderVariety.market : OrderVariety.amo);
-              }),
-              const SizedBox(width: 8),
-              _advancedChip('Iceberg', _variety == OrderVariety.iceberg, () {
-                setState(() => _variety = _variety == OrderVariety.iceberg ? OrderVariety.market : OrderVariety.iceberg);
-              }),
-            ],
-          ),
-        ],
-      ),
+          items: const [
+            DropdownMenuItem(value: OrderValidity.day, child: Text('Day')),
+            DropdownMenuItem(value: OrderValidity.ioc, child: Text('IOC')),
+            DropdownMenuItem(value: OrderValidity.gtc, child: Text('GTC')),
+          ],
+          onChanged: (_) {},
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          children: [
+            _advancedChip('After Market', _variety == OrderVariety.amo, () {
+              setState(
+                () => _variety = _variety == OrderVariety.amo
+                    ? OrderVariety.market
+                    : OrderVariety.amo,
+              );
+            }),
+            _advancedChip('Iceberg', _variety == OrderVariety.iceberg, () {
+              setState(
+                () => _variety = _variety == OrderVariety.iceberg
+                    ? OrderVariety.market
+                    : OrderVariety.iceberg,
+              );
+            }),
+          ],
+        ),
+      ],
     );
   }
 
@@ -511,16 +578,18 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppColors.primary.withValues(alpha: 0.1) : AppColors.surface,
-          border: Border.all(color: selected ? AppColors.primary : AppColors.border),
-          borderRadius: BorderRadius.circular(6),
+          color: selected ? AppColors.primary.withOpacity(0.08) : Colors.white,
+          border: Border.all(
+            color: selected ? AppColors.primary : const Color(0xFFE0E0E0),
+          ),
+          borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: selected ? AppColors.primary : AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+            color: selected ? AppColors.primary : const Color(0xFF666666),
           ),
         ),
       ),
@@ -532,22 +601,33 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   Widget _buildCostBreakdown() {
     final tradeValue = _qty * _effectivePrice;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
       ),
       child: Column(
         children: [
-          _costRow('Trade value', '₹${tradeValue.toStringAsFixed(2)}', AppColors.textPrimary),
-          const SizedBox(height: 6),
-          _costRow('Est. charges', '₹${_estimatedCharges.toStringAsFixed(2)}', AppColors.textSecondary),
-          const Divider(height: 16),
+          _costRow(
+            'Trade value',
+            '₹${tradeValue.toStringAsFixed(2)}',
+            const Color(0xFF111111),
+          ),
+          const SizedBox(height: 8),
+          _costRow(
+            'Est. charges',
+            '₹${_estimatedCharges.toStringAsFixed(2)}',
+            const Color(0xFF666666),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Divider(height: 1, color: Color(0xFFF0F0F0)),
+          ),
           _costRow(
             _isBuy ? 'Total cost' : 'You receive',
             '₹${_totalCost.toStringAsFixed(2)}',
-            _isBuy ? AppColors.danger : AppColors.success,
+            _isBuy ? const Color(0xFFD50000) : const Color(0xFF00C853),
             bold: true,
           ),
         ],
@@ -555,16 +635,24 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     );
   }
 
-  Widget _costRow(String label, String value, Color valueColor, {bool bold = false}) {
+  Widget _costRow(
+    String label,
+    String value,
+    Color valueColor, {
+    bool bold = false,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
+        ),
         Text(
           value,
           style: TextStyle(
-            fontSize: bold ? 14 : 12,
-            fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+            fontSize: bold ? 15 : 13,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
             color: valueColor,
           ),
         ),
@@ -574,116 +662,146 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
 
   // ─── Sticky Bottom ────────────────────────────────────────────────────────
 
-  Widget _buildStickyBottom(BuildContext context, store, bool hasInsufficientMargin) {
+  Widget _buildStickyBottom(
+    BuildContext context,
+    store,
+    bool hasInsufficientMargin,
+  ) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: const Border(top: BorderSide(color: AppColors.border)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 12,
-            offset: const Offset(0, -4),
-          ),
-        ],
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        16 + MediaQuery.of(context).padding.bottom,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFF0F0F0))),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Margin row
+          // Margin row — inline, compact
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Required', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                  Text(
-                    '₹${_requiredMargin.toStringAsFixed(0)}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: hasInsufficientMargin ? AppColors.danger : AppColors.textPrimary,
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(fontFamily: 'Inter'),
+                  children: [
+                    const TextSpan(
+                      text: 'Required  ',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF9E9E9E)),
                     ),
-                  ),
-                ],
+                    TextSpan(
+                      text: '\u20b9${_requiredMargin.toStringAsFixed(0)}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: hasInsufficientMargin
+                            ? const Color(0xFFD50000)
+                            : const Color(0xFF111111),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Text('Available', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                  Text(
-                    '₹${store.balance.toStringAsFixed(0)}',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.success,
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(fontFamily: 'Inter'),
+                  children: [
+                    const TextSpan(
+                      text: 'Available  ',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF9E9E9E)),
                     ),
-                  ),
-                ],
+                    TextSpan(
+                      text: '\u20b9${store.balance.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF00C853),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
 
           if (hasInsufficientMargin) ...[
             const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.danger.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Row(
-                children: [
-                  Icon(LucideIcons.alertCircle, size: 13, color: AppColors.danger),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Insufficient margin. Add funds to proceed.',
-                      style: TextStyle(fontSize: 11, color: AppColors.danger, fontWeight: FontWeight.w500),
+            Row(
+              children: const [
+                Icon(Icons.info_outline, size: 13, color: Color(0xFFD50000)),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Insufficient funds. Please add money to proceed.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFFD50000),
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
 
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
-          // CTA button
+          // Primary CTA — full width, dominant
           SizedBox(
             width: double.infinity,
             height: 52,
             child: ElevatedButton(
-              onPressed: hasInsufficientMargin
+              onPressed: (hasInsufficientMargin || _submitting)
                   ? null
                   : () async => _submitOrder(context, store),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _sideColor,
-                disabledBackgroundColor: AppColors.border,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                disabledBackgroundColor: const Color(0xFFE0E0E0),
                 elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    _isBuy ? LucideIcons.trendingUp : LucideIcons.trendingDown,
-                    size: 18,
-                    color: Colors.white,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${_isBuy ? 'BUY' : 'SELL'} ${widget.stock.symbol} · $_qty qty',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 0.3,
+              child: _submitting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  \u00b7  $_qty qty',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: 0.2,
+                      ),
                     ),
-                  ),
-                ],
+            ),
+          ),
+
+          const SizedBox(height: 6),
+
+          // Cancel — low visual weight text button
+          SizedBox(
+            width: double.infinity,
+            height: 36,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF9E9E9E),
+                ),
               ),
             ),
           ),
@@ -692,9 +810,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     );
   }
 
-  // ─── Submit ───────────────────────────────────────────────────────────────
-
   Future<void> _submitOrder(BuildContext context, store) async {
+    if (_submitting) return;
+
     final price = _isPriceEnabled
         ? (double.tryParse(_priceController.text) ?? 0)
         : null;
@@ -702,11 +820,13 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         ? double.tryParse(_triggerController.text)
         : null;
 
+    final messenger = ScaffoldMessenger.of(context);
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+
     if (appScope != null) {
       final sessionUser = appScope.notifier?.user;
       if (sessionUser == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           const SnackBar(
             content: Text('Please login again. Session not found.'),
             backgroundColor: AppColors.danger,
@@ -715,59 +835,85 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         return;
       }
 
-      final clientOrderId = const Uuid().v4();
+      setState(() => _submitting = true);
 
       try {
-        String varietyStr;
-        switch (_variety) {
-          case OrderVariety.market: varietyStr = 'MARKET'; break;
-          case OrderVariety.limit: varietyStr = 'LIMIT'; break;
-          case OrderVariety.slLimit: varietyStr = 'SL'; break;
-          case OrderVariety.slMarket: varietyStr = 'SL-M'; break;
-          default: varietyStr = 'MARKET';
-        }
-
-        final orderId = await appScope.tradingService.placeOrder(
+        final clientOrderId = const Uuid().v4();
+        await appScope.tradingService.placeOrder(
           userId: sessionUser.uid,
           stock: widget.stock.symbol,
           qty: _qty,
           type: _side == OrderType.buy ? 'BUY' : 'SELL',
-          variety: varietyStr,
+          variety: _variety.name.toUpperCase(),
+          product: _product.name.toUpperCase(),
+          validity: 'DAY',
           price: price,
           triggerPrice: triggerPrice,
           clientOrderId: clientOrderId,
         );
 
-        if (!context.mounted) return;
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
+        if (context.mounted) Navigator.pop(context);
+
+        messenger.showSnackBar(
           SnackBar(
             content: Row(
               children: [
-                const Icon(LucideIcons.checkCircle, color: Colors.white, size: 16),
+                const Icon(
+                  LucideIcons.checkCircle,
+                  color: Colors.white,
+                  size: 16,
+                ),
                 const SizedBox(width: 8),
-                Text('Order processed · $orderId'),
+                const Expanded(child: Text('Order submitted successfully')),
               ],
             ),
             backgroundColor: _sideColor,
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            duration: const Duration(seconds: 4),
           ),
         );
       } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
+        if (mounted) setState(() => _submitting = false);
+        final raw = e.toString();
+        String msg = raw.replaceAll('Exception: ', '').split('\n').first.trim();
+
+        if (raw.contains("Insufficient balance")) {
+          msg = 'Insufficient balance for this trade.';
+        } else if (raw.contains("Not enough shares")) {
+          msg = 'Insufficient holdings to sell.';
+        }
+
+        messenger.showSnackBar(
           SnackBar(
-            content: Text('Order failed: $e'),
+            content: Row(
+              children: [
+                const Icon(
+                  LucideIcons.alertCircle,
+                  color: Colors.white,
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: Text(msg)),
+              ],
+            ),
             backgroundColor: AppColors.danger,
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            duration: const Duration(seconds: 6),
           ),
         );
+      } finally {
+        if (mounted) setState(() => _submitting = false);
       }
       return;
     }
 
+    // ── Mock / offline path ───────────────────────────────────────────────
     final result = store.placeOrder(
       symbol: widget.stock.symbol,
       quantity: _qty,
@@ -778,29 +924,50 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       triggerPrice: triggerPrice,
     );
 
+    if (context.mounted) Navigator.pop(context);
+
     if (result.success) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Row(
             children: [
-              Icon(LucideIcons.checkCircle, color: Colors.white, size: 16),
+              const Icon(
+                LucideIcons.checkCircle,
+                color: Colors.white,
+                size: 16,
+              ),
               const SizedBox(width: 8),
-              Text('Order placed · ${result.orderId}'),
+              Expanded(child: Text('Order placed · ${result.orderId}')),
             ],
           ),
           backgroundColor: _sideColor,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          duration: const Duration(seconds: 4),
         ),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
-          content: Text(result.errorMessage ?? 'Order failed'),
+          content: Row(
+            children: [
+              const Icon(
+                LucideIcons.alertCircle,
+                color: Colors.white,
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: Text(result.errorMessage ?? 'Order failed')),
+            ],
+          ),
           backgroundColor: AppColors.danger,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          duration: const Duration(seconds: 6),
         ),
       );
     }
@@ -810,8 +977,8 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     text,
     style: const TextStyle(
       fontSize: 10,
-      fontWeight: FontWeight.w700,
-      color: AppColors.textSecondary,
+      fontWeight: FontWeight.w600,
+      color: Color(0xFF9E9E9E),
       letterSpacing: 0.8,
     ),
   );

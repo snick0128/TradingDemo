@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../../config/backend_config.dart';
+
 /// Central HTTP client for the Node.js paper trading backend.
 ///
 /// Base URL is configured via [BackendApiService.baseUrl].
@@ -13,8 +15,9 @@ class BackendApiService {
   BackendApiService({String? baseUrl})
       : baseUrl = baseUrl ?? _defaultBaseUrl;
 
-  /// Change this to your deployed backend URL when going to production.
-  static const String _defaultBaseUrl = 'http://localhost:3000';
+  /// Default base URL — reads from BackendConfig so it always matches the
+  /// configured environment (local or production).
+  static String get _defaultBaseUrl => BackendConfig.backendBaseUrl;
 
   final String baseUrl;
 

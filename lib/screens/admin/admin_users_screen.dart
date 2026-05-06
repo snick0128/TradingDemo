@@ -5,6 +5,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../theme.dart';
+import '../../widgets/app_dialog.dart';
 import 'admin_ui.dart';
 
 class AdminUsersScreen extends StatefulWidget {
@@ -140,42 +141,42 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   }
 
   void _openUserActions(BuildContext context, User user) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(LucideIcons.wallet),
-              title: const Text('Adjust Balance'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showAmountDialog(
-                  context,
-                  user,
-                  title: 'Adjust Balance',
-                  onSubmit: (amount) =>
-                      AdminScope.of(context).adjustUserBalance(user.id, amount),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(LucideIcons.gauge),
-              title: const Text('Adjust Margin Limit'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showAmountDialog(
-                  context,
-                  user,
-                  title: 'Adjust Margin Limit',
-                  onSubmit: (amount) =>
-                      AdminScope.of(context).adjustUserMargin(user.id, amount),
-                );
-              },
-            ),
-          ],
-        ),
+    AppBottomSheet.show(
+      context,
+      title: 'User Actions — ${user.clientId}',
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(LucideIcons.wallet),
+            title: const Text('Adjust Balance'),
+            contentPadding: EdgeInsets.zero,
+            onTap: () {
+              Navigator.pop(context);
+              _showAmountDialog(
+                context,
+                user,
+                title: 'Adjust Balance',
+                onSubmit: (amount) =>
+                    AdminScope.of(context).adjustUserBalance(user.id, amount),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(LucideIcons.gauge),
+            title: const Text('Adjust Margin Limit'),
+            contentPadding: EdgeInsets.zero,
+            onTap: () {
+              Navigator.pop(context);
+              _showAmountDialog(
+                context,
+                user,
+                title: 'Adjust Margin Limit',
+                onSubmit: (amount) =>
+                    AdminScope.of(context).adjustUserMargin(user.id, amount),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -186,49 +187,23 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     required String title,
     required void Function(double amount) onSubmit,
   }) {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('$title • ${user.clientId}'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Amount (+ add / - deduct)',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final amount = double.tryParse(controller.text.trim()) ?? 0;
-              if (amount == 0) return;
-              try {
-                onSubmit(amount);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Adjustment of ₹$amount applied successfully.'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Failed to apply adjustment: $e'),
-                    backgroundColor: AppColors.danger,
-                  ),
-                );
-              }
-              Navigator.pop(ctx);
-            },
-            child: const Text('Apply'),
-          ),
-        ],
-      ),
+    AppDialog.input(
+      context,
+      title: '$title',
+      message: 'User: ${user.clientId}  •  Use + to add, - to deduct',
+      hint: 'e.g. 5000 or -2000',
+      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+      confirmLabel: 'Apply',
+      onSubmit: (value) {
+        final amount = double.tryParse(value) ?? 0;
+        if (amount == 0) return;
+        try {
+          onSubmit(amount);
+          AppToast.success(context, 'Adjustment of ₹$amount applied successfully.');
+        } catch (e) {
+          AppToast.error(context, 'Failed to apply adjustment: $e');
+        }
+      },
     );
   }
 }

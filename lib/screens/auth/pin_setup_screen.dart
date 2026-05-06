@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../theme.dart';
 import '../../state/security_scope.dart';
-import '../main_shell.dart';
 
 class PinSetupScreen extends StatefulWidget {
   const PinSetupScreen({super.key});
@@ -41,7 +41,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     }
 
     SecurityScope.of(context).setPin(pin);
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainShellRoute()));
+    if (!mounted) return;
+    context.go('/app/dashboard');
   }
 
   @override

@@ -55,6 +55,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
               child: SizedBox(
                 height: 220,
                 child: SfCartesianChart(
+                  enableAxisAnimation: false,
                   plotAreaBorderWidth: 0,
                   primaryXAxis: DateTimeAxis(
                     majorGridLines: const MajorGridLines(width: 0),
@@ -77,6 +78,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
                       color: AppColors.primary.withOpacity(0.15),
                       borderColor: AppColors.primary,
                       borderWidth: 2,
+                      animationDuration: 0,
                     ),
                   ],
                 ),
@@ -94,6 +96,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
               child: SizedBox(
                 height: 220,
                 child: SfCartesianChart(
+                  enableAxisAnimation: false,
                   plotAreaBorderWidth: 0,
                   primaryXAxis: DateTimeAxis(
                     majorGridLines: const MajorGridLines(width: 0),
@@ -117,6 +120,7 @@ class AdminAnalyticsScreen extends StatelessWidget {
                       borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(4),
                       ),
+                      animationDuration: 0,
                     ),
                   ],
                 ),

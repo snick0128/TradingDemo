@@ -8,6 +8,7 @@ import '../main.dart';
 import '../state/security_scope.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
 import '../models/trading_models.dart';
 import 'settings_hub_screen.dart';
@@ -478,99 +479,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final emailController = TextEditingController(text: user.email);
     final store = TradingScope.of(context);
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    AppBottomSheet.show(
+      context,
+      title: 'Edit Profile',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: nameController,
+            decoration: const InputDecoration(labelText: 'Full Name'),
           ),
-          padding: EdgeInsets.fromLTRB(
-            16,
-            16,
-            16,
-            MediaQuery.of(context).viewInsets.bottom + 16,
+          const SizedBox(height: 12),
+          TextField(
+            controller: emailController,
+            decoration: const InputDecoration(labelText: 'Email'),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Edit Profile',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Full Name'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: emailController,
-                decoration: const InputDecoration(labelText: 'Email'),
-              ),
-              const SizedBox(height: 14),
-              ElevatedButton(
-                onPressed: () {
-                  final updated = user.copyWith(
-                    name: nameController.text.trim().isEmpty
-                        ? user.name
-                        : nameController.text.trim(),
-                    email: emailController.text.trim().isEmpty
-                        ? user.email
-                        : emailController.text.trim(),
-                  );
-                  store.updateUser(updated);
-                  Navigator.pop(context);
-                  _showMessage('Profile updated successfully.');
-                },
-                child: const Text('Save Changes'),
-              ),
-            ],
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () {
+              final updated = user.copyWith(
+                name: nameController.text.trim().isEmpty
+                    ? user.name
+                    : nameController.text.trim(),
+                email: emailController.text.trim().isEmpty
+                    ? user.email
+                    : emailController.text.trim(),
+              );
+              store.updateUser(updated);
+              Navigator.pop(context);
+              AppToast.success(context, 'Profile updated successfully.');
+            },
+            child: const Text('Save Changes'),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
   void _openKycSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    AppBottomSheet.show(
+      context,
+      title: 'Complete KYC',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Upload PAN and identity proof to unlock all trading features.',
           ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Complete KYC',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Upload PAN and identity proof to unlock all trading features.',
-              ),
-              const SizedBox(height: 14),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() => _panVerified = true);
-                  Navigator.pop(context);
-                  _showMessage('KYC marked as completed.');
-                },
-                child: const Text('Submit KYC'),
-              ),
-            ],
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () {
+              setState(() => _panVerified = true);
+              Navigator.pop(context);
+              AppToast.success(context, 'KYC marked as completed.');
+            },
+            child: const Text('Submit KYC'),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -579,164 +545,111 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final currentController = TextEditingController();
     final newController = TextEditingController();
     final confirmController = TextEditingController();
-    String error = '';
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    AppBottomSheet.show(
+      context,
+      title: 'Change App PIN',
+      child: StatefulBuilder(
+        builder: (ctx, setModalState) {
+          String error = '';
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: currentController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Current PIN',
+                  counterText: '',
+                ),
               ),
-              padding: EdgeInsets.fromLTRB(
-                16,
-                16,
-                16,
-                MediaQuery.of(context).viewInsets.bottom + 16,
+              const SizedBox(height: 10),
+              TextField(
+                controller: newController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: 'New PIN',
+                  counterText: '',
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Change App PIN',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: currentController,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    maxLength: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Current PIN',
-                      counterText: '',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: newController,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    maxLength: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'New PIN',
-                      counterText: '',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: confirmController,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    maxLength: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Confirm New PIN',
-                      counterText: '',
-                    ),
-                  ),
-                  if (error.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        error,
-                        style: const TextStyle(color: AppColors.danger),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    onPressed: () {
-                      final current = currentController.text.trim();
-                      final next = newController.text.trim();
-                      final confirm = confirmController.text.trim();
-
-                      if (next != confirm) {
-                        setModalState(
-                          () => error = 'New PIN and confirm PIN do not match.',
-                        );
-                        return;
-                      }
-
-                      final changed = security.changePin(
-                        currentPin: current,
-                        newPin: next,
-                      );
-                      if (!changed) {
-                        setModalState(
-                          () => error = 'Invalid PIN details. Use 4 digits.',
-                        );
-                        return;
-                      }
-
-                      Navigator.pop(context);
-                      _showMessage('App PIN changed successfully.');
-                    },
-                    child: const Text('Update PIN'),
-                  ),
-                ],
+              const SizedBox(height: 10),
+              TextField(
+                controller: confirmController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Confirm New PIN',
+                  counterText: '',
+                ),
               ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _confirmLogout() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Logout?'),
-        content: const Text(
-          'You will need to login again to continue trading.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () async {
-              Navigator.pop(context); // close dialog
-              try {
-                // Firebase logout
-                final appScope =
-                    context.dependOnInheritedWidgetOfExactType<AppScope>();
-                if (appScope != null) {
-                  await appScope.authService.logout();
-                  appScope.notifier?.setUser(null);
-                }
-                // Legacy security store logout
-                if (context.mounted) {
-                  SecurityScope.of(context).killAllSessions();
-                  context.go('/app/login');
-                }
-              } catch (_) {
-                // Even if Firebase logout fails, clear local session
-                if (context.mounted) {
-                  SecurityScope.of(context).killAllSessions();
-                  context.go('/app/login');
-                }
-              }
-            },
-            child: const Text(
-              'Logout',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
+              if (error.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    error,
+                    style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                  ),
+                ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  final current = currentController.text.trim();
+                  final next = newController.text.trim();
+                  final confirm = confirmController.text.trim();
+                  if (next != confirm) {
+                    setModalState(() => error = 'New PIN and confirm PIN do not match.');
+                    return;
+                  }
+                  final changed = security.changePin(currentPin: current, newPin: next);
+                  if (!changed) {
+                    setModalState(() => error = 'Invalid PIN details. Use 4 digits.');
+                    return;
+                  }
+                  Navigator.pop(ctx);
+                  AppToast.success(context, 'App PIN changed successfully.');
+                },
+                child: const Text('Update PIN'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
+  void _confirmLogout() {
+    AppDialog.destructive(
       context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+      title: 'Logout?',
+      message: 'You will need to login again to continue trading.',
+      confirmLabel: 'Logout',
+      onConfirm: () async {
+        try {
+          final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+          if (appScope != null) {
+            await appScope.authService.logout();
+            appScope.notifier?.setUser(null);
+          }
+          if (context.mounted) {
+            SecurityScope.of(context).killAllSessions();
+            context.go('/app/login');
+          }
+        } catch (_) {
+          if (context.mounted) {
+            SecurityScope.of(context).killAllSessions();
+            context.go('/app/login');
+          }
+        }
+      },
+    );
+  }
+
+  void _showMessage(String message) {
+    AppToast.info(context, message);
   }
 }

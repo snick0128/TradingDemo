@@ -5,6 +5,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
 
 class BasketOrdersScreen extends StatelessWidget {
@@ -54,40 +55,22 @@ class BasketOrdersScreen extends StatelessWidget {
   }
 
   void _showCreateBasketDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('New Basket'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(hintText: 'Basket name'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+    AppDialog.input(
+      context,
+      title: 'New Basket',
+      hint: 'Basket name',
+      confirmLabel: 'Create',
+      onSubmit: (name) {
+        final store = TradingScope.of(context);
+        store.createBasket(
+          BasketOrder(
+            id: 'BASKET-${DateTime.now().millisecondsSinceEpoch}',
+            name: name,
+            entries: [],
+            createdAt: DateTime.now(),
           ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              if (name.isEmpty) return;
-              final store = TradingScope.of(context);
-              store.createBasket(
-                BasketOrder(
-                  id: 'BASKET-${DateTime.now().millisecondsSinceEpoch}',
-                  name: name,
-                  entries: [],
-                  createdAt: DateTime.now(),
-                ),
-              );
-              Navigator.pop(ctx);
-            },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -224,30 +207,16 @@ class _BasketTile extends StatelessWidget {
     final store = TradingScope.of(context);
     final result = store.executeBasket(basket.id);
     if (result.success) {
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Basket Executed'),
-          content: Text(
-            'All orders were submitted successfully.\nReference: ${result.orderId ?? basket.id}',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
+      AppDialog.success(
+        context,
+        title: 'Basket Executed',
+        message: 'All orders were submitted successfully.\nReference: ${result.orderId ?? basket.id}',
+        closeLabel: 'Done',
       );
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(result.errorMessage ?? 'Execution failed'),
-        backgroundColor: AppColors.danger,
-      ),
-    );
+    AppToast.error(context, result.errorMessage ?? 'Execution failed');
   }
 }
 
@@ -487,12 +456,7 @@ class _AddEntryFormState extends State<_AddEntryForm> {
     final price = double.tryParse(_priceController.text);
 
     if (symbol.isEmpty || qty <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Symbol and quantity are required'),
-          backgroundColor: AppColors.danger,
-        ),
-      );
+      AppToast.error(context, 'Symbol and quantity are required');
       return;
     }
 
@@ -520,11 +484,6 @@ class _AddEntryFormState extends State<_AddEntryForm> {
     store.saveBasket(updatedBasket);
 
     Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Order added to basket'),
-        backgroundColor: AppColors.success,
-      ),
-    );
+    AppToast.success(context, 'Order added to basket');
   }
 }

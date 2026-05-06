@@ -510,6 +510,7 @@ class _BenchmarkComparisonChart extends StatelessWidget {
           SizedBox(
             height: 280,
             child: SfCartesianChart(
+              enableAxisAnimation: false,
               primaryXAxis: const DateTimeAxis(
                 majorGridLines: MajorGridLines(width: 0),
               ),
@@ -524,6 +525,7 @@ class _BenchmarkComparisonChart extends StatelessWidget {
                   yValueMapper: (_TimeSeriesData data, _) => data.value,
                   color: AppColors.primary,
                   width: 2,
+                  animationDuration: 0,
                 ),
                 LineSeries<_TimeSeriesData, DateTime>(
                   name: 'NIFTY 50',
@@ -533,6 +535,7 @@ class _BenchmarkComparisonChart extends StatelessWidget {
                   color: AppColors.textSecondary,
                   width: 2,
                   dashArray: const <double>[5, 5],
+                  animationDuration: 0,
                 ),
               ],
             ),

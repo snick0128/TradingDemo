@@ -3,6 +3,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../state/admin_scope.dart';
 import '../../theme.dart';
+import '../../widgets/app_dialog.dart';
 import '../../widgets/shared_widgets.dart';
 
 class RiskControlScreen extends StatefulWidget {
@@ -299,38 +300,21 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
   }
 
   void _confirmHaltToggle(bool newValue) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(newValue ? 'Halt All Trading?' : 'Resume Trading?'),
-        content: Text(newValue
-            ? 'This will immediately prevent all users from placing new orders. Are you sure?'
-            : 'This will allow users to place orders again.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              AdminScope.of(context).toggleGlobalTradingHalt(newValue);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(newValue
-                      ? 'Trading halted for all users.'
-                      : 'Trading resumed.'),
-                  backgroundColor:
-                      newValue ? AppColors.danger : AppColors.success,
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    newValue ? AppColors.danger : AppColors.success),
-            child: Text(newValue ? 'Halt Trading' : 'Resume'),
-          ),
-        ],
-      ),
+    AppDialog.warning(
+      context,
+      title: newValue ? 'Halt All Trading?' : 'Resume Trading?',
+      message: newValue
+          ? 'This will immediately prevent all users from placing new orders. Are you sure?'
+          : 'This will allow users to place orders again.',
+      confirmLabel: newValue ? 'Halt Trading' : 'Resume',
+      onConfirm: () {
+        AdminScope.of(context).toggleGlobalTradingHalt(newValue);
+        if (newValue) {
+          AppToast.warning(context, 'Trading halted for all users.');
+        } else {
+          AppToast.success(context, 'Trading resumed.');
+        }
+      },
     );
   }
 }

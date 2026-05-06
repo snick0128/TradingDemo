@@ -10,6 +10,13 @@ import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 
+// ─── Chart color constants ────────────────────────────────────────────────────
+const _kBullColor  = Color(0xFF00C853); // green
+const _kBearColor  = Color(0xFFD50000); // red
+const _kChartBg    = Color(0xFF0D1117); // near-black chart canvas
+const _kGridColor  = Color(0xFF1E2530); // subtle grid lines
+const _kAxisColor  = Color(0xFF4A5568); // axis labels
+
 class AdvancedChartScreen extends StatefulWidget {
   final String symbol;
   const AdvancedChartScreen({super.key, required this.symbol});
@@ -18,11 +25,18 @@ class AdvancedChartScreen extends StatefulWidget {
   State<AdvancedChartScreen> createState() => _AdvancedChartScreenState();
 }
 
-class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
+class _AdvancedChartScreenState extends State<AdvancedChartScreen>
+    with SingleTickerProviderStateMixin {
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   ChartType _chartType = ChartType.candles;
   ChartTimeframe _timeframe = ChartTimeframe.d1;
   ChartDateRange _dateRange = ChartDateRange.mo1;
+
+  // Animation
+  late AnimationController _fadeCtrl;
+  late Animation<double> _fadeAnim;
+  // Unique key forces AnimatedSwitcher to rebuild on data change
+  int _chartVersion = 0;
 
   // Active indicators
   bool _showEma = false;
@@ -46,11 +60,17 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
   @override
   void initState() {
     super.initState();
+    _fadeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _loadSeries();
   }
 
   @override
   void dispose() {
+    _fadeCtrl.dispose();
     _compareController.dispose();
     super.dispose();
   }
@@ -60,6 +80,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       _loading = true;
       _error = null;
     });
+    // Fade out current chart immediately for snappy feel
+    _fadeCtrl.reverse();
     try {
       final store = TradingScope.of(context);
       final stock = store.stockBySymbol(widget.symbol);
@@ -92,13 +114,17 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         );
         _compareSeries = compare;
         _loading = false;
+        _chartVersion++;
       });
+      // Fade in new chart
+      _fadeCtrl.forward();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+      _fadeCtrl.forward();
     }
   }
 
@@ -206,16 +232,37 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       body: Column(
         children: [
           _buildToolbar(),
-          if (_loading) const LinearProgressIndicator(minHeight: 2),
+          // Slim loading bar — doesn't shift layout
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            height: _loading ? 2 : 0,
+            child: _loading
+                ? LinearProgressIndicator(
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.primary.withOpacity(0.7),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(
                 'Live chart unavailable: $_error',
-                style: const TextStyle(fontSize: 12, color: AppColors.danger),
+                style: const TextStyle(fontSize: 11, color: AppColors.danger),
               ),
             ),
-          Expanded(child: _buildChart(chartData, series, compareSeries)),
+          Expanded(
+            child: Container(
+              color: _kChartBg,
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: _buildChart(chartData, series, compareSeries),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -264,7 +311,11 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         return Padding(
           padding: const EdgeInsets.only(right: 4),
           child: InkWell(
-            onTap: () => setState(() => _chartType = t.$1),
+            onTap: () {
+              if (_chartType == t.$1) return;
+              setState(() => _chartType = t.$1);
+              // Chart type change doesn't need a reload — data is the same
+            },
             borderRadius: BorderRadius.circular(6),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -294,27 +345,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
 
   List<Widget> _timeframeChips() {
     const labels = [
-      '1m',
-      '3m',
-      '5m',
-      '15m',
-      '30m',
-      '1H',
-      '4H',
-      '1D',
-      '1W',
-      '1M',
+      '1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M',
     ];
     const values = [
-      ChartTimeframe.m1,
-      ChartTimeframe.m3,
-      ChartTimeframe.m5,
-      ChartTimeframe.m15,
-      ChartTimeframe.m30,
-      ChartTimeframe.h1,
-      ChartTimeframe.h4,
-      ChartTimeframe.d1,
-      ChartTimeframe.w1,
+      ChartTimeframe.m1, ChartTimeframe.m3, ChartTimeframe.m5,
+      ChartTimeframe.m15, ChartTimeframe.m30, ChartTimeframe.h1,
+      ChartTimeframe.h4, ChartTimeframe.d1, ChartTimeframe.w1,
       ChartTimeframe.mo1,
     ];
     return List.generate(labels.length, (i) {
@@ -322,7 +358,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       return Padding(
         padding: const EdgeInsets.only(right: 4),
         child: _toolbarChip(labels[i], selected, () {
-          setState(() => _timeframe = values[i]);
+          if (_timeframe == values[i]) return;
+          setState(() => _timeframe = values[i]); // instant UI feedback
           _loadSeries();
         }),
       );
@@ -332,22 +369,17 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
   List<Widget> _dateRangeChips() {
     const labels = ['1D', '5D', '1M', '3M', '6M', '1Y', '3Y', '5Y', 'Max'];
     const values = [
-      ChartDateRange.d1,
-      ChartDateRange.d5,
-      ChartDateRange.mo1,
-      ChartDateRange.mo3,
-      ChartDateRange.mo6,
-      ChartDateRange.y1,
-      ChartDateRange.y3,
-      ChartDateRange.y5,
-      ChartDateRange.max,
+      ChartDateRange.d1, ChartDateRange.d5, ChartDateRange.mo1,
+      ChartDateRange.mo3, ChartDateRange.mo6, ChartDateRange.y1,
+      ChartDateRange.y3, ChartDateRange.y5, ChartDateRange.max,
     ];
     return List.generate(labels.length, (i) {
       final selected = _dateRange == values[i];
       return Padding(
         padding: const EdgeInsets.only(right: 4),
         child: _toolbarChip(labels[i], selected, () {
-          setState(() => _dateRange = values[i]);
+          if (_dateRange == values[i]) return;
+          setState(() => _dateRange = values[i]); // instant UI feedback
           _loadSeries();
         }),
       );
@@ -392,9 +424,16 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         ? TradingChartService.bollingerBands(closes, 20, 2.0)
         : null;
 
+    // Determine if overall trend is up for line/area color
+    final isUp = series.close >= series.open;
+
     return SfCartesianChart(
+      key: ValueKey(_chartVersion),
+      backgroundColor: _kChartBg,
+      plotAreaBackgroundColor: _kChartBg,
       plotAreaBorderWidth: 0,
-      margin: const EdgeInsets.all(8),
+      margin: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+      enableAxisAnimation: true,
       zoomPanBehavior: ZoomPanBehavior(
         enablePinching: true,
         enablePanning: true,
@@ -402,40 +441,64 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         enableMouseWheelZooming: true,
         zoomMode: ZoomMode.x,
       ),
+      crosshairBehavior: CrosshairBehavior(
+        enable: true,
+        activationMode: ActivationMode.singleTap,
+        lineType: CrosshairLineType.both,
+        lineColor: _kAxisColor,
+        lineWidth: 1,
+        lineDashArray: const [4, 4],
+      ),
       trackballBehavior: TrackballBehavior(
         enable: true,
         activationMode: ActivationMode.singleTap,
         tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
         lineType: TrackballLineType.vertical,
-        lineColor: AppColors.textSecondary.withOpacity(0.5),
+        lineColor: Colors.white.withOpacity(0.25),
         lineWidth: 1,
-        tooltipSettings: const InteractiveTooltip(
+        tooltipSettings: InteractiveTooltip(
           enable: true,
-          format: 'point.x : point.y',
+          color: const Color(0xFF1E2530),
+          borderColor: _kAxisColor,
+          borderWidth: 1,
+          textStyle: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontFamily: 'JetBrainsMono',
+          ),
         ),
       ),
       primaryXAxis: DateTimeAxis(
-        majorGridLines: const MajorGridLines(width: 0),
+        majorGridLines: const MajorGridLines(
+          color: _kGridColor,
+          width: 1,
+        ),
+        minorGridLines: const MinorGridLines(width: 0),
         axisLine: const AxisLine(width: 0),
         dateFormat: DateFormat.Hm(),
         intervalType: DateTimeIntervalType.auto,
         labelStyle: const TextStyle(
           fontSize: 10,
-          color: AppColors.textSecondary,
+          color: _kAxisColor,
+          fontFamily: 'JetBrainsMono',
         ),
+        majorTickLines: const MajorTickLines(size: 0),
       ),
       primaryYAxis: NumericAxis(
         opposedPosition: true,
         majorGridLines: const MajorGridLines(
-          color: AppColors.border,
-          width: 0.5,
+          color: _kGridColor,
+          width: 1,
         ),
+        minorGridLines: const MinorGridLines(width: 0),
         axisLine: const AxisLine(width: 0),
         numberFormat: NumberFormat.simpleCurrency(decimalDigits: 0, name: '₹'),
         labelStyle: const TextStyle(
           fontSize: 10,
-          color: AppColors.textSecondary,
+          color: _kAxisColor,
+          fontFamily: 'JetBrainsMono',
         ),
+        majorTickLines: const MajorTickLines(size: 0),
       ),
       series: <CartesianSeries>[
         ..._buildMainSeries(chartData, series),
@@ -450,6 +513,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
     List<TradingCandle> data,
     TradingChartSeries series,
   ) {
+    final isUp = series.close >= series.open;
+
     switch (_chartType) {
       case ChartType.candles:
       case ChartType.heikinAshi:
@@ -463,8 +528,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
             openValueMapper: (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
             enableSolidCandles: true,
-            bearColor: AppColors.danger,
-            bullColor: AppColors.success,
+            bearColor: _kBearColor,
+            bullColor: _kBullColor,
+            // Slim wicks, slightly wider bodies for premium look
+            width: 0.7,
+            animationDuration: 400,
+            animationDelay: 0,
           ),
         ];
       case ChartType.bar:
@@ -477,10 +546,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
             highValueMapper: (c, _) => c.high,
             openValueMapper: (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
-            enableSolidCandles: true,
-            bearColor: AppColors.danger,
-            bullColor: AppColors.success,
+            enableSolidCandles: false,
+            bearColor: _kBearColor,
+            bullColor: _kBullColor,
             width: 0.3,
+            animationDuration: 400,
+            animationDelay: 0,
           ),
         ];
       case ChartType.hollowCandle:
@@ -494,37 +565,46 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
             openValueMapper: (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
             enableSolidCandles: false,
-            bearColor: AppColors.danger,
-            bullColor: AppColors.success,
+            bearColor: _kBearColor,
+            bullColor: _kBullColor,
+            width: 0.7,
+            animationDuration: 400,
+            animationDelay: 0,
           ),
         ];
       case ChartType.line:
         return [
-          LineSeries<TradingCandle, DateTime>(
+          FastLineSeries<TradingCandle, DateTime>(
             dataSource: data,
             xValueMapper: (c, _) => c.time,
             yValueMapper: (c, _) => c.close,
-            color: series.close >= series.open
-                ? AppColors.success
-                : AppColors.danger,
-            width: 2,
+            color: isUp ? _kBullColor : _kBearColor,
+            width: 1.5,
+            animationDuration: 500,
+            animationDelay: 0,
           ),
         ];
       case ChartType.area:
+        final areaColor = isUp ? _kBullColor : _kBearColor;
         return [
           AreaSeries<TradingCandle, DateTime>(
             dataSource: data,
             xValueMapper: (c, _) => c.time,
             yValueMapper: (c, _) => c.close,
-            color:
-                (series.close >= series.open
-                        ? AppColors.success
-                        : AppColors.danger)
-                    .withOpacity(0.1),
-            borderColor: series.close >= series.open
-                ? AppColors.success
-                : AppColors.danger,
-            borderWidth: 2,
+            // Subtle gradient fill
+            color: areaColor.withOpacity(0.08),
+            borderColor: areaColor,
+            borderWidth: 1.5,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                areaColor.withOpacity(0.18),
+                areaColor.withOpacity(0.0),
+              ],
+            ),
+            animationDuration: 500,
+            animationDelay: 0,
           ),
         ];
     }
@@ -541,14 +621,14 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
       }
     }
     return [
-      LineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(DateTime, double), DateTime>(
         name: 'EMA 20',
         dataSource: emaData,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.orange,
-        width: 1.5,
-        dashArray: const [4, 2],
+        color: const Color(0xFFFFA726), // amber
+        width: 1.2,
+        animationDuration: 400,
       ),
     ];
   }
@@ -568,43 +648,48 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen> {
         lower.add((data[i].time, bb.$3!));
       }
     }
+    const bbColor = Color(0xFF9C27B0); // purple
     return [
-      LineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(DateTime, double), DateTime>(
         name: 'BB Upper',
         dataSource: upper,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withOpacity(0.7),
+        color: bbColor.withOpacity(0.8),
         width: 1,
+        animationDuration: 400,
       ),
-      LineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(DateTime, double), DateTime>(
         name: 'BB Middle',
         dataSource: middle,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withOpacity(0.4),
+        color: bbColor.withOpacity(0.4),
         width: 1,
-        dashArray: const [4, 2],
+        dashArray: const [4, 3],
+        animationDuration: 400,
       ),
-      LineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(DateTime, double), DateTime>(
         name: 'BB Lower',
         dataSource: lower,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: Colors.purple.withOpacity(0.7),
+        color: bbColor.withOpacity(0.8),
         width: 1,
+        animationDuration: 400,
       ),
     ];
   }
 
   CartesianSeries _buildCompareSeries(TradingChartSeries compareSeries) {
-    return LineSeries<TradingCandle, DateTime>(
+    return FastLineSeries<TradingCandle, DateTime>(
       name: _compareSymbol ?? 'Compare',
       dataSource: compareSeries.data,
       xValueMapper: (c, _) => c.time,
       yValueMapper: (c, _) => c.close,
-      color: Colors.amber,
-      width: 2,
+      color: const Color(0xFFFFD600), // yellow
+      width: 1.5,
+      animationDuration: 400,
     );
   }
 

@@ -6,6 +6,7 @@ import '../app/app_scope.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import 'app_dialog.dart';
 
 class OrderFormDrawer extends StatefulWidget {
   final Stock stock;
@@ -820,18 +821,12 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         ? double.tryParse(_triggerController.text)
         : null;
 
-    final messenger = ScaffoldMessenger.of(context);
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
 
     if (appScope != null) {
       final sessionUser = appScope.notifier?.user;
       if (sessionUser == null) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Please login again. Session not found.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        AppToast.error(context, 'Please login again. Session not found.');
         return;
       }
 
@@ -853,28 +848,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         );
 
         if (context.mounted) Navigator.pop(context);
-
-        messenger.showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(
-                  LucideIcons.checkCircle,
-                  color: Colors.white,
-                  size: 16,
-                ),
-                const SizedBox(width: 8),
-                const Expanded(child: Text('Order submitted successfully')),
-              ],
-            ),
-            backgroundColor: _sideColor,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        if (context.mounted) AppToast.success(context, 'Order submitted successfully');
       } catch (e) {
         if (mounted) setState(() => _submitting = false);
         final raw = e.toString();
@@ -886,27 +860,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
           msg = 'Insufficient holdings to sell.';
         }
 
-        messenger.showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(
-                  LucideIcons.alertCircle,
-                  color: Colors.white,
-                  size: 16,
-                ),
-                const SizedBox(width: 8),
-                Expanded(child: Text(msg)),
-              ],
-            ),
-            backgroundColor: AppColors.danger,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            duration: const Duration(seconds: 6),
-          ),
-        );
+        if (context.mounted) AppToast.error(context, msg);
       } finally {
         if (mounted) setState(() => _submitting = false);
       }
@@ -927,49 +881,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     if (context.mounted) Navigator.pop(context);
 
     if (result.success) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(
-                LucideIcons.checkCircle,
-                color: Colors.white,
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Order placed · ${result.orderId}')),
-            ],
-          ),
-          backgroundColor: _sideColor,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      if (context.mounted) AppToast.success(context, 'Order placed · ${result.orderId}');
     } else {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(
-                LucideIcons.alertCircle,
-                color: Colors.white,
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: Text(result.errorMessage ?? 'Order failed')),
-            ],
-          ),
-          backgroundColor: AppColors.danger,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          duration: const Duration(seconds: 6),
-        ),
-      );
+      if (context.mounted) AppToast.error(context, result.errorMessage ?? 'Order failed');
     }
   }
 

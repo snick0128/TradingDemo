@@ -223,6 +223,7 @@ class _OptionsChainView extends StatelessWidget {
             child: SizedBox(
               height: 200,
               child: SfCartesianChart(
+                enableAxisAnimation: false,
                 plotAreaBorderWidth: 0,
                 primaryXAxis: NumericAxis(
                   labelStyle: Theme.of(context).textTheme.bodySmall,
@@ -243,6 +244,7 @@ class _OptionsChainView extends StatelessWidget {
                     xValueMapper: (s, _) => s.strike,
                     yValueMapper: (s, _) => s.ce.oi,
                     color: AppColors.danger.withOpacity(0.7),
+                    animationDuration: 0,
                   ),
                   ColumnSeries<OptionStrike, double>(
                     name: 'PE OI',
@@ -250,6 +252,7 @@ class _OptionsChainView extends StatelessWidget {
                     xValueMapper: (s, _) => s.strike,
                     yValueMapper: (s, _) => s.pe.oi,
                     color: AppColors.success.withOpacity(0.7),
+                    animationDuration: 0,
                   ),
                 ],
               ),

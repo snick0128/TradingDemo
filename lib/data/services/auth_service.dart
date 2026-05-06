@@ -50,14 +50,15 @@ class AuthService {
     if (firebaseUser == null) throw Exception('Google sign-in failed.');
 
     // Check if user doc exists; create it on first sign-in
-    final doc = await _firestore.getDocument('users/${firebaseUser.uid}');
+    final doc = await _firestore.raw.doc('users/${firebaseUser.uid}').get();
     if (!doc.exists) {
-      await _firestore.setDocument('users/${firebaseUser.uid}', {
+      await _firestore.raw.doc('users/${firebaseUser.uid}').set({
         'uid': firebaseUser.uid,
         'name': firebaseUser.displayName ?? 'User',
         'email': firebaseUser.email ?? '',
         'role': expectedRole,
         'balance': 0.0,
+        'available_balance': 0.0,
         'tradingEnabled': true,
         'createdAt': Timestamp.now(),
       });
@@ -71,40 +72,110 @@ class AuthService {
     return profile;
   }
 
+  /// Register a new user. Steps:
+  /// 1. Create Firebase Auth account (this signs the user in automatically).
+  /// 2. Write Firestore doc — user is now authenticated so isOwner() passes.
   Future<AppUserProfile> registerUser({
     required String name,
     required String email,
     required String password,
   }) async {
-    if (email.trim().toLowerCase() == kPrimaryAdminEmail) {
+    final normalizedEmail = email.trim().toLowerCase();
+
+    if (normalizedEmail == kPrimaryAdminEmail) {
       throw Exception(
-        'This email is reserved for primary admin. Use another email.',
+        'This email is reserved for the admin. Use another email.',
       );
     }
 
-    final credential = await _auth.createUserWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
+    UserCredential credential;
+    try {
+      credential = await _auth.createUserWithEmailAndPassword(
+        email: normalizedEmail,
+        password: password,
+      );
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'email-already-in-use') {
+        // Auth account exists — sign in and ensure Firestore doc exists.
+        // This handles the case where a previous registration created the
+        // Auth account but the Firestore write failed.
+        try {
+          final signInCred = await _auth.signInWithEmailAndPassword(
+            email: normalizedEmail,
+            password: password,
+          );
+          final firebaseUser = signInCred.user;
+          if (firebaseUser == null) throw Exception('Sign-in failed.');
+
+          final existing = await _firestore.raw
+              .doc('users/${firebaseUser.uid}')
+              .get();
+
+          if (!existing.exists) {
+            // Doc missing — create it now. User is authenticated so rule passes.
+            await _firestore.raw.doc('users/${firebaseUser.uid}').set({
+              'uid': firebaseUser.uid,
+              'name': name,
+              'email': normalizedEmail,
+              'role': 'user',
+              'balance': 0.0,
+              'available_balance': 0.0,
+              'tradingEnabled': true,
+              'createdAt': Timestamp.now(),
+            });
+          }
+
+          return _loadProfile(firebaseUser);
+        } catch (_) {
+          throw Exception(
+            'An account with this email already exists. Please sign in instead.',
+          );
+        }
+      }
+      rethrow;
+    }
+
     final firebaseUser = credential.user;
     if (firebaseUser == null) throw Exception('Registration failed.');
 
-    // Write user document — include both balance field names so both
-    // the admin panel and execution engine can read it correctly.
-    await _firestore.setDocument('users/${firebaseUser.uid}', {
-      'uid': firebaseUser.uid,
-      'name': name,
-      'email': email,
-      'role': 'user',
-      'balance': 0.0,
-      'available_balance': 0.0,
-      'tradingEnabled': true,
-      'createdAt': Timestamp.now(),
-    });
+    // Force a token refresh so the Firestore SDK has a valid auth token
+    // before we attempt the write. On Flutter Web this is critical — the
+    // SDK may not have propagated the new auth state yet.
+    try {
+      await firebaseUser.getIdToken(true);
+    } catch (_) {
+      // Non-fatal — proceed anyway
+    }
+
+    // Small delay to ensure the Firestore SDK picks up the new auth state.
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // At this point Firebase Auth has signed the user in automatically.
+    // Write the Firestore doc — isOwner(userId) will pass because
+    // request.auth.uid == firebaseUser.uid.
+    try {
+      await _firestore.raw.doc('users/${firebaseUser.uid}').set({
+        'uid': firebaseUser.uid,
+        'name': name,
+        'email': normalizedEmail,
+        'role': 'user',
+        'balance': 0.0,
+        'available_balance': 0.0,
+        'tradingEnabled': true,
+        'createdAt': Timestamp.now(),
+      });
+    } catch (e) {
+      // Firestore write failed — roll back the Auth account so the user
+      // can try again cleanly with the same email.
+      try {
+        await firebaseUser.delete();
+      } catch (_) {}
+      throw Exception('Failed to create user profile. Please try again.');
+    }
 
     return AppUserProfile(
       uid: firebaseUser.uid,
-      email: email,
+      email: normalizedEmail,
       role: 'user',
       name: name,
       balance: 0.0,
@@ -181,12 +252,13 @@ class AuthService {
       throw Exception('Failed to create primary admin account.');
     }
 
-    await _firestore.setDocument('users/${firebaseUser.uid}', {
+    await _firestore.raw.doc('users/${firebaseUser.uid}').set({
       'uid': firebaseUser.uid,
       'name': 'Primary Admin',
       'email': kPrimaryAdminEmail,
       'role': 'admin',
       'balance': 0.0,
+      'available_balance': 0.0,
       'tradingEnabled': true,
       'createdAt': Timestamp.now(),
     });
@@ -195,7 +267,9 @@ class AuthService {
   }
 
   Future<AppUserProfile> _loadProfile(User firebaseUser) async {
-    final doc = await _firestore.getDocument('users/${firebaseUser.uid}')
+    final doc = await _firestore.raw
+        .doc('users/${firebaseUser.uid}')
+        .get()
         .timeout(const Duration(seconds: 8), onTimeout: () {
       throw Exception('Profile fetch timed out. Check your connection.');
     });
@@ -206,7 +280,9 @@ class AuthService {
       // Auto-create profile if missing (e.g. account created via Firebase Console)
       data = {
         'uid': firebaseUser.uid,
-        'name': firebaseUser.displayName ?? firebaseUser.email?.split('@').first ?? 'User',
+        'name': firebaseUser.displayName ??
+            firebaseUser.email?.split('@').first ??
+            'User',
         'email': firebaseUser.email ?? '',
         'role': 'user',
         'balance': 0.0,
@@ -214,7 +290,7 @@ class AuthService {
         'tradingEnabled': true,
         'createdAt': Timestamp.now(),
       };
-      await _firestore.setDocument('users/${firebaseUser.uid}', data);
+      await _firestore.raw.doc('users/${firebaseUser.uid}').set(data);
     } else {
       data = doc.data()!;
     }

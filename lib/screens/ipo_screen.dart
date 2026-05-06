@@ -3,11 +3,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:intl/intl.dart';
 
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../theme.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
-
-final List<IPO> _ipoFeed = <IPO>[];
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -22,11 +22,72 @@ class IPOScreen extends StatefulWidget {
 class _IPOScreenState extends State<IPOScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final _api = BackendApiService();
+
+  List<IPO> _ipoFeed = [];
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _loadIPOs();
+  }
+
+  Future<void> _loadIPOs() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final raw = await _api.getIPOs();
+      setState(() {
+        _ipoFeed = raw.map(_parseIPO).toList();
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  IPO _parseIPO(Map<String, dynamic> m) {
+    IPOStatus parseStatus(String s) {
+      switch (s) {
+        case 'upcoming':
+          return IPOStatus.upcoming;
+        case 'ongoing':
+          return IPOStatus.ongoing;
+        case 'closed':
+          return IPOStatus.closed;
+        case 'listed':
+        default:
+          return IPOStatus.listed;
+      }
+    }
+
+    return IPO(
+      id: m['id'] as String,
+      companyName: m['companyName'] as String,
+      priceMin: (m['priceMin'] as num).toDouble(),
+      priceMax: (m['priceMax'] as num).toDouble(),
+      openDate: DateTime.parse(m['openDate'] as String),
+      closeDate: DateTime.parse(m['closeDate'] as String),
+      listingDate: m['listingDate'] != null
+          ? DateTime.parse(m['listingDate'] as String)
+          : null,
+      status: parseStatus(m['status'] as String),
+      lotSize: (m['lotSize'] as num).toInt(),
+      listingPrice: m['listingPrice'] != null
+          ? (m['listingPrice'] as num).toDouble()
+          : null,
+      listingGain: m['listingGain'] != null
+          ? (m['listingGain'] as num).toDouble()
+          : null,
+    );
   }
 
   @override
@@ -37,57 +98,98 @@ class _IPOScreenState extends State<IPOScreen>
 
   @override
   Widget build(BuildContext context) {
-    final body = Column(
-      children: [
-        Container(
-          color: AppColors.surface,
-          child: TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(text: 'Upcoming'),
-              Tab(text: 'Ongoing'),
-              Tab(text: 'Closed / Listed'),
-            ],
-          ),
+    Widget body;
+
+    if (_loading) {
+      body = const Center(child: CircularProgressIndicator());
+    } else if (_error != null) {
+      body = Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(LucideIcons.wifiOff, color: AppColors.textSecondary, size: 40),
+            const SizedBox(height: 12),
+            Text(
+              'Failed to load IPOs',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _error!,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _loadIPOs,
+              icon: const Icon(LucideIcons.refreshCw, size: 16),
+              label: const Text('Retry'),
+            ),
+          ],
         ),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _IPOList(
-                ipos: _ipoFeed
-                    .where((i) => i.status == IPOStatus.upcoming)
-                    .toList(),
-                type: IPOStatus.upcoming,
-              ),
-              _IPOList(
-                ipos: _ipoFeed
-                    .where((i) => i.status == IPOStatus.ongoing)
-                    .toList(),
-                type: IPOStatus.ongoing,
-              ),
-              _IPOList(
-                ipos: _ipoFeed
-                    .where(
-                      (i) =>
-                          i.status == IPOStatus.closed ||
-                          i.status == IPOStatus.listed,
-                    )
-                    .toList(),
-                type: IPOStatus.listed,
-              ),
-            ],
+      );
+    } else {
+      body = Column(
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: TabBar(
+              controller: _tabController,
+              tabs: const [
+                Tab(text: 'Upcoming'),
+                Tab(text: 'Ongoing'),
+                Tab(text: 'Closed / Listed'),
+              ],
+            ),
           ),
-        ),
-      ],
-    );
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _IPOList(
+                  ipos: _ipoFeed
+                      .where((i) => i.status == IPOStatus.upcoming)
+                      .toList(),
+                  type: IPOStatus.upcoming,
+                ),
+                _IPOList(
+                  ipos: _ipoFeed
+                      .where((i) => i.status == IPOStatus.ongoing)
+                      .toList(),
+                  type: IPOStatus.ongoing,
+                ),
+                _IPOList(
+                  ipos: _ipoFeed
+                      .where(
+                        (i) =>
+                            i.status == IPOStatus.closed ||
+                            i.status == IPOStatus.listed,
+                      )
+                      .toList(),
+                  type: IPOStatus.listed,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
 
     if (!widget.showAppBar) {
       return Scaffold(body: body);
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('IPO')),
+      appBar: AppBar(
+        title: const Text('IPO'),
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.refreshCw),
+            tooltip: 'Refresh',
+            onPressed: _loadIPOs,
+          ),
+        ],
+      ),
       body: body,
     );
   }
@@ -259,81 +361,49 @@ class _IPOCard extends StatelessWidget {
     );
     String selectedUpi = 'user@okaxis';
 
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text('Apply for ${ipo.companyName}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Price Band: ₹${ipo.priceMin.toStringAsFixed(0)} – ₹${ipo.priceMax.toStringAsFixed(0)}',
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
-                ),
+    AppDialog.confirm(
+      context,
+      title: 'Apply for ${ipo.companyName}',
+      message: 'Price Band: ₹${ipo.priceMin.toStringAsFixed(0)} – ₹${ipo.priceMax.toStringAsFixed(0)}',
+      body: StatefulBuilder(
+        builder: (ctx, setDialogState) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: lotsController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Number of Lots',
+                hintText: '1',
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: lotsController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Number of Lots',
-                  hintText: '1',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: bidController,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'Bid Price',
-                  hintText: ipo.priceMax.toStringAsFixed(0),
-                ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: selectedUpi,
-                decoration: const InputDecoration(labelText: 'UPI ID'),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'user@okaxis',
-                    child: Text('user@okaxis'),
-                  ),
-                  DropdownMenuItem(value: 'user@ybl', child: Text('user@ybl')),
-                  DropdownMenuItem(
-                    value: 'user@paytm',
-                    child: Text('user@paytm'),
-                  ),
-                ],
-                onChanged: (v) => setDialogState(() => selectedUpi = v!),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
             ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Applied for ${ipo.companyName} via $selectedUpi',
-                    ),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              },
-              child: const Text('Submit Application'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: bidController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Bid Price',
+                hintText: ipo.priceMax.toStringAsFixed(0),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: selectedUpi,
+              decoration: const InputDecoration(labelText: 'UPI ID'),
+              items: const [
+                DropdownMenuItem(value: 'user@okaxis', child: Text('user@okaxis')),
+                DropdownMenuItem(value: 'user@ybl', child: Text('user@ybl')),
+                DropdownMenuItem(value: 'user@paytm', child: Text('user@paytm')),
+              ],
+              onChanged: (v) => setDialogState(() => selectedUpi = v!),
             ),
           ],
         ),
       ),
+      confirmLabel: 'Submit Application',
+      onConfirm: () {
+        AppToast.success(context, 'Applied for ${ipo.companyName} via $selectedUpi');
+      },
     );
   }
 }

@@ -8,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/backend_error_widget.dart';
 import '../widgets/order_form_drawer.dart';
 import '../widgets/shared_widgets.dart';
@@ -138,52 +139,32 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   Future<void> _showAddWatchlistDialog() async {
     if (_watchlists.length >= Watchlist.maxWatchlists) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Maximum 5 watchlists allowed.')),
-      );
+      AppToast.warning(context, 'Maximum 5 watchlists allowed.');
       return;
     }
 
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('New Watchlist'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Watchlist name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
-
-    if (name != null && name.isNotEmpty) {
-      setState(() {
-        _watchlists.add(
-          Watchlist(
-            id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
-            name: name,
-            symbols: const [],
-            order: _watchlists.length,
-          ),
-        );
-        _rebuildTabController();
-        // Jump to the new tab
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _tabController.animateTo(_watchlists.length - 1);
+    AppDialog.input(
+      context,
+      title: 'New Watchlist',
+      hint: 'Watchlist name',
+      confirmLabel: 'Create',
+      onSubmit: (name) {
+        setState(() {
+          _watchlists.add(
+            Watchlist(
+              id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
+              name: name,
+              symbols: const [],
+              order: _watchlists.length,
+            ),
+          );
+          _rebuildTabController();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _tabController.animateTo(_watchlists.length - 1);
+          });
         });
-      });
-    }
+      },
+    );
   }
 
   Future<void> _showImportExportDialog(int tabIndex) async {
@@ -191,65 +172,43 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     final json = jsonEncode({'name': wl.name, 'symbols': wl.symbols});
     final controller = TextEditingController(text: json);
 
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Import / Export — ${wl.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                hintText: 'JSON symbols array',
-                border: OutlineInputBorder(),
-              ),
+    AppDialog.confirm(
+      context,
+      title: 'Import / Export — ${wl.name}',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: controller,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              hintText: 'JSON symbols array',
+              border: OutlineInputBorder(),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: controller.text));
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      const SnackBar(content: Text('Copied to clipboard')),
-                    );
-                  },
-                  icon: const Icon(LucideIcons.copy, size: 14),
-                  label: const Text('Copy'),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
           ),
-          ElevatedButton(
+          const SizedBox(height: 8),
+          TextButton.icon(
             onPressed: () {
-              try {
-                final decoded =
-                    jsonDecode(controller.text) as Map<String, dynamic>;
-                final symbols = (decoded['symbols'] as List).cast<String>();
-                setState(() {
-                  _watchlists[tabIndex] = _watchlists[tabIndex].copyWith(
-                    symbols: symbols,
-                  );
-                });
-                Navigator.pop(ctx);
-              } catch (_) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('Invalid JSON format')),
-                );
-              }
+              Clipboard.setData(ClipboardData(text: controller.text));
+              AppToast.info(context, 'Copied to clipboard');
             },
-            child: const Text('Import'),
+            icon: const Icon(LucideIcons.copy, size: 14),
+            label: const Text('Copy'),
           ),
         ],
       ),
+      confirmLabel: 'Import',
+      onConfirm: () {
+        try {
+          final decoded = jsonDecode(controller.text) as Map<String, dynamic>;
+          final symbols = (decoded['symbols'] as List).cast<String>();
+          setState(() {
+            _watchlists[tabIndex] = _watchlists[tabIndex].copyWith(symbols: symbols);
+          });
+        } catch (_) {
+          AppToast.error(context, 'Invalid JSON format');
+        }
+      },
     );
   }
 
@@ -537,19 +496,11 @@ class _AddStockSheetState extends State<_AddStockSheet> {
                             ],
                           ),
                           onTap: alreadyAdded
-                              ? () => ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('${stock.symbol} already in watchlist'), behavior: SnackBarBehavior.floating),
-                                  )
+                              ? () => AppToast.info(context, '${stock.symbol} already in watchlist')
                               : () {
                                   widget.onAdd(stock.symbol);
                                   Navigator.pop(ctx);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('${stock.symbol} added to watchlist'),
-                                      behavior: SnackBarBehavior.floating,
-                                      backgroundColor: const Color(0xFF00C853),
-                                    ),
-                                  );
+                                  AppToast.success(context, '${stock.symbol} added to watchlist');
                                 },
                         );
                       },

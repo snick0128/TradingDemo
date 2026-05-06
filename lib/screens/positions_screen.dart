@@ -8,6 +8,7 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../theme.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
 
 class PositionsScreen extends StatefulWidget {
@@ -114,39 +115,24 @@ class _PositionsScreenState extends State<PositionsScreen> {
     final msg = result.success
         ? '${p.symbol} exited'
         : (result.errorMessage ?? 'Failed');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: result.success ? AppColors.success : AppColors.danger,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
+    if (result.success) {
+      AppToast.success(context, msg);
+    } else {
+      AppToast.error(context, msg);
+    }
   }
 
   void _squareOffAll(BuildContext context, TradingStore store) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Square Off All'),
-        content: const Text('Close all open positions at market price?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              for (final p in List<Position>.from(store.positions)) {
-                _squareOffPosition(context, store, p, p.quantity);
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            child: const Text('Square Off All'),
-          ),
-        ],
-      ),
+    AppDialog.destructive(
+      context,
+      title: 'Square Off All',
+      message: 'Close all open positions at market price?',
+      confirmLabel: 'Square Off All',
+      onConfirm: () {
+        for (final p in List<Position>.from(store.positions)) {
+          _squareOffPosition(context, store, p, p.quantity);
+        }
+      },
     );
   }
 
@@ -156,60 +142,29 @@ class _PositionsScreenState extends State<PositionsScreen> {
     Position p,
   ) {
     final ctrl = TextEditingController(text: '${p.quantity}');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Exit ${p.symbol}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Available: ${p.quantity} qty',
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.number,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Quantity to exit'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final qty = int.tryParse(ctrl.text) ?? 0;
-              if (qty <= 0 || qty > p.quantity) return;
-              Navigator.pop(ctx);
-              _squareOffPosition(context, store, p, qty);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            child: const Text('Exit'),
-          ),
-        ],
+    AppDialog.confirm(
+      context,
+      title: 'Exit ${p.symbol}',
+      message: 'Available: ${p.quantity} qty',
+      body: TextField(
+        controller: ctrl,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Quantity to exit'),
       ),
+      confirmLabel: 'Exit',
+      onConfirm: () {
+        final qty = int.tryParse(ctrl.text) ?? 0;
+        if (qty <= 0 || qty > p.quantity) return;
+        _squareOffPosition(context, store, p, qty);
+      },
     );
   }
 
   void _convertPosition(BuildContext context, TradingStore store, Position p) {
     final to = p.product == ProductType.mis ? ProductType.overnight : ProductType.mis;
     store.convertPositionProduct(p.symbol, p.product, to);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${p.symbol} → ${to.name.toUpperCase()}'),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
+    AppToast.info(context, '${p.symbol} → ${to.name.toUpperCase()}');
   }
 }
 

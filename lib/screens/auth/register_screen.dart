@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../app/app_scope.dart';
 import '../../theme.dart';
-import 'pin_setup_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -57,10 +57,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PinSetupScreen()),
-      );
+      context.go('/app/dashboard');
     } on Exception catch (e) {
       if (!mounted) return;
       final msg = e.toString().replaceFirst('Exception: ', '');
@@ -86,10 +83,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final profile = await appScope.authService.signInWithGoogle(expectedRole: 'user');
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PinSetupScreen()),
-      );
+      context.go('/app/dashboard');
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));

@@ -346,6 +346,7 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
           height: 220,
           child: use1DLine
               ? SfCartesianChart(
+                  enableAxisAnimation: false,
                   plotAreaBorderWidth: 0,
                   margin: EdgeInsets.zero,
                   primaryXAxis: DateTimeAxis(isVisible: false),
@@ -372,10 +373,12 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
                       color: chartColor.withOpacity(0.08),
                       borderColor: chartColor,
                       borderWidth: 2,
+                      animationDuration: 0,
                     ),
                   ],
                 )
               : SfCartesianChart(
+                  enableAxisAnimation: false,
                   plotAreaBorderWidth: 0,
                   margin: EdgeInsets.zero,
                   primaryXAxis: DateTimeAxis(
@@ -415,6 +418,7 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
                       enableSolidCandles: true,
                       bearColor: const Color(0xFFD50000),
                       bullColor: const Color(0xFF00C853),
+                      animationDuration: 0,
                     ),
                   ],
                 ),

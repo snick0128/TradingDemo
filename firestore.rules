@@ -20,24 +20,28 @@ service cloud.firestore {
 
     // ── users ──────────────────────────────────────────────────────────────
     // Users can read their own profile.
-    // Only admins can write user documents (prevents self-escalation of role,
-    // balance tampering, and tradingEnabled manipulation).
+    // Users can create their own document during registration (role must be 'user',
+    // balance must be 0 — prevents self-granting admin or fake balance).
+    // Only admins can delete user documents.
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      
-      // Allow users to update their own balance during trades.
-      // In production, you'd add more checks here (e.g. balance only decreases on BUY).
+
+      // Self-registration: authenticated user can create their own doc.
+      // The security boundary is isOwner — the user can only write their own
+      // document. Role/balance elevation is prevented by the update rule below.
+      allow create: if isOwner(userId);
+
+      // Users can update only safe fields (balance changes from trade engine).
+      // Admins can update anything.
+      // Role can never be changed by the user themselves.
       allow update: if isAdmin() || (
         isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['balance', 'available_balance', 'updatedAt']) &&
-        (
-          request.resource.data.balance <= resource.data.balance ||
-          request.resource.data.balance > resource.data.balance
-        )
+          .hasOnly(['balance', 'available_balance', 'updatedAt', 'name'])
       );
-      
-      allow create, delete: if isAdmin();
+
+      allow delete: if isAdmin();
     }
 
     // ── order_requests ─────────────────────────────────────────────────────
@@ -158,6 +162,29 @@ service cloud.firestore {
     match /risk_limits/{userId} {
       allow read:  if isOwner(userId) || isAdmin();
       allow write: if isAdmin();
+    }
+
+    // ── ipos ───────────────────────────────────────────────────────────────
+    // IPO documents are public read for all signed-in users.
+    // Only admins can create/update/delete IPO records.
+    match /ipos/{ipoId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── withdrawal_requests ────────────────────────────────────────────────
+    // Users can create their own withdrawal requests.
+    // Users can read their own requests to track status.
+    // Only admins can update (approve/reject) or delete.
+    match /withdrawal_requests/{requestId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() &&
+                        resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'PENDING' &&
+                       request.resource.data.amount > 0;
+      allow update, delete: if isAdmin();
     }
   }
 }

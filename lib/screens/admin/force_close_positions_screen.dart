@@ -3,6 +3,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../state/admin_scope.dart';
 import '../../theme.dart';
+import '../../widgets/app_dialog.dart';
 import '../../widgets/shared_widgets.dart';
 
 /// Mock position data for display purposes.
@@ -238,68 +239,30 @@ class _ForceClosePositionsScreenState
 
   void _confirmForceClose(
       String userId, String positionId, String stock) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Force Close Position?'),
-        content: Text(
-            'Close $stock position for this user? This action is logged and cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              AdminScope.of(context).forceClosePosition(userId, positionId);
-              setState(() =>
-                  _positions.removeWhere((p) => p.positionId == positionId));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('$stock position force-closed.'),
-                  backgroundColor: AppColors.warning,
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.danger),
-            child: const Text('Force Close'),
-          ),
-        ],
-      ),
+    AppDialog.destructive(
+      context,
+      title: 'Force Close Position?',
+      message: 'Close $stock position for this user? This action is logged and cannot be undone.',
+      confirmLabel: 'Force Close',
+      onConfirm: () {
+        AdminScope.of(context).forceClosePosition(userId, positionId);
+        setState(() => _positions.removeWhere((p) => p.positionId == positionId));
+        AppToast.warning(context, '$stock position force-closed.');
+      },
     );
   }
 
   void _confirmForceCloseAll(String userId, String userName) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Force Close All Positions?'),
-        content: Text(
-            'Close ALL open positions for $userName? This action is logged and cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              AdminScope.of(context).forceCloseAllPositions(userId);
-              setState(() =>
-                  _positions.removeWhere((p) => p.userId == userId));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('All positions for $userName force-closed.'),
-                  backgroundColor: AppColors.warning,
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.danger),
-            child: const Text('Close All'),
-          ),
-        ],
-      ),
+    AppDialog.destructive(
+      context,
+      title: 'Force Close All Positions?',
+      message: 'Close ALL open positions for $userName? This action is logged and cannot be undone.',
+      confirmLabel: 'Close All',
+      onConfirm: () {
+        AdminScope.of(context).forceCloseAllPositions(userId);
+        setState(() => _positions.removeWhere((p) => p.userId == userId));
+        AppToast.warning(context, 'All positions for $userName force-closed.');
+      },
     );
   }
 }

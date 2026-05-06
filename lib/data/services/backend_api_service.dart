@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 ///
 /// Base URL is configured via [BackendApiService.baseUrl].
 /// For local testing: http://localhost:3000
-/// For production:    https://your-backend.com
+/// For production:    https://paper-trading-backend-bnn7.onrender.com
 ///
 /// All methods return parsed Maps/Lists — callers convert to domain models.
 class BackendApiService {
@@ -204,6 +204,21 @@ class BackendApiService {
     String exchange = 'NSE',
   }) async {
     final res = await _get('/derivatives/quote?token=$token&exchange=$exchange');
+    return res['data'] as Map<String, dynamic>;
+  }
+
+  // ── IPO ─────────────────────────────────────────────────────────────────────
+
+  /// Returns all IPOs. Optionally filter by [status]: upcoming | ongoing | closed | listed.
+  Future<List<Map<String, dynamic>>> getIPOs({String? status}) async {
+    final path = status != null ? '/ipos?status=$status' : '/ipos';
+    final res = await _get(path);
+    return List<Map<String, dynamic>>.from(res['data'] as List);
+  }
+
+  /// Returns a single IPO by [id].
+  Future<Map<String, dynamic>> getIPOById(String id) async {
+    final res = await _get('/ipos/$id');
     return res['data'] as Map<String, dynamic>;
   }
 }

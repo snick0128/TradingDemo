@@ -14,7 +14,7 @@ import 'dart:math' as math;
 
 // ── Instrument model ──────────────────────────────────────────────────────────
 
-enum InstrumentSegment { eq, fut, ce, pe, comm, curr, etf, index, mf, bond }
+enum InstrumentSegment { eq, fut, ce, pe, comm, curr, etf, idx, mf, bond }
 
 class Instrument {
   final String symbol;       // e.g. RELIANCE, CRUDEOIL, NIFTY 50
@@ -48,7 +48,7 @@ class Instrument {
       case InstrumentSegment.comm:  return 'COMM';
       case InstrumentSegment.curr:  return 'CURR';
       case InstrumentSegment.etf:   return 'ETF';
-      case InstrumentSegment.index: return 'INDEX';
+      case InstrumentSegment.idx:   return 'INDEX';
       case InstrumentSegment.mf:    return 'MF';
       case InstrumentSegment.bond:  return 'BOND';
     }
@@ -77,11 +77,11 @@ final kInstrumentCatalog = <Instrument>[
   Instrument(symbol: 'ICICIBANK',  displayName: 'ICICIBANK',  name: 'ICICI Bank Ltd',                exchange: 'BSE', segment: InstrumentSegment.eq, aliases: [], popularityRank: 15),
   Instrument(symbol: 'SBIN',       displayName: 'SBIN',       name: 'State Bank of India',           exchange: 'BSE', segment: InstrumentSegment.eq, aliases: ['sbi'], popularityRank: 16),
   // ── Indices ──────────────────────────────────────────────────────────────────
-  Instrument(symbol: 'NIFTY 50',   displayName: 'NIFTY 50',   name: 'Nifty 50 Index',                exchange: 'NSE', segment: InstrumentSegment.index, aliases: ['nifty', 'nifty50', 'nf'], popularityRank: 1),
-  Instrument(symbol: 'BANKNIFTY',  displayName: 'BANKNIFTY',  name: 'Bank Nifty Index',              exchange: 'NSE', segment: InstrumentSegment.index, aliases: ['bnf', 'bank nifty', 'banknf'], popularityRank: 2),
-  Instrument(symbol: 'SENSEX',     displayName: 'SENSEX',     name: 'BSE Sensex',                    exchange: 'BSE', segment: InstrumentSegment.index, aliases: ['bse sensex', 'sensex30'], popularityRank: 3),
-  Instrument(symbol: 'FINNIFTY',   displayName: 'FINNIFTY',   name: 'Nifty Financial Services',      exchange: 'NSE', segment: InstrumentSegment.index, aliases: ['fin nifty', 'finnf'], popularityRank: 4),
-  Instrument(symbol: 'MIDCPNIFTY', displayName: 'MIDCPNIFTY', name: 'Nifty Midcap Select',           exchange: 'NSE', segment: InstrumentSegment.index, aliases: ['midcap nifty', 'midcp'], popularityRank: 5),
+  Instrument(symbol: 'NIFTY 50',   displayName: 'NIFTY 50',   name: 'Nifty 50 Index',                exchange: 'NSE', segment: InstrumentSegment.idx, aliases: ['nifty', 'nifty50', 'nf'], popularityRank: 1),
+  Instrument(symbol: 'BANKNIFTY',  displayName: 'BANKNIFTY',  name: 'Bank Nifty Index',              exchange: 'NSE', segment: InstrumentSegment.idx, aliases: ['bnf', 'bank nifty', 'banknf'], popularityRank: 2),
+  Instrument(symbol: 'SENSEX',     displayName: 'SENSEX',     name: 'BSE Sensex',                    exchange: 'BSE', segment: InstrumentSegment.idx, aliases: ['bse sensex', 'sensex30'], popularityRank: 3),
+  Instrument(symbol: 'FINNIFTY',   displayName: 'FINNIFTY',   name: 'Nifty Financial Services',      exchange: 'NSE', segment: InstrumentSegment.idx, aliases: ['fin nifty', 'finnf'], popularityRank: 4),
+  Instrument(symbol: 'MIDCPNIFTY', displayName: 'MIDCPNIFTY', name: 'Nifty Midcap Select',           exchange: 'NSE', segment: InstrumentSegment.idx, aliases: ['midcap nifty', 'midcp'], popularityRank: 5),
   // ── NSE F&O Futures ──────────────────────────────────────────────────────────
   Instrument(symbol: 'NIFTY FUT',      displayName: 'NIFTY FUT',      name: 'Nifty 50 Futures (Near)',    exchange: 'NFO', segment: InstrumentSegment.fut, aliases: ['nifty futures', 'nf fut'], popularityRank: 1),
   Instrument(symbol: 'BANKNIFTY FUT',  displayName: 'BANKNIFTY FUT',  name: 'Bank Nifty Futures (Near)',  exchange: 'NFO', segment: InstrumentSegment.fut, aliases: ['bnf fut', 'bank nifty fut'], popularityRank: 2),

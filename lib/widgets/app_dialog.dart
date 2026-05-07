@@ -18,6 +18,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../theme.dart';
+import 'global_toast.dart';
 
 // ─── Dialog Type ──────────────────────────────────────────────────────────────
 
@@ -754,8 +755,6 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
 //
 // Delegates to GlobalToast which inserts into the root Navigator overlay,
 // so toasts are always visible regardless of what's currently presented.
-
-import 'global_toast.dart';
 
 class AppToast {
   AppToast._();

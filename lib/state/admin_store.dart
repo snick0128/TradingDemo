@@ -97,6 +97,7 @@ class AdminStore extends ChangeNotifier {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _broadcastSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _stocksSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _riskLimitsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _stockLeverageSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _configSub;
 
   List<User> _users;
@@ -367,6 +368,49 @@ class AdminStore extends ChangeNotifier {
   double? getRiskLimit(String userId, String limitType) =>
       _riskLimits[userId]?[limitType];
 
+  // ── Per-stock leverage (platform-wide, not per-user) ──────────────────────
+  // Stored in Firestore: stock_leverage/{symbol} → { leverage: N, updatedBy, updatedAt }
+  // In-memory: _stockLeverage map
+
+  final Map<String, double> _stockLeverage = {};
+
+  /// Get the platform leverage for a symbol (null = use platform default/max).
+  double? getStockLeverage(String symbol) => _stockLeverage[symbol.toUpperCase()];
+
+  /// Set leverage for multiple symbols at once.
+  /// [leverages] map: symbol → leverage multiplier (e.g. 'GOLD' → 100.0)
+  /// Pass an empty map or omit a symbol to reset it to default.
+  void setStockLeverages(Map<String, double> leverages) {
+    // Update in-memory
+    _stockLeverage.clear();
+    _stockLeverage.addAll({
+      for (final e in leverages.entries)
+        e.key.toUpperCase(): e.value,
+    });
+    _logAction(
+      _currentAdminId,
+      'SET_STOCK_LEVERAGE',
+      leverages.entries.map((e) => '${e.key}=${e.value}x').join(', '),
+    );
+    notifyListeners();
+
+    if (_isFirebaseMode) {
+      // Write each symbol's leverage as a separate doc for granular reads
+      for (final entry in leverages.entries) {
+        final symbol = entry.key.toUpperCase();
+        _fireAndForget(
+          () => _firestoreService!.setDocument('stock_leverage/$symbol', {
+            'symbol': symbol,
+            'leverage': entry.value,
+            'updatedBy': _currentAdminId,
+            'updatedAt': Timestamp.now(),
+          }),
+          onError: (e) => _notifyError('Failed to set leverage for $symbol: $e'),
+        );
+      }
+    }
+  }
+
   /// Set per-segment leverage for a user.
   /// [segmentLeverages] is a map of segment key → leverage value,
   /// e.g. { 'mcxFutures': 500.0, 'nseFutures': 500.0, ... }
@@ -514,6 +558,20 @@ class AdminStore extends ChangeNotifier {
       notifyListeners();
     }, onError: (e, _) => _notifyError('Risk limits stream error: $e'));
 
+    // Per-stock leverage stream
+    _stockLeverageSub = firestoreService
+        .getCollectionStream('stock_leverage')
+        .listen((snapshot) {
+      _stockLeverage.clear();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final symbol = ((data['symbol'] as String?) ?? doc.id).toUpperCase();
+        final lev = (data['leverage'] as num?)?.toDouble();
+        if (lev != null && lev > 0) _stockLeverage[symbol] = lev;
+      }
+      notifyListeners();
+    }, onError: (e, _) => _notifyError('Stock leverage stream error: $e'));
+
     _configSub = firestoreService
         .raw
         .doc('admin_config/platform')
@@ -535,6 +593,7 @@ class AdminStore extends ChangeNotifier {
     _broadcastSub?.cancel();
     _stocksSub?.cancel();
     _riskLimitsSub?.cancel();
+    _stockLeverageSub?.cancel();
     _configSub?.cancel();
 
     _usersSub = null;
@@ -543,6 +602,7 @@ class AdminStore extends ChangeNotifier {
     _broadcastSub = null;
     _stocksSub = null;
     _riskLimitsSub = null;
+    _stockLeverageSub = null;
     _configSub = null;
     _streamsBound = false;
   }

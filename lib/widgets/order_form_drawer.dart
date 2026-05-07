@@ -514,6 +514,10 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         AppToast.error(context, 'Please login again.');
         return;
       }
+
+      // Capture navigator before async gap — context may be stale after await
+      final nav = Navigator.of(context);
+
       setState(() => _submitting = true);
       try {
         final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
@@ -523,7 +527,10 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
           qty: _qty,
           type: _isBuy ? 'BUY' : 'SELL',
         );
-        if (context.mounted) Navigator.pop(context);
+
+        // Dismiss the drawer first, then show toast above it
+        nav.pop();
+
         if (context.mounted) {
           final executed = result['executedPrice'] ?? result['price'];
           AppToast.success(
@@ -542,13 +549,13 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       } catch (e) {
         if (mounted) setState(() => _submitting = false);
         if (context.mounted) AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
-      } finally {
-        if (mounted) setState(() => _submitting = false);
       }
+      // No finally setState — widget is already popped on success
       return;
     }
 
     // Offline/mock path
+    final nav = Navigator.of(context);
     final result = store.placeOrder(
       symbol: widget.stock.symbol,
       quantity: _qty,
@@ -557,7 +564,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       product: _product,
       price: _isPriceEnabled ? _effectivePrice : null,
     );
-    if (context.mounted) Navigator.pop(context);
+    nav.pop();
     if (result.success) {
       if (context.mounted) AppToast.success(context, 'Order placed · ${result.orderId}');
     } else {

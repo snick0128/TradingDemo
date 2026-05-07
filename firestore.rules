@@ -102,6 +102,13 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── stock_leverage (platform-wide per-symbol leverage) ─────────────────
+    // Written by admin only. Read by all signed-in users (order engine needs it).
+    match /stock_leverage/{symbol} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // ── gtt_orders ─────────────────────────────────────────────────────────
     // GTT orders are still placed client-side (no backend route for them yet)
     match /gtt_orders/{gttId} {

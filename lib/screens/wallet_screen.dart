@@ -8,6 +8,8 @@ import 'transaction_ledger_screen.dart';
 import 'brokerage_statement_screen.dart';
 import 'brokerage_calculator_screen.dart';
 
+/// Clean wallet screen — single AppBar, no duplicate "Funds" heading inside.
+/// Tabs: Overview · Add · Withdraw · Ledger · Statement · Calculator
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
@@ -19,10 +21,19 @@ class _WalletScreenState extends State<WalletScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
+  static const _tabs = [
+    Tab(text: 'Overview'),
+    Tab(text: 'Add Funds'),
+    Tab(text: 'Withdraw'),
+    Tab(text: 'Ledger'),
+    Tab(text: 'Statement'),
+    Tab(text: 'Calculator'),
+  ];
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: _tabs.length, vsync: this);
   }
 
   @override
@@ -42,15 +53,10 @@ class _WalletScreenState extends State<WalletScreen>
           labelColor: AppColors.primary,
           unselectedLabelColor: AppColors.textSecondary,
           indicatorColor: AppColors.primary,
-          indicatorWeight: 3,
-          tabs: const [
-            Tab(text: 'Funds'),
-            Tab(text: 'Add Funds'),
-            Tab(text: 'Withdraw'),
-            Tab(text: 'Ledger'),
-            Tab(text: 'Statement'),
-            Tab(text: 'Calculator'),
-          ],
+          indicatorWeight: 2,
+          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          unselectedLabelStyle: const TextStyle(fontSize: 13),
+          tabs: _tabs,
         ),
       ),
       body: TabBarView(

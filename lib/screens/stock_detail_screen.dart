@@ -20,27 +20,36 @@ class StockDetailScreen extends StatefulWidget {
   State<StockDetailScreen> createState() => _StockDetailScreenState();
 }
 
-class _StockDetailScreenState extends State<StockDetailScreen> {
+class _StockDetailScreenState extends State<StockDetailScreen>
+    with SingleTickerProviderStateMixin {
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   int _selectedRange = 2;
-  bool _useCandleChart = false; // default: line/area chart
+  bool _useCandleChart = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   OrderType _pendingOrderSide = OrderType.buy;
-  late final TransformationController _chartTransformController;
   TradingChartSeries? _series;
+  TradingChartSeries? _prevSeries; // keep old data visible during load
   bool _loadingSeries = true;
   String? _seriesError;
+
+  // Fade controller for smooth timeframe transitions
+  late AnimationController _fadeCtrl;
+  late Animation<double> _fadeAnim;
 
   @override
   void initState() {
     super.initState();
-    _chartTransformController = TransformationController();
+    _fadeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _loadSeries();
   }
 
   @override
   void dispose() {
-    _chartTransformController.dispose();
+    _fadeCtrl.dispose();
     super.dispose();
   }
 
@@ -48,7 +57,11 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
     setState(() {
       _loadingSeries = true;
       _seriesError = null;
+      // Keep _prevSeries = _series so old chart stays visible
+      _prevSeries = _series;
     });
+    // Fade out gently
+    _fadeCtrl.reverse();
     try {
       final now = DateTime.now().toUtc();
       final from = _fromForRange(now, _selectedRange);
@@ -67,14 +80,17 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
           candles,
           fallbackPrice: stock.currentPrice,
         );
+        _prevSeries = null;
         _loadingSeries = false;
       });
+      _fadeCtrl.forward();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _seriesError = e.toString();
         _loadingSeries = false;
       });
+      _fadeCtrl.forward();
     }
   }
 
@@ -115,19 +131,18 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width >= 1060;
     final store = TradingScope.of(context);
     final stock = store.stockBySymbol(widget.symbol);
     final isPos = stock.changePercentage >= 0;
-    final series =
+    // Show previous series while loading new one (no blank flash)
+    final displaySeries =
         _series ??
+        _prevSeries ??
         TradingChartService.fromRawCandles(
           const [],
           fallbackPrice: stock.currentPrice,
         );
-    final chartColor = isPos
-        ? const Color(0xFF00C853)
-        : const Color(0xFFD50000);
+    final chartColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
 
     return Scaffold(
       key: _scaffoldKey,
@@ -139,38 +154,25 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Stock header ──────────────────────────────────────────────
             _buildStockHeader(context, stock),
-            // ── Chart ─────────────────────────────────────────────────────
-            _buildChartSection(context, series, chartColor, !_useCandleChart),
-            if (_loadingSeries)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
+            _buildChartSection(context, displaySeries, chartColor, !_useCandleChart),
+            // Error message only — no blue loading bar
             if (_seriesError != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 child: Text(
-                  'Live chart unavailable: $_seriesError',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFFD32F2F),
-                  ),
+                  'Chart unavailable',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFFD32F2F)),
                 ),
               ),
-            // ── Timeframe selector ────────────────────────────────────────
             _buildTimeframeRow(context),
             const SizedBox(height: 24),
-            // ── Market stats ──────────────────────────────────────────────
             _buildSectionHeader('Market stats'),
-            _buildStatsGrid(context, stock, series, isDesktop),
+            _buildStatsGrid(context, stock, displaySeries, MediaQuery.of(context).size.width >= 1060),
             const SizedBox(height: 24),
-            // ── Fundamentals ──────────────────────────────────────────────
             _buildSectionHeader('Fundamentals'),
             _buildFundamentalsGrid(context, stock),
             const SizedBox(height: 24),
-            // ── About ─────────────────────────────────────────────────────
             _buildAboutSection(context, stock),
             const SizedBox(height: 80),
           ],
@@ -344,85 +346,138 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
       children: [
         SizedBox(
           height: 220,
-          child: use1DLine
-              ? SfCartesianChart(
-                  enableAxisAnimation: false,
-                  plotAreaBorderWidth: 0,
-                  margin: EdgeInsets.zero,
-                  primaryXAxis: DateTimeAxis(isVisible: false),
-                  primaryYAxis: NumericAxis(
-                    opposedPosition: true,
-                    majorGridLines: const MajorGridLines(width: 0),
-                    axisLine: const AxisLine(width: 0),
-                    labelStyle: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF9E9E9E),
+          child: FadeTransition(
+            opacity: _loadingSeries && _prevSeries == null
+                ? const AlwaysStoppedAnimation(0.4)
+                : _fadeAnim,
+            child: use1DLine
+                ? SfCartesianChart(
+                    enableAxisAnimation: false,
+                    plotAreaBorderWidth: 0,
+                    margin: const EdgeInsets.only(right: 4),
+                    primaryXAxis: DateTimeAxis(isVisible: false),
+                    primaryYAxis: NumericAxis(
+                      opposedPosition: true,
+                      majorGridLines: const MajorGridLines(
+                        color: Color(0xFFF5F5F5),
+                        width: 0.8,
+                      ),
+                      axisLine: const AxisLine(width: 0),
+                      labelStyle: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF9E9E9E),
+                      ),
+                      majorTickLines: const MajorTickLines(size: 0),
                     ),
+                    trackballBehavior: TrackballBehavior(
+                      enable: true,
+                      activationMode: ActivationMode.singleTap,
+                      lineColor: chartColor.withOpacity(0.4),
+                      lineWidth: 1,
+                    ),
+                    series: <CartesianSeries>[
+                      AreaSeries<TradingCandle, DateTime>(
+                        dataSource: series.data,
+                        xValueMapper: (c, _) => c.time,
+                        yValueMapper: (c, _) => c.close,
+                        color: chartColor.withOpacity(0.07),
+                        borderColor: chartColor,
+                        borderWidth: 2,
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            chartColor.withOpacity(0.15),
+                            chartColor.withOpacity(0.0),
+                          ],
+                        ),
+                        animationDuration: 0,
+                      ),
+                    ],
+                  )
+                : SfCartesianChart(
+                    enableAxisAnimation: false,
+                    plotAreaBorderWidth: 0,
+                    margin: const EdgeInsets.only(right: 4),
+                    primaryXAxis: DateTimeAxis(
+                      majorGridLines: const MajorGridLines(
+                        color: Color(0xFFF5F5F5),
+                        width: 0.8,
+                      ),
+                      axisLine: const AxisLine(width: 0),
+                      labelStyle: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF9E9E9E),
+                      ),
+                      majorTickLines: const MajorTickLines(size: 0),
+                    ),
+                    primaryYAxis: NumericAxis(
+                      opposedPosition: true,
+                      majorGridLines: const MajorGridLines(
+                        color: Color(0xFFF5F5F5),
+                        width: 0.8,
+                      ),
+                      axisLine: const AxisLine(width: 0),
+                      labelStyle: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF9E9E9E),
+                      ),
+                      majorTickLines: const MajorTickLines(size: 0),
+                    ),
+                    trackballBehavior: TrackballBehavior(
+                      enable: true,
+                      activationMode: ActivationMode.singleTap,
+                      lineColor: const Color(0xFFBDBDBD),
+                      lineWidth: 1,
+                    ),
+                    zoomPanBehavior: ZoomPanBehavior(
+                      enablePinching: true,
+                      enablePanning: true,
+                      enableMouseWheelZooming: true,
+                      zoomMode: ZoomMode.x,
+                    ),
+                    series: <CartesianSeries>[
+                      CandleSeries<TradingCandle, DateTime>(
+                        dataSource: series.data,
+                        xValueMapper: (c, _) => c.time,
+                        lowValueMapper: (c, _) => c.low,
+                        highValueMapper: (c, _) => c.high,
+                        openValueMapper: (c, _) => c.open,
+                        closeValueMapper: (c, _) => c.close,
+                        enableSolidCandles: true,
+                        bearColor: const Color(0xFFE53935),
+                        bullColor: const Color(0xFF00C853),
+                        // Dynamic width: fewer candles = wider bodies
+                        width: series.data.length > 200 ? 0.5 : 0.7,
+                        animationDuration: 0,
+                      ),
+                    ],
                   ),
-                  trackballBehavior: TrackballBehavior(
-                    enable: true,
-                    activationMode: ActivationMode.singleTap,
-                    lineColor: chartColor.withOpacity(0.5),
-                    lineWidth: 1,
-                  ),
-                  series: <CartesianSeries>[
-                    AreaSeries<TradingCandle, DateTime>(
-                      dataSource: series.data,
-                      xValueMapper: (c, _) => c.time,
-                      yValueMapper: (c, _) => c.close,
-                      color: chartColor.withOpacity(0.08),
-                      borderColor: chartColor,
-                      borderWidth: 2,
-                      animationDuration: 0,
-                    ),
-                  ],
-                )
-              : SfCartesianChart(
-                  enableAxisAnimation: false,
-                  plotAreaBorderWidth: 0,
-                  margin: EdgeInsets.zero,
-                  primaryXAxis: DateTimeAxis(
-                    majorGridLines: const MajorGridLines(width: 0),
-                    axisLine: const AxisLine(width: 0),
-                    labelStyle: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF9E9E9E),
-                    ),
-                  ),
-                  primaryYAxis: NumericAxis(
-                    opposedPosition: true,
-                    majorGridLines: const MajorGridLines(
-                      color: Color(0xFFF5F5F5),
-                      width: 0.5,
-                    ),
-                    axisLine: const AxisLine(width: 0),
-                    labelStyle: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF9E9E9E),
-                    ),
-                  ),
-                  trackballBehavior: TrackballBehavior(
-                    enable: true,
-                    activationMode: ActivationMode.singleTap,
-                    lineColor: const Color(0xFF9E9E9E),
-                    lineWidth: 1,
-                  ),
-                  series: <CartesianSeries>[
-                    CandleSeries<TradingCandle, DateTime>(
-                      dataSource: series.data,
-                      xValueMapper: (c, _) => c.time,
-                      lowValueMapper: (c, _) => c.low,
-                      highValueMapper: (c, _) => c.high,
-                      openValueMapper: (c, _) => c.open,
-                      closeValueMapper: (c, _) => c.close,
-                      enableSolidCandles: true,
-                      bearColor: const Color(0xFFD50000),
-                      bullColor: const Color(0xFF00C853),
-                      animationDuration: 0,
-                    ),
-                  ],
-                ),
+          ),
         ),
+        // Loading shimmer overlay — subtle, no blue bar
+        if (_loadingSeries)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _loadingSeries ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [
+                        Colors.white.withOpacity(0.0),
+                        Colors.white.withOpacity(0.3),
+                        Colors.white.withOpacity(0.0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         // Expand icon
         Positioned(
           bottom: 8,
@@ -441,12 +496,15 @@ class _StockDetailScreenState extends State<StockDetailScreen> {
                 color: Colors.white,
                 shape: BoxShape.circle,
                 border: Border.all(color: const Color(0xFFE0E0E0)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-              child: const Icon(
-                Icons.open_in_full,
-                size: 16,
-                color: Color(0xFF757575),
-              ),
+              child: const Icon(Icons.open_in_full, size: 16, color: Color(0xFF757575)),
             ),
           ),
         ),

@@ -25,7 +25,6 @@ class FundsScreen extends StatelessWidget {
     final store = TradingScope.of(context);
     final mb = store.marginBreakdown;
 
-    // Calculate P&L values
     final unrealizedPnl = store.positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
     final realizedPnl = store.orders
         .where((o) => o.status == OrderStatus.executed && o.type == OrderType.sell)
@@ -34,48 +33,19 @@ class FundsScreen extends StatelessWidget {
 
     final body = Container(
       color: const Color(0xFFFAFAFA),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.only(left: 16, top: 20, bottom: 16),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(
-                bottom: BorderSide(color: Color(0xFFE0E0E0), width: 1),
-              ),
-            ),
-            child: Text(
-              'Funds',
-              style: GoogleFonts.inter(
-                fontSize: 20,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF0D0D0D),
-              ),
-            ),
-          ),
-          // Scrollable content
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 16),
-                  // Hero summary card
-                  _buildHeroCard(context, mb),
-                  const SizedBox(height: 16),
-                  // Margin breakdown section
-                  _buildBreakdownSection(context, mb),
-                  const SizedBox(height: 24),
-                  // Quick stats row
-                  _buildQuickStatsRow(context, todayPnl, realizedPnl, unrealizedPnl),
-                  const SizedBox(height: 80),
-                ],
-              ),
-            ),
-          ),
-        ],
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 16),
+            _buildHeroCard(context, mb),
+            const SizedBox(height: 16),
+            _buildBreakdownSection(context, mb),
+            const SizedBox(height: 24),
+            _buildQuickStatsRow(context, todayPnl, realizedPnl, unrealizedPnl),
+            const SizedBox(height: 80),
+          ],
+        ),
       ),
     );
 
@@ -101,11 +71,9 @@ class FundsScreen extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Top row
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Left: Available cash
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -119,56 +87,55 @@ class FundsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatCurrency(mb.availableCash),
-                      style: GoogleFonts.inter(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        fontFeatures: const [FontFeature.tabularFigures()],
+                    // FittedBox keeps the amount on one line regardless of value size
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _formatCurrency(mb.availableCash),
+                        style: GoogleFonts.inter(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-              // Right: Action buttons
-              Row(
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   _actionButton(
                     context,
                     label: 'Add Funds',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const AddFundsScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const AddFundsScreen()),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(height: 8),
                   _actionButton(
                     context,
                     label: 'Withdraw',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const WithdrawFundsScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const WithdrawFundsScreen()),
                     ),
                   ),
                 ],
               ),
             ],
           ),
-          // Divider
           Container(
             margin: const EdgeInsets.symmetric(vertical: 16),
             height: 1,
             color: Colors.white.withOpacity(0.2),
           ),
-          // Bottom row
           Row(
             children: [
-              // Left: Margin used
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -181,19 +148,22 @@ class FundsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatCurrency(mb.marginUsed),
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                        fontFeatures: const [FontFeature.tabularFigures()],
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _formatCurrency(mb.marginUsed),
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-              // Right: Margin available
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -206,13 +176,17 @@ class FundsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatCurrency(mb.marginAvailable),
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                        fontFeatures: const [FontFeature.tabularFigures()],
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        _formatCurrency(mb.marginAvailable),
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                   ],

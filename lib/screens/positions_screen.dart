@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../app/app_scope.dart';
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
@@ -99,12 +102,44 @@ class _PositionsScreenState extends State<PositionsScreen> {
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
-  void _squareOffPosition(
+  Future<void> _squareOffPosition(
     BuildContext context,
     TradingStore store,
     Position p,
     int qty,
-  ) {
+  ) async {
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+
+    if (appScope != null) {
+      final sessionUser = appScope.notifier?.user;
+      if (sessionUser == null) {
+        AppToast.error(context, 'Session expired. Please login again.');
+        return;
+      }
+      try {
+        final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        // Sell = exit a long position; Buy = exit a short position
+        final exitType = p.side == OrderType.buy ? 'SELL' : 'BUY';
+        await api.placeOrder(
+          userId: sessionUser.uid,
+          symbol: p.symbol,
+          qty: qty,
+          type: exitType,
+        );
+        if (context.mounted) {
+          AppToast.success(context, '${p.symbol} exited ($qty qty)');
+        }
+      } on BackendException catch (e) {
+        if (context.mounted) AppToast.error(context, e.message);
+      } catch (e) {
+        if (context.mounted) {
+          AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+        }
+      }
+      return;
+    }
+
+    // Offline/mock path
     final result = store.placeOrder(
       symbol: p.symbol,
       quantity: qty,
@@ -112,9 +147,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
       variety: OrderVariety.market,
       product: p.product,
     );
-    final msg = result.success
-        ? '${p.symbol} exited'
-        : (result.errorMessage ?? 'Failed');
+    final msg = result.success ? '${p.symbol} exited' : (result.errorMessage ?? 'Failed');
     if (result.success) {
       AppToast.success(context, msg);
     } else {

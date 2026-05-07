@@ -750,70 +750,30 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
   }
 }
 
-// ─── AppToast — Premium snackbar replacement ─────────────────────────────────
+// ─── AppToast — Global overlay toast (always above modals/sheets/dialogs) ─────
+//
+// Delegates to GlobalToast which inserts into the root Navigator overlay,
+// so toasts are always visible regardless of what's currently presented.
+
+import 'global_toast.dart';
 
 class AppToast {
   AppToast._();
 
   static void success(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
-    _show(context, message: message, icon: LucideIcons.checkCircle, color: AppColors.success, duration: duration);
+    GlobalToast.success(context, message, duration: duration);
   }
 
   static void error(BuildContext context, String message, {Duration duration = const Duration(seconds: 4)}) {
-    _show(context, message: message, icon: LucideIcons.xCircle, color: AppColors.danger, duration: duration);
+    GlobalToast.error(context, message, duration: duration);
   }
 
   static void warning(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
-    _show(context, message: message, icon: LucideIcons.alertCircle, color: AppColors.warning, duration: duration);
+    GlobalToast.warning(context, message, duration: duration);
   }
 
   static void info(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
-    _show(context, message: message, icon: LucideIcons.info, color: AppColors.primary, duration: duration);
-  }
-
-  static void _show(
-    BuildContext context, {
-    required String message,
-    required IconData icon,
-    required Color color,
-    required Duration duration,
-  }) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: Colors.white, size: 15),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                message,
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        duration: duration,
-        elevation: 4,
-      ),
-    );
+    GlobalToast.info(context, message, duration: duration);
   }
 }
 

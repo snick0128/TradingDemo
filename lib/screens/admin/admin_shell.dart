@@ -11,15 +11,17 @@ import 'admin_stats_screen.dart';
 import 'admin_orders_screen.dart';
 import 'admin_users_screen.dart';
 import 'risk_control_screen.dart';
+import 'leverage_control_screen.dart';
 
 // ── Breakpoint ────────────────────────────────────────────────────────────────
 const _kWebBreakpoint = 768.0;
 
-// ── Nav destinations (4 only) ─────────────────────────────────────────────────
+// ── Nav destinations ──────────────────────────────────────────────────────────
 const _kDestinations = [
   (LucideIcons.layoutDashboard, 'Dashboard'),
   (LucideIcons.users,           'Users'),
   (LucideIcons.activity,        'Orders'),
+  (LucideIcons.zap,             'Leverage'),
   (LucideIcons.shieldAlert,     'Risk'),
 ];
 
@@ -36,6 +38,7 @@ class _AdminShellState extends State<AdminShell> {
     AdminStatsScreen(),
     AdminUsersScreen(),
     AdminOrdersScreen(),
+    LeverageControlScreen(),
     RiskControlScreen(),
   ];
 

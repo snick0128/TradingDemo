@@ -34,15 +34,14 @@ class ScripResult {
   });
 
   factory ScripResult.fromJson(Map<String, dynamic> j) {
-    // Angel One returns 'tradingsymbol' (lowercase s) — handle both
     final sym = (j['tradingSymbol'] ?? j['tradingsymbol'] ?? '') as String;
     final tok = (j['symbolToken'] ?? j['symboltoken'] ?? '').toString();
     final nm  = (j['name'] ?? '') as String;
     return ScripResult(
-      exchange:      j['exchange'] as String? ?? 'NSE',
-      tradingSymbol: sym,
-      symbolToken:   tok,
-      name:          nm,
+      exchange:       j['exchange'] as String? ?? 'NSE',
+      tradingSymbol:  sym,
+      symbolToken:    tok,
+      name:           nm,
       instrumentType: j['instrumentType'] as String? ?? '',
     );
   }
@@ -56,7 +55,7 @@ class ScripResult {
     return stripped.isNotEmpty ? stripped : tradingSymbol;
   }
 
-  bool get isFutures => tradingSymbol.endsWith('FUT');
+  bool get isFutures => tradingSymbol.endsWith('FUT') || exchange == 'MCX';
   bool get isOptions =>
       tradingSymbol.endsWith('CE') || tradingSymbol.endsWith('PE');
   bool get isEquity => !isFutures && !isOptions;
@@ -66,7 +65,14 @@ class ScripResult {
     if (isOptions) return tradingSymbol.endsWith('CE') ? 'CE' : 'PE';
     return 'EQ';
   }
+
+  /// Dedup key — same symbol on same exchange is one result
+  String get _dedupKey => '${exchange}_$tradingSymbol';
 }
+
+// ─── All supported exchanges ──────────────────────────────────────────────────
+
+const _kAllExchanges = ['NSE', 'BSE', 'NFO', 'MCX'];
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -82,7 +88,11 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
 
   String _query = '';
-  String _exchange = 'NSE';
+
+  // null = "All" (search every exchange); non-null = filter to that exchange
+  String? _exchangeFilter;
+
+  // Segment sub-filter (EQ / FUT / CE / PE)
   String? _segmentFilter;
 
   List<ScripResult> _results = [];
@@ -97,6 +107,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     _debounce?.cancel();
     super.dispose();
   }
+
+  // ── Query change ────────────────────────────────────────────────────────────
 
   void _onQueryChanged(String value) {
     _debounce?.cancel();
@@ -114,45 +126,64 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       return;
     }
 
-    // Debounce 400ms
     _debounce = Timer(
       const Duration(milliseconds: 400),
       () => _search(q),
     );
   }
 
+  // ── Search — fires parallel requests for all (or selected) exchanges ────────
+
   Future<void> _search(String q) async {
     setState(() {
       _searching = true;
       _searchError = null;
     });
-    try {
-      final raw = await _api.searchScrip(q, exchange: _exchange);
-      final results = raw.map(ScripResult.fromJson).toList();
 
-      // Best-effort: fetch quote for the first result only
-      if (results.isNotEmpty && results[0].symbolToken.isNotEmpty) {
+    // Which exchanges to query
+    final exchanges =
+        _exchangeFilter != null ? [_exchangeFilter!] : _kAllExchanges;
+
+    try {
+      // Fire all exchange searches in parallel
+      final futures = exchanges.map((ex) => _api
+          .searchScrip(q, exchange: ex)
+          .then((raw) => raw.map(ScripResult.fromJson).toList())
+          .catchError((_) => <ScripResult>[])); // one exchange failing won't kill all
+
+      final lists = await Future.wait(futures);
+
+      // Merge + deduplicate (same symbol on same exchange = one entry)
+      final seen = <String>{};
+      final merged = <ScripResult>[];
+      for (final list in lists) {
+        for (final r in list) {
+          if (seen.add(r._dedupKey)) merged.add(r);
+        }
+      }
+
+      // Best-effort: fetch LTP for the very first result
+      if (merged.isNotEmpty && merged[0].symbolToken.isNotEmpty) {
         try {
           final quoteRes = await _api.getQuoteByToken(
-            results[0].symbolToken,
-            exchange: _exchange,
+            merged[0].symbolToken,
+            exchange: merged[0].exchange,
           );
-          // ltp may be null if the token has no data (expired contract, wrong segment)
           final ltp = (quoteRes['ltp'] as num?)?.toDouble();
           if (ltp != null && ltp > 0) {
-            results[0].ltp = ltp;
-            results[0].percentChange =
+            merged[0].ltp = ltp;
+            merged[0].percentChange =
                 (quoteRes['percentChange'] as num?)?.toDouble();
-            results[0].netChange =
+            merged[0].netChange =
                 (quoteRes['netChange'] as num?)?.toDouble();
           }
         } catch (_) {
-          // Non-fatal — show result without price
+          // Non-fatal
         }
       }
 
       setState(() {
-        _results = results;
+        _results = merged;
         _searching = false;
       });
     } catch (e) {
@@ -164,10 +195,40 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     }
   }
 
+  // ── Filtered view ───────────────────────────────────────────────────────────
+
   List<ScripResult> get _filtered {
-    if (_segmentFilter == null) return _results;
-    return _results.where((r) => r.segment == _segmentFilter).toList();
+    var list = _results;
+    // Exchange filter (already applied at search time, but also filter display
+    // so switching chips on existing results is instant without re-fetching)
+    if (_exchangeFilter != null) {
+      list = list.where((r) => r.exchange == _exchangeFilter).toList();
+    }
+    if (_segmentFilter != null) {
+      list = list.where((r) => r.segment == _segmentFilter).toList();
+    }
+    return list;
   }
+
+  // ── Exchange chip tap ───────────────────────────────────────────────────────
+
+  void _onExchangeTap(String ex) {
+    final newFilter = _exchangeFilter == ex ? null : ex; // toggle
+    setState(() {
+      _exchangeFilter = newFilter;
+      // Clear segment filters incompatible with MCX
+      if (newFilter == 'MCX' &&
+          (_segmentFilter == 'EQ' ||
+           _segmentFilter == 'CE' ||
+           _segmentFilter == 'PE')) {
+        _segmentFilter = null;
+      }
+    });
+    // Re-search so we get full results for the new scope
+    if (_query.length >= 2) _search(_query);
+  }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +242,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           controller: _controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'Search any stock, F&O, index...',
+            hintText: 'Search stocks, F&O, MCX commodities...',
             border: InputBorder.none,
             enabledBorder: InputBorder.none,
             focusedBorder: InputBorder.none,
@@ -208,75 +269,102 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Filter bar ────────────────────────────────────────────────────
+          // ── Filter bar ──────────────────────────────────────────────────────
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
+                // "All" chip
                 _Chip(
-                  label: 'NSE',
-                  selected: _exchange == 'NSE',
+                  label: 'All',
+                  selected: _exchangeFilter == null,
                   onTap: () {
-                    setState(() => _exchange = 'NSE');
-                    if (_query.length >= 2) _search(_query);
+                    if (_exchangeFilter != null) {
+                      setState(() => _exchangeFilter = null);
+                      if (_query.length >= 2) _search(_query);
+                    }
                   },
                 ),
                 const SizedBox(width: 8),
-                _Chip(
-                  label: 'BSE',
-                  selected: _exchange == 'BSE',
-                  onTap: () {
-                    setState(() => _exchange = 'BSE');
-                    if (_query.length >= 2) _search(_query);
-                  },
+
+                // Per-exchange chips (toggle to narrow)
+                ..._kAllExchanges.map((ex) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _Chip(
+                    label: ex,
+                    selected: _exchangeFilter == ex,
+                    onTap: () => _onExchangeTap(ex),
+                  ),
+                )),
+
+                // Divider
+                Container(
+                  width: 1,
+                  height: 20,
+                  color: AppColors.border,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
                 ),
-                const SizedBox(width: 8),
-                _Chip(
-                  label: 'NFO',
-                  selected: _exchange == 'NFO',
-                  onTap: () {
-                    setState(() => _exchange = 'NFO');
-                    if (_query.length >= 2) _search(_query);
-                  },
-                ),
-                const SizedBox(width: 16),
-                _Chip(
-                  label: 'EQ',
-                  selected: _segmentFilter == 'EQ',
-                  onTap: () => setState(() =>
-                      _segmentFilter = _segmentFilter == 'EQ' ? null : 'EQ'),
-                ),
-                const SizedBox(width: 8),
+
+                // Segment chips — hide EQ/CE/PE when MCX-only selected
+                if (_exchangeFilter != 'MCX') ...[
+                  _Chip(
+                    label: 'EQ',
+                    selected: _segmentFilter == 'EQ',
+                    onTap: () => setState(() =>
+                        _segmentFilter = _segmentFilter == 'EQ' ? null : 'EQ'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 _Chip(
                   label: 'FUT',
                   selected: _segmentFilter == 'FUT',
                   onTap: () => setState(() =>
-                      _segmentFilter = _segmentFilter == 'FUT' ? null : 'FUT'),
+                      _segmentFilter =
+                          _segmentFilter == 'FUT' ? null : 'FUT'),
                 ),
-                const SizedBox(width: 8),
-                _Chip(
-                  label: 'CE',
-                  selected: _segmentFilter == 'CE',
-                  onTap: () => setState(() =>
-                      _segmentFilter = _segmentFilter == 'CE' ? null : 'CE'),
-                ),
-                const SizedBox(width: 8),
-                _Chip(
-                  label: 'PE',
-                  selected: _segmentFilter == 'PE',
-                  onTap: () => setState(() =>
-                      _segmentFilter = _segmentFilter == 'PE' ? null : 'PE'),
-                ),
+                if (_exchangeFilter != 'MCX') ...[
+                  const SizedBox(width: 8),
+                  _Chip(
+                    label: 'CE',
+                    selected: _segmentFilter == 'CE',
+                    onTap: () => setState(() =>
+                        _segmentFilter =
+                            _segmentFilter == 'CE' ? null : 'CE'),
+                  ),
+                  const SizedBox(width: 8),
+                  _Chip(
+                    label: 'PE',
+                    selected: _segmentFilter == 'PE',
+                    onTap: () => setState(() =>
+                        _segmentFilter =
+                            _segmentFilter == 'PE' ? null : 'PE'),
+                  ),
+                ],
               ],
             ),
           ),
+
+          // Result count badge when searching all
+          if (_query.length >= 2 && !_searching && _results.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                '${_filtered.length} result${_filtered.length == 1 ? '' : 's'}'
+                '${_exchangeFilter == null ? ' across all exchanges' : ' on $_exchangeFilter'}',
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.textSecondary),
+              ),
+            ),
+
           const Divider(height: 1),
           Expanded(child: _buildBody(context, store)),
         ],
       ),
     );
   }
+
+  // ── Body ────────────────────────────────────────────────────────────────────
 
   Widget _buildBody(BuildContext context, dynamic store) {
     if (_searching) {
@@ -291,7 +379,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
                   strokeWidth: 2, color: AppColors.primary),
             ),
             SizedBox(height: 12),
-            Text('Searching...',
+            Text('Searching all exchanges...',
                 style: TextStyle(color: AppColors.textSecondary)),
           ],
         ),
@@ -335,9 +423,11 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
               Text('No results for "$_query"',
                   style: const TextStyle(color: AppColors.textSecondary)),
               const SizedBox(height: 8),
-              const Text('Try a different exchange or remove the segment filter.',
-                  style: TextStyle(
-                      fontSize: 12, color: AppColors.textSecondary)),
+              const Text(
+                'Try removing the exchange or segment filter.',
+                style: TextStyle(
+                    fontSize: 12, color: AppColors.textSecondary),
+              ),
             ],
           ),
         );
@@ -351,9 +441,6 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           return _ScripTile(
             result: result,
             onTap: () {
-              // Resolve the best symbol to navigate to:
-              // prefer displaySymbol if it's in the watchlist,
-              // otherwise fall back to tradingSymbol (raw from API).
               final display = result.displaySymbol;
               final raw = result.tradingSymbol;
               final knownSymbol =
@@ -435,7 +522,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
             child: Padding(
               padding: EdgeInsets.all(32),
               child: Text(
-                'Type at least 2 characters to search\nany stock, futures, or options.',
+                'Type at least 2 characters to search\nacross NSE, BSE, NFO and MCX.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     color: AppColors.textSecondary, height: 1.6),
@@ -476,6 +563,22 @@ class _ScripTile extends StatelessWidget {
         segmentColor = AppColors.primary;
     }
 
+    // Exchange badge color
+    Color exchangeColor;
+    switch (result.exchange) {
+      case 'MCX':
+        exchangeColor = const Color(0xFF7B1FA2); // purple for MCX
+        break;
+      case 'NFO':
+        exchangeColor = AppColors.warning;
+        break;
+      case 'BSE':
+        exchangeColor = const Color(0xFF0277BD);
+        break;
+      default:
+        exchangeColor = AppColors.primary;
+    }
+
     return ListTile(
       onTap: onTap,
       leading: Container(
@@ -487,11 +590,11 @@ class _ScripTile extends StatelessWidget {
         ),
         child: Center(
           child: Text(
-            result.segment,
+            result.exchange == 'MCX' ? 'MCX' : result.segment,
             style: TextStyle(
                 fontWeight: FontWeight.w800,
-                fontSize: 11,
-                color: segmentColor),
+                fontSize: result.exchange == 'MCX' ? 9 : 11,
+                color: result.exchange == 'MCX' ? exchangeColor : segmentColor),
           ),
         ),
       ),
@@ -500,15 +603,37 @@ class _ScripTile extends StatelessWidget {
         style: const TextStyle(
             fontWeight: FontWeight.w600, color: AppColors.textPrimary),
       ),
-      subtitle: Text(
-        [
-          if (result.name.isNotEmpty) result.name,
-          result.tradingSymbol,
-          result.exchange,
-        ].join(' • '),
-        style: const TextStyle(
-            fontSize: 11, color: AppColors.textSecondary),
-        overflow: TextOverflow.ellipsis,
+      subtitle: Row(
+        children: [
+          // Exchange badge
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: exchangeColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: exchangeColor.withValues(alpha: 0.3)),
+            ),
+            child: Text(
+              result.exchange,
+              style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: exchangeColor),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              [
+                if (result.name.isNotEmpty) result.name,
+                result.tradingSymbol,
+              ].join(' • '),
+              style: const TextStyle(
+                  fontSize: 11, color: AppColors.textSecondary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
       trailing: hasPrice
           ? Column(

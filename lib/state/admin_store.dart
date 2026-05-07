@@ -367,6 +367,45 @@ class AdminStore extends ChangeNotifier {
   double? getRiskLimit(String userId, String limitType) =>
       _riskLimits[userId]?[limitType];
 
+  /// Set per-segment leverage for a user.
+  /// [segmentLeverages] is a map of segment key → leverage value,
+  /// e.g. { 'mcxFutures': 500.0, 'nseFutures': 500.0, ... }
+  void setUserSegmentLeverages(String userId, Map<String, double> segmentLeverages) {
+    _riskLimits[userId] ??= {};
+    for (final entry in segmentLeverages.entries) {
+      _riskLimits[userId]!['lev_${entry.key}'] = entry.value;
+    }
+    _logAction(_currentAdminId, 'SET_LEVERAGE',
+        '$userId: ${segmentLeverages.entries.map((e) => '${e.key}=${e.value}x').join(', ')}');
+    notifyListeners();
+
+    if (_isFirebaseMode) {
+      final data = <String, dynamic>{
+        for (final e in segmentLeverages.entries) 'lev_${e.key}': e.value,
+        'updatedBy': _currentAdminId,
+        'updatedAt': Timestamp.now(),
+      };
+      _fireAndForget(
+        () => _firestoreService!.setDocument('risk_limits/$userId', data),
+        onError: (e) => _notifyError('Failed to set leverage: $e'),
+      );
+    }
+  }
+
+  /// Get leverage for a specific segment key for a user.
+  double? getSegmentLeverage(String userId, String segmentKey) =>
+      _riskLimits[userId]?['lev_$segmentKey'];
+
+  /// Get all segment leverages for a user as a map.
+  Map<String, double> getAllSegmentLeverages(String userId) {
+    final limits = _riskLimits[userId] ?? {};
+    return {
+      for (final entry in limits.entries)
+        if (entry.key.startsWith('lev_'))
+          entry.key.substring(4): entry.value,
+    };
+  }
+
   void toggleGlobalTradingHalt(bool halt) {
     _globalTradingHalt = halt;
     _logAction('SYSTEM', 'Global Trading Halt', halt ? 'ENABLED' : 'DISABLED');

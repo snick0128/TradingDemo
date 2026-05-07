@@ -3,6 +3,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:uuid/uuid.dart';
 
 import '../app/app_scope.dart';
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -817,9 +819,6 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     final price = _isPriceEnabled
         ? (double.tryParse(_priceController.text) ?? 0)
         : null;
-    final triggerPrice = _isTriggerEnabled
-        ? double.tryParse(_triggerController.text)
-        : null;
 
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
 
@@ -833,34 +832,42 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       setState(() => _submitting = true);
 
       try {
-        final clientOrderId = const Uuid().v4();
-        await appScope.tradingService.placeOrder(
+        // ── Route through backend API (Admin SDK — bypasses Firestore rules) ──
+        final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        final result = await api.placeOrder(
           userId: sessionUser.uid,
-          stock: widget.stock.symbol,
+          symbol: widget.stock.symbol,
           qty: _qty,
           type: _side == OrderType.buy ? 'BUY' : 'SELL',
-          variety: _variety.name.toUpperCase(),
-          product: _product.name.toUpperCase(),
-          validity: 'DAY',
-          price: price,
-          triggerPrice: triggerPrice,
-          clientOrderId: clientOrderId,
         );
 
         if (context.mounted) Navigator.pop(context);
-        if (context.mounted) AppToast.success(context, 'Order submitted successfully');
+        if (context.mounted) {
+          final executed = result['executedPrice'] ?? result['price'];
+          AppToast.success(
+            context,
+            '${_side == OrderType.buy ? 'Bought' : 'Sold'} $_qty × ${widget.stock.symbol}'
+            '${executed != null ? ' @ ₹${(executed as num).toStringAsFixed(2)}' : ''}',
+          );
+        }
+      } on BackendException catch (e) {
+        if (mounted) setState(() => _submitting = false);
+        String msg = e.message;
+        if (msg.contains('Insufficient balance')) {
+          msg = 'Insufficient balance for this trade.';
+        } else if (msg.contains('Insufficient quantity') ||
+                   msg.contains('No position found')) {
+          msg = 'Insufficient holdings to sell.';
+        } else if (msg.contains('No market data') ||
+                   msg.contains('Market may be closed')) {
+          msg = 'Market data unavailable. Try again shortly.';
+        }
+        if (context.mounted) AppToast.error(context, msg);
       } catch (e) {
         if (mounted) setState(() => _submitting = false);
-        final raw = e.toString();
-        String msg = raw.replaceAll('Exception: ', '').split('\n').first.trim();
-
-        if (raw.contains("Insufficient balance")) {
-          msg = 'Insufficient balance for this trade.';
-        } else if (raw.contains("Not enough shares")) {
-          msg = 'Insufficient holdings to sell.';
+        if (context.mounted) {
+          AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
         }
-
-        if (context.mounted) AppToast.error(context, msg);
       } finally {
         if (mounted) setState(() => _submitting = false);
       }
@@ -875,7 +882,6 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       variety: _variety,
       product: _product,
       price: price,
-      triggerPrice: triggerPrice,
     );
 
     if (context.mounted) Navigator.pop(context);

@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helper functions ───────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────
 
     function isSignedIn() {
       return request.auth != null;
@@ -19,96 +19,74 @@ service cloud.firestore {
     }
 
     // ── users ──────────────────────────────────────────────────────────────
-    // Users can read their own profile.
-    // Users can create their own document during registration (role must be 'user',
-    // balance must be 0 — prevents self-granting admin or fake balance).
-    // Only admins can delete user documents.
+    // All trading writes (balance, positions) go through the backend Admin SDK.
+    // Clients only need to READ their own profile.
+    // Self-registration (create) is still allowed from the client.
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-
-      // Self-registration: authenticated user can create their own doc.
-      // The security boundary is isOwner — the user can only write their own
-      // document. Role/balance elevation is prevented by the update rule below.
+      allow read:   if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId);
-
-      // Users can update only safe fields (balance changes from trade engine).
-      // Admins can update anything.
-      // Role can never be changed by the user themselves.
+      // Only allow safe profile fields — no balance/role changes from client
       allow update: if isAdmin() || (
         isOwner(userId) &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['balance', 'available_balance', 'updatedAt', 'name'])
+          .hasOnly(['name', 'updatedAt', 'lastLoginAt', 'brokeragePlan'])
       );
-
       allow delete: if isAdmin();
-    }
 
-    // ── order_requests ─────────────────────────────────────────────────────
-    // Customers submit order requests here. They can only create their own
-    // requests (idempotent by clientOrderId). They can read their own requests
-    // to track status. Only admins can update/delete (processing pipeline).
-    match /order_requests/{requestId} {
-      allow read:   if isAdmin() ||
-                       (isSignedIn() &&
-                        resource.data.userId == request.auth.uid);
-      allow create: if isSignedIn() &&
-                       request.resource.data.userId == request.auth.uid &&
-                       request.resource.data.status == 'QUEUED';
-      // Processing pipeline
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      // Legacy order subcollection — read only for client
+      match /orders/{orderId} {
+        allow read:  if isOwner(userId) || isAdmin();
+        allow write: if false; // written by backend Admin SDK only
+      }
     }
 
     // ── orders ─────────────────────────────────────────────────────────────
-    // Orders are written by the execution engine. The engine runs as the
-    // authenticated customer (client SDK), so we allow the owning user to
-    // create their own order documents. Updates/deletes are admin-only,
-    // EXCEPT customers can cancel their own PENDING orders.
+    // Written exclusively by the backend (Admin SDK). Clients read only.
     match /orders/{orderId} {
-      allow read:   if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if false;
-      allow delete: if isAdmin();
+      allow read:  if isAdmin() ||
+                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if false; // backend Admin SDK only
+    }
+
+    // ── order_requests ─────────────────────────────────────────────────────
+    // No longer used for trading — kept for any legacy reads.
+    match /order_requests/{requestId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write:  if false; // backend Admin SDK only
     }
 
     // ── trades ─────────────────────────────────────────────────────────────
-    // Trades are written by the execution engine (same client SDK context).
     match /trades/{tradeId} {
-      allow read:   if isAdmin() ||
-                       (isSignedIn() &&
-                        resource.data.userId == request.auth.uid);
-      allow create: if isSignedIn() &&
-                       request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow read:  if isAdmin() ||
+                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if false; // backend Admin SDK only
     }
 
-    // ── portfolios/{uid}/holdings/{stock} ───────────────────────────────────
-    // Holdings are written by the execution engine running as the customer.
+    // ── trade_feed ─────────────────────────────────────────────────────────
+    match /trade_feed/{tradeId} {
+      allow read:  if isAdmin();
+      allow write: if false; // backend Admin SDK only
+    }
+
+    // ── portfolios/{uid}/holdings ───────────────────────────────────────────
+    // Written by backend Admin SDK. Clients stream their own holdings.
     match /portfolios/{userId}/holdings/{stock} {
       allow read:  if isOwner(userId) || isAdmin();
-      allow write: if isOwner(userId) || isAdmin();
+      allow write: if false; // backend Admin SDK only
+    }
+
+    // ── portfolios/{uid}/positions ──────────────────────────────────────────
+    match /portfolios/{userId}/positions/{positionId} {
+      allow read:  if isOwner(userId) || isAdmin();
+      allow write: if false; // backend Admin SDK only
     }
 
     // ── ledger ─────────────────────────────────────────────────────────────
-    // Ledger entries are written by the execution engine running as the customer.
     match /ledger/{entryId} {
-      allow read:   if isAdmin() ||
-                       (isSignedIn() &&
-                        resource.data.userId == request.auth.uid);
-      allow create: if isAdmin() || (isSignedIn() &&
-                       request.resource.data.userId == request.auth.uid);
-      allow update, delete: if isAdmin();
-    }
-
-    // ── trade_feed (denormalized admin live feed) ───────────────────────────
-    // Written by the execution engine running as the customer.
-    // Only admins can read.
-    match /trade_feed/{tradeId} {
-      allow read:             if isAdmin();
-      allow create:           if isSignedIn() &&
-                                 request.resource.data.userId == request.auth.uid;
-      allow update, delete:   if isAdmin();
+      allow read:  if isAdmin() ||
+                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if false; // backend Admin SDK only
     }
 
     // ── stocks ─────────────────────────────────────────────────────────────
@@ -120,29 +98,27 @@ service cloud.firestore {
     // ── user_stock_leverage ────────────────────────────────────────────────
     match /user_stock_leverage/{docId} {
       allow read:  if isAdmin() ||
-                      (isSignedIn() &&
-                       docId.matches(request.auth.uid + '_.*'));
+                      (isSignedIn() && docId.matches(request.auth.uid + '_.*'));
       allow write: if isAdmin();
     }
 
     // ── gtt_orders ─────────────────────────────────────────────────────────
-    // Customers can create and read their own GTT orders.
-    // Only admins can update/delete (execution engine).
+    // GTT orders are still placed client-side (no backend route for them yet)
     match /gtt_orders/{gttId} {
       allow read:   if isAdmin() ||
-                       (isSignedIn() &&
-                        resource.data.userId == request.auth.uid);
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isSignedIn() &&
                        request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() ||
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isAdmin() ||
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
     }
 
     // ── audit_logs ─────────────────────────────────────────────────────────
-    // Only admins can read. No client writes — written by execution engine
-    // running with admin credentials (or Cloud Functions in production).
     match /audit_logs/{logId} {
       allow read:  if isAdmin();
-      allow write: if isAdmin();
+      allow write: if false; // backend Admin SDK only
     }
 
     // ── notifications ──────────────────────────────────────────────────────
@@ -152,7 +128,6 @@ service cloud.firestore {
     }
 
     // ── admin_config ───────────────────────────────────────────────────────
-    // All authenticated users need to read globalTradingHalt.
     match /admin_config/{docId} {
       allow read:  if isSignedIn();
       allow write: if isAdmin();
@@ -165,21 +140,15 @@ service cloud.firestore {
     }
 
     // ── ipos ───────────────────────────────────────────────────────────────
-    // IPO documents are public read for all signed-in users.
-    // Only admins can create/update/delete IPO records.
     match /ipos/{ipoId} {
       allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
     // ── withdrawal_requests ────────────────────────────────────────────────
-    // Users can create their own withdrawal requests.
-    // Users can read their own requests to track status.
-    // Only admins can update (approve/reject) or delete.
     match /withdrawal_requests/{requestId} {
       allow read:   if isAdmin() ||
-                       (isSignedIn() &&
-                        resource.data.userId == request.auth.uid);
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isSignedIn() &&
                        request.resource.data.userId == request.auth.uid &&
                        request.resource.data.status == 'PENDING' &&

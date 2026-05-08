@@ -30,9 +30,11 @@ class BackendApiService {
 
   Future<Map<String, dynamic>> _get(String path) async {
     final uri = Uri.parse('$baseUrl$path');
+    print('[BackendAPI] GET: $uri');
     try {
       final response = await http.get(uri, headers: _headers)
           .timeout(const Duration(seconds: 10));
+      print('[BackendAPI] Response: ${response.statusCode} for $path');
       return _parse(response);
     } on TimeoutException {
       throw BackendException('Request timed out: $path');

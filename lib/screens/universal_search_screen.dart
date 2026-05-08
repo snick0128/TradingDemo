@@ -128,6 +128,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     final q = value.trim();
+    print('[Search] Query changed: "$q"');
     setState(() {
       _query = q;
       _remoteError = null;
@@ -143,8 +144,10 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     }
 
     // Instant local results — no debounce
+    final local = SearchIndex.instance.search(q, limit: 20);
+    print('[Search] Local results found: ${local.length}');
     setState(() {
-      _localResults = SearchIndex.instance.search(q, limit: 20);
+      _localResults = local;
     });
 
     // Remote enrichment — 350ms debounce for stability
@@ -155,10 +158,12 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 
   Future<void> _fetchRemote(String q) async {
     if (q.isEmpty) return;
+    print('[Search] Fetching remote results for: "$q"');
 
     // Check cache first
     final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
     if (_searchCache.containsKey(cacheKey)) {
+      print('[Search] Cache hit for: "$cacheKey"');
       setState(() {
         _remoteResults = _searchCache[cacheKey]!;
         _remoteLoading = false;
@@ -173,10 +178,13 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     });
 
     try {
+      print('[Search] Calling universalSearch API...');
       final results = await _api.searchUniversal(
         q,
         exchange: _exchangeFilter,
       );
+
+      print('[Search] API returned ${results.length} results');
 
       // Simple stale response handling: only proceed if query hasn't changed
       if (_query != q || !mounted) return;

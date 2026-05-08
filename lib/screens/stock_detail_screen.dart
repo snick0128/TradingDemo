@@ -44,7 +44,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       duration: const Duration(milliseconds: 250),
     );
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-    _loadStockDetail();
     _loadSeries();
   }
 
@@ -52,36 +51,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   void dispose() {
     _fadeCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadStockDetail() async {
-    try {
-      final res = await _api.getStockDetail(widget.symbol);
-      if (!mounted) return;
-      final store = TradingScope.of(context);
-      
-      final ltp = (res['ltp'] as num?)?.toDouble() ?? 0.0;
-      final changePercent = (res['changePercent'] as num?)?.toDouble() ?? 0.0;
-      final name = res['name'] as String? ?? widget.symbol;
-      final exchange = res['exchange'] as String? ?? 'NSE';
-
-      if (ltp > 0) {
-        store.updateStockData(Stock(
-          symbol: widget.symbol,
-          name: name,
-          currentPrice: ltp,
-          changePercentage: changePercent,
-          exchange: exchange,
-          sector: '',
-        ));
-        // If series already loaded with 0.0, refresh it
-        if (_series != null && _series!.data.isEmpty) {
-          _loadSeries();
-        }
-      }
-    } catch (e) {
-      debugPrint('Error loading stock detail: $e');
-    }
   }
 
   Future<void> _loadSeries() async {
@@ -319,9 +288,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                   color: const Color(0xFFE3F2FD),
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text(
-                  stock.exchange,
-                  style: const TextStyle(
+                child: const Text(
+                  'NSE',
+                  style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF1565C0),

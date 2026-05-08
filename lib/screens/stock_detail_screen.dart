@@ -79,6 +79,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       final store = TradingScope.of(context);
       final stock = store.stockBySymbol(widget.symbol);
 
+      // Debug log — confirms exchange+token are correct before API call
+      debugPrint('[QUOTE_REQUEST] symbol=${widget.symbol} exchange=${stock.exchange} token=${stock.token}');
+
       // Pass exchange + token so MCX/NFO/CDS instruments work correctly
       // The backend uses these to look up instruments not in its hardcoded symbol list
       final candles = await _api.getHistoricalData(

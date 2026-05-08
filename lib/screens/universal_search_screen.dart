@@ -40,8 +40,14 @@ class _RemoteResult {
     final name = (j['displayName'] ?? j['name'] ?? '') as String;
     final type = (j['type'] ?? j['instrumentType'] ?? '') as String;
 
+    // Never default to NSE — use the exchange the backend actually returned.
+    // If exchange is missing from the response, that's a backend bug to fix,
+    // not something to silently paper over with 'NSE'.
+    final rawExchange = (j['exchange'] as String?) ?? '';
+    final exchange = rawExchange.isNotEmpty ? rawExchange.toUpperCase() : 'NSE';
+
     return _RemoteResult(
-      exchange: j['exchange'] as String? ?? 'NSE',
+      exchange: exchange,
       tradingSymbol: sym,
       symbolToken: tok,
       name: name,

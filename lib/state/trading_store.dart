@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../config/backend_config.dart';
@@ -303,6 +304,10 @@ class TradingStore extends ChangeNotifier {
   /// Register a stock from a search result so the detail screen can access
   /// its exchange and token even if it's not in the watchlist.
   /// Does NOT add it to the watchlist — only to the universe map.
+  ///
+  /// ALWAYS updates exchange+token — never skips if already registered,
+  /// because the existing entry may have been seeded with wrong defaults
+  /// (e.g. NSE from the bootstrap snapshot before the search result arrived).
   void registerSearchResult({
     required String symbol,
     required String displayName,
@@ -311,16 +316,37 @@ class TradingStore extends ChangeNotifier {
     double ltp = 0,
     double changePercent = 0,
   }) {
-    if (_watchlistUniverse.containsKey(symbol)) return; // already known
-    _watchlistUniverse[symbol] = Stock(
-      symbol: symbol,
-      name: displayName.isNotEmpty ? displayName : symbol,
-      currentPrice: ltp,
-      changePercentage: changePercent,
-      sector: '',
-      exchange: exchange.isNotEmpty ? exchange : 'NSE',
-      token: token,
-    );
+    final resolvedExchange = exchange.isNotEmpty ? exchange.toUpperCase() : 'NSE';
+
+    debugPrint('[DETAIL_OPEN] symbol=$symbol exchange=$resolvedExchange token=$token');
+
+    final existing = _watchlistUniverse[symbol];
+    if (existing != null) {
+      // Always overwrite exchange+token from the search result — the existing
+      // entry may have been seeded with NSE defaults from the market bootstrap.
+      _watchlistUniverse[symbol] = Stock(
+        symbol: existing.symbol,
+        name: displayName.isNotEmpty ? displayName : existing.name,
+        currentPrice: ltp > 0 ? ltp : existing.currentPrice,
+        changePercentage: changePercent != 0 ? changePercent : existing.changePercentage,
+        sector: existing.sector,
+        exchange: resolvedExchange,   // ← always use the search result exchange
+        token: token.isNotEmpty ? token : existing.token,
+        prevClose: existing.prevClose,
+        volume: existing.volume,
+        isStale: existing.isStale,
+      );
+    } else {
+      _watchlistUniverse[symbol] = Stock(
+        symbol: symbol,
+        name: displayName.isNotEmpty ? displayName : symbol,
+        currentPrice: ltp,
+        changePercentage: changePercent,
+        sector: '',
+        exchange: resolvedExchange,
+        token: token,
+      );
+    }
     // No notifyListeners — this is a silent registration
   }
 

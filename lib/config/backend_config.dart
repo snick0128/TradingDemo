@@ -11,8 +11,8 @@ class BackendConfig {
   BackendConfig._();
 
   /// The base URL of the Node.js paper trading backend.
-  // static const String backendBaseUrl = 'https://paper-trading-backend-bnn7.onrender.com';
-  static const String backendBaseUrl = 'http://localhost:3000';
+  static const String backendBaseUrl = 'https://paper-trading-backend-bnn7.onrender.com';
+  // static const String backendBaseUrl = 'http://localhost:3000';
 
   /// Poll interval for live market prices (milliseconds).
   static const int pricePollingIntervalMs = 2000;

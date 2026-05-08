@@ -33,14 +33,21 @@ class _RemoteResult {
   });
 
   factory _RemoteResult.fromJson(Map<String, dynamic> j) {
-    final sym = (j['tradingSymbol'] ?? j['tradingsymbol'] ?? '') as String;
-    final tok = (j['symbolToken'] ?? j['symboltoken'] ?? '').toString();
+    // Backend /search returns: symbol, exchange, type, token, displayName, ltp, percentChange
+    // Backend /derivatives/search returns: tradingSymbol, exchange, symbolToken, name, instrumentType
+    final sym = (j['symbol'] ?? j['tradingSymbol'] ?? j['tradingsymbol'] ?? '') as String;
+    final tok = (j['token'] ?? j['symbolToken'] ?? j['symboltoken'] ?? '').toString();
+    final name = (j['displayName'] ?? j['name'] ?? '') as String;
+    final type = (j['type'] ?? j['instrumentType'] ?? '') as String;
+
     return _RemoteResult(
       exchange: j['exchange'] as String? ?? 'NSE',
       tradingSymbol: sym,
       symbolToken: tok,
-      name: (j['name'] ?? '') as String,
-      instrumentType: j['instrumentType'] as String? ?? '',
+      name: name,
+      instrumentType: type,
+      ltp: (j['ltp'] as num?)?.toDouble(),
+      percentChange: (j['percentChange'] as num?)?.toDouble(),
     );
   }
 
@@ -48,7 +55,9 @@ class _RemoteResult {
       .replaceAll(RegExp(r'-(EQ|BE|BL|IQ|RL|AF|U\d+)$'), '');
 
   String get segment {
-    if (tradingSymbol.endsWith('FUT') || exchange == 'MCX') return 'FUT';
+    if (exchange == 'MCX') return 'COMM';
+    if (exchange == 'CDS') return 'CURR';
+    if (tradingSymbol.endsWith('FUT')) return 'FUT';
     if (tradingSymbol.endsWith('CE')) return 'CE';
     if (tradingSymbol.endsWith('PE')) return 'PE';
     return 'EQ';
@@ -83,8 +92,10 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   bool _remoteLoading = false;
   String? _remoteError;
 
+  // Cache to avoid duplicate requests
+  final Map<String, List<_RemoteResult>> _searchCache = {};
+
   Timer? _debounce;
-  int _searchGeneration = 0; // stale-response guard
 
   @override
   void initState() {
@@ -136,58 +147,51 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       _localResults = SearchIndex.instance.search(q, limit: 20);
     });
 
-    // Remote enrichment — 150ms debounce
+    // Remote enrichment — 350ms debounce for stability
     if (q.length >= 2) {
-      _debounce = Timer(const Duration(milliseconds: 150), () => _fetchRemote(q));
+      _debounce = Timer(const Duration(milliseconds: 350), () => _fetchRemote(q));
     }
   }
 
   Future<void> _fetchRemote(String q) async {
-    final gen = ++_searchGeneration;
-    setState(() => _remoteLoading = true);
+    if (q.isEmpty) return;
 
-    final exchanges = _exchangeFilter != null ? [_exchangeFilter!] : ['NSE', 'BSE', 'NFO', 'MCX'];
+    // Check cache first
+    final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
+    if (_searchCache.containsKey(cacheKey)) {
+      setState(() {
+        _remoteResults = _searchCache[cacheKey]!;
+        _remoteLoading = false;
+        _remoteError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _remoteLoading = true;
+      _remoteError = null;
+    });
 
     try {
-      final futures = exchanges.map((ex) => _api
-          .searchScrip(q, exchange: ex)
-          .then((raw) => raw.map(_RemoteResult.fromJson).toList())
-          .catchError((_) => <_RemoteResult>[]));
+      final results = await _api.searchUniversal(
+        q,
+        exchange: _exchangeFilter,
+      );
 
-      final lists = await Future.wait(futures);
+      // Simple stale response handling: only proceed if query hasn't changed
+      if (_query != q || !mounted) return;
 
-      if (gen != _searchGeneration || !mounted) return; // stale
+      final parsed = results.map(_RemoteResult.fromJson).toList();
 
-      final seen = <String>{};
-      final merged = <_RemoteResult>[];
-      for (final list in lists) {
-        for (final r in list) {
-          if (seen.add(r.dedupKey)) merged.add(r);
-        }
-      }
+      // Update cache
+      _searchCache[cacheKey] = parsed;
 
-      // Fetch LTP for top result only
-      if (merged.isNotEmpty && merged[0].symbolToken.isNotEmpty) {
-        try {
-          final quote = await _api.getQuoteByToken(
-            merged[0].symbolToken,
-            exchange: merged[0].exchange,
-          );
-          final ltp = (quote['ltp'] as num?)?.toDouble();
-          if (ltp != null && ltp > 0) {
-            merged[0].ltp = ltp;
-            merged[0].percentChange = (quote['percentChange'] as num?)?.toDouble();
-          }
-        } catch (_) {}
-      }
-
-      if (!mounted) return;
       setState(() {
-        _remoteResults = merged;
+        _remoteResults = parsed;
         _remoteLoading = false;
       });
     } catch (e) {
-      if (gen != _searchGeneration || !mounted) return;
+      if (_query != q || !mounted) return;
       setState(() {
         _remoteError = e.toString().replaceFirst('BackendException: ', '');
         _remoteLoading = false;
@@ -372,68 +376,81 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     return ListView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
+        // ── Top Match (Exact match boost) ──────────────────────────────────
+        if (local.isNotEmpty && local[0].displayName.toUpperCase() == _query.toUpperCase()) ...[
+           _SectionHeader(icon: LucideIcons.star, label: 'Best Match', color: AppColors.primary),
+           _LocalInstrumentTile(
+             instrument: local[0],
+             ltp: _ltpForSymbol(local[0].symbol),
+             onTap: () => _navigateToSymbol(context, local[0].symbol, local[0].displayName),
+           ),
+           const Divider(height: 1, indent: 70),
+        ],
+
         // ── Watchlist section ──────────────────────────────────────────────
         if (fromWatchlist.isNotEmpty) ...[
-          _SectionHeader(icon: LucideIcons.bookmark, label: 'From Your Watchlist', color: AppColors.primary),
+          _SectionHeader(icon: LucideIcons.bookmark, label: 'In Your Watchlist', color: AppColors.primary),
           ...fromWatchlist.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
             onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
           )),
         ],
-        // ── Holdings section ───────────────────────────────────────────────
-        if (fromHoldings.isNotEmpty) ...[
-          _SectionHeader(icon: LucideIcons.briefcase, label: 'From Your Holdings', color: AppColors.success),
+
+        // ── Holdings & Positions ───────────────────────────────────────────
+        if (fromHoldings.isNotEmpty || fromPositions.isNotEmpty) ...[
+          _SectionHeader(icon: LucideIcons.briefcase, label: 'Your Portfolio', color: AppColors.success),
           ...fromHoldings.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
             onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
           )),
-        ],
-        // ── Positions section ──────────────────────────────────────────────
-        if (fromPositions.isNotEmpty) ...[
-          _SectionHeader(icon: LucideIcons.trendingUp, label: 'Open Positions', color: AppColors.warning),
           ...fromPositions.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
             onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
           )),
         ],
-        // ── All local results ──────────────────────────────────────────────
-        if (others.isNotEmpty) ...[
-          if (fromWatchlist.isNotEmpty || fromHoldings.isNotEmpty || fromPositions.isNotEmpty)
-            _SectionHeader(icon: LucideIcons.search, label: 'All Results', color: AppColors.textSecondary),
-          ...others.map((i) => _LocalInstrumentTile(
+
+        // ── Global Search Results ──────────────────────────────────────────
+        if (remote.isNotEmpty) ...[
+          _SectionHeader(icon: LucideIcons.globe, label: 'Universal Results', color: AppColors.textSecondary),
+          ...remote.map((r) => _RemoteResultTile(
+            result: r,
+            onTap: () => _navigateToSymbol(context, r.tradingSymbol, r.displaySymbol),
+          )),
+        ] else if (_remoteLoading) ...[
+          _SectionHeader(icon: LucideIcons.globe, label: 'Searching Exchanges...', color: AppColors.textSecondary),
+          const _SearchSkeleton(),
+          const _SearchSkeleton(),
+          const _SearchSkeleton(),
+        ],
+
+        // ── Other Local matches ────────────────────────────────────────────
+        if (others.isNotEmpty && others.length > (local[0].displayName.toUpperCase() == _query.toUpperCase() ? 1 : 0)) ...[
+          if (fromWatchlist.isNotEmpty || fromHoldings.isNotEmpty || fromPositions.isNotEmpty || remote.isNotEmpty)
+            _SectionHeader(icon: LucideIcons.search, label: 'Other Matches', color: AppColors.textSecondary),
+          ...others.where((i) => i != (local.isNotEmpty ? local[0] : null)).map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
             onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
           )),
         ],
-        // ── Remote results (API enrichment) ────────────────────────────────
-        if (_remoteLoading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(
-              child: SizedBox(
-                width: 20, height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-              ),
-            ),
-          )
-        else if (remote.isNotEmpty) ...[
-          _SectionHeader(icon: LucideIcons.globe, label: 'More from Exchange', color: AppColors.textSecondary),
-          ...remote.map((r) => _RemoteResultTile(
-            result: r,
-            onTap: () => _navigateToSymbol(context, r.tradingSymbol, r.displaySymbol),
-          )),
-        ],
-        if (_remoteError != null)
+
+        if (_remoteError != null && remote.isEmpty)
           Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('Live search unavailable: $_remoteError',
-                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                const Icon(LucideIcons.alertCircle, size: 32, color: AppColors.danger),
+                const SizedBox(height: 12),
+                Text('Universal search currently limited\n$_remoteError',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.5)),
+              ],
+            ),
           ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 48),
       ],
     );
   }
@@ -791,6 +808,60 @@ class _FilterChip extends StatelessWidget {
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 color: selected ? AppColors.primary : const Color(0xFF757575))),
+      ),
+    );
+  }
+}
+
+// ─── Search Skeleton ──────────────────────────────────────────────────────────
+
+class _SearchSkeleton extends StatelessWidget {
+  const _SearchSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 42, height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F5F5),
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 120, height: 14,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  width: 180, height: 10,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 60, height: 14,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F5F5),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -318,6 +318,13 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Manually update or inject a stock into the universe (e.g. from search results
+  /// or a direct /stock detail fetch).
+  void updateStockData(Stock stock) {
+    _watchlistUniverse[stock.symbol] = stock;
+    notifyListeners();
+  }
+
   void setFontSizePreset(String preset) {
     if (_fontSizePreset == preset) return;
     _fontSizePreset = preset;

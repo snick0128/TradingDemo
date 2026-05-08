@@ -189,7 +189,7 @@ class BackendApiService {
   }
 
   /// Universal scrip search — searches across all instruments on the exchange.
-  /// Returns list of { exchange, tradingSymbol, symbolToken }
+  /// Returns list of { exchange, tradingSymbol, symbolToken, name, type, ltp, percentChange }
   Future<List<Map<String, dynamic>>> searchScrip(
     String query, {
     String exchange = 'NSE',
@@ -198,6 +198,22 @@ class BackendApiService {
     final res = await _get(
       '/derivatives/search?q=$encoded&exchange=$exchange',
     );
+    return List<Map<String, dynamic>>.from(res['data'] as List);
+  }
+
+  /// Universal search across all exchanges and segments.
+  /// Returns enriched results with LTP and change data.
+  Future<List<Map<String, dynamic>>> searchUniversal(
+    String query, {
+    String? exchange,
+    int limit = 40,
+  }) async {
+    final encoded = Uri.encodeComponent(query);
+    var path = '/search?q=$encoded&limit=$limit';
+    if (exchange != null && exchange != 'ALL') {
+      path += '&exchange=${Uri.encodeComponent(exchange)}';
+    }
+    final res = await _get(path);
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 

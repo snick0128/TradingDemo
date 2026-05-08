@@ -1,12 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
+import '../data/services/market_settings_service.dart';
+import '../models/market_settings.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
-import '../theme.dart';
 import 'app_dialog.dart';
 
 /// Simplified, beginner-friendly order form.
@@ -28,30 +31,42 @@ class OrderFormDrawer extends StatefulWidget {
 
 class _OrderFormDrawerState extends State<OrderFormDrawer> {
   late OrderType _side;
-  // Only Intraday / Delivery
   ProductType _product = ProductType.mis;
-  // Only Market / Limit / Stop Loss
   OrderVariety _variety = OrderVariety.market;
   bool _submitting = false;
   int _qty = 1;
   final _priceController = TextEditingController();
+
+  // Market settings — streamed from Firestore
+  final _settingsService = MarketSettingsService();
+  StreamSubscription<MarketSettings>? _settingsSub;
+  MarketSettings _marketSettings = MarketSettings.defaults;
 
   @override
   void initState() {
     super.initState();
     _side = widget.initialSide;
     _priceController.text = widget.stock.currentPrice.toStringAsFixed(2);
+    _settingsSub = _settingsService.stream.listen((s) {
+      if (mounted) setState(() => _marketSettings = s);
+    });
   }
 
   @override
   void dispose() {
     _priceController.dispose();
+    _settingsSub?.cancel();
     super.dispose();
   }
 
   bool get _isBuy => _side == OrderType.buy;
   bool get _isMarket => _variety == OrderVariety.market;
   bool get _isPriceEnabled => _variety == OrderVariety.limit || _variety == OrderVariety.sl;
+
+  /// Returns null if trading is allowed, or a reason string if blocked.
+  /// Uses device IST time for UI feedback only — backend enforces authoritatively.
+  String? get _marketBlockReason =>
+      _marketSettings.checkAction(widget.stock.exchange, isBuy: _isBuy);
 
   double get _effectivePrice => _isPriceEnabled
       ? (double.tryParse(_priceController.text) ?? widget.stock.currentPrice)
@@ -406,6 +421,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   // ── Sticky bottom ──────────────────────────────────────────────────────────
 
   Widget _buildStickyBottom(BuildContext context, store, bool hasInsufficientMargin) {
+    final blockReason = _marketBlockReason;
+    final isBlocked = blockReason != null;
+
     return Container(
       padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.of(context).padding.bottom),
       decoration: const BoxDecoration(
@@ -415,6 +433,35 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Market closed / disabled banner
+          if (isBlocked) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(LucideIcons.clock, size: 14, color: Color(0xFFE65100)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      blockReason,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFFE65100),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           // Balance row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -430,7 +477,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                 ),
               ),
               Text(
-                '${_qty} qty × ₹${_effectivePrice.toStringAsFixed(2)}',
+                '$_qty qty × ₹${_effectivePrice.toStringAsFixed(2)}',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF9E9E9E)),
               ),
             ],
@@ -459,7 +506,7 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
             width: double.infinity,
             height: 52,
             child: ElevatedButton(
-              onPressed: (hasInsufficientMargin || _submitting)
+              onPressed: (hasInsufficientMargin || _submitting || isBlocked)
                   ? null
                   : () => _submitOrder(context, store),
               style: ElevatedButton.styleFrom(
@@ -475,7 +522,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                       child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
                     )
                   : Text(
-                      '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
+                      isBlocked
+                          ? (_isBuy ? 'Buy Unavailable' : 'Sell Unavailable')
+                          : '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,

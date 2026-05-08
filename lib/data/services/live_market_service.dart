@@ -195,25 +195,42 @@ class LiveMarketService {
     final ltp = (d['ltp'] as num?)?.toDouble();
     if (symbol == null || ltp == null || ltp <= 0) return null;
 
-    // `stale` is informational — we still show the price, just flag it.
-    // Dropping stale stocks here would leave the dashboard empty when the
-    // market is closed or the backend just started up.
     final stale = d['stale'] == true;
     final changePercent = (d['changePercent'] as num?)?.toDouble() ?? 0.0;
     final prevClose = (d['prevClose'] as num?)?.toDouble();
     final volume = (d['volume'] as num?)?.toDouble();
+
+    // Use exchange from backend data — never hardcode NSE
+    // Backend sends 'NSE', 'MCX', 'NFO', 'CDS', 'BSE' etc.
+    final exchange = (d['exchange'] as String?)?.toUpperCase() ?? 'NSE';
+
+    // Token is needed for MCX/NFO/CDS historical data and quote lookups
+    final token = (d['token'] as String?) ?? '';
 
     return Stock(
       symbol: symbol,
       name: _names[symbol] ?? symbol,
       currentPrice: ltp,
       changePercentage: changePercent,
-      sector: _sectors[symbol] ?? 'Equity',
-      exchange: 'NSE',
+      sector: _sectors[symbol] ?? _sectorForExchange(exchange),
+      exchange: exchange,
+      token: token,
       prevClose: prevClose,
       volume: volume,
       isStale: stale,
     );
+  }
+
+  /// Returns a sensible default sector label based on exchange.
+  static String _sectorForExchange(String exchange) {
+    switch (exchange) {
+      case 'MCX':   return 'Commodity';
+      case 'NFO':   return 'F&O';
+      case 'CDS':   return 'Currency';
+      case 'BFO':   return 'F&O';
+      case 'NCDEX': return 'Commodity';
+      default:      return 'Equity';
+    }
   }
 
   static const _names = {

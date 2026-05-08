@@ -12,6 +12,7 @@ import 'admin_orders_screen.dart';
 import 'admin_users_screen.dart';
 import 'risk_control_screen.dart';
 import 'leverage_control_screen.dart';
+import 'market_settings_screen.dart';
 
 // ── Breakpoint ────────────────────────────────────────────────────────────────
 const _kWebBreakpoint = 768.0;
@@ -23,6 +24,7 @@ const _kDestinations = [
   (LucideIcons.activity,        'Orders'),
   (LucideIcons.zap,             'Leverage'),
   (LucideIcons.shieldAlert,     'Risk'),
+  (LucideIcons.clock,           'Market'),
 ];
 
 class AdminShell extends StatefulWidget {
@@ -40,6 +42,7 @@ class _AdminShellState extends State<AdminShell> {
     AdminOrdersScreen(),
     LeverageControlScreen(),
     RiskControlScreen(),
+    MarketSettingsScreen(),
   ];
 
   @override

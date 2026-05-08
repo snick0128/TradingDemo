@@ -300,6 +300,30 @@ class TradingStore extends ChangeNotifier {
         );
   }
 
+  /// Register a stock from a search result so the detail screen can access
+  /// its exchange and token even if it's not in the watchlist.
+  /// Does NOT add it to the watchlist — only to the universe map.
+  void registerSearchResult({
+    required String symbol,
+    required String displayName,
+    required String exchange,
+    required String token,
+    double ltp = 0,
+    double changePercent = 0,
+  }) {
+    if (_watchlistUniverse.containsKey(symbol)) return; // already known
+    _watchlistUniverse[symbol] = Stock(
+      symbol: symbol,
+      name: displayName.isNotEmpty ? displayName : symbol,
+      currentPrice: ltp,
+      changePercentage: changePercent,
+      sector: '',
+      exchange: exchange.isNotEmpty ? exchange : 'NSE',
+      token: token,
+    );
+    // No notifyListeners — this is a silent registration
+  }
+
   bool isInWatchlist(String symbol) =>
       _watchlist.any((stock) => stock.symbol == symbol);
 

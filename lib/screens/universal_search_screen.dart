@@ -128,13 +128,13 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     final q = value.trim();
-    print('[Search] Query changed: "$q"');
     setState(() {
       _query = q;
       _remoteError = null;
     });
 
-    if (q.length < 1) {
+    // Clear results for empty or single-char queries — no API call
+    if (q.length < 2) {
       setState(() {
         _localResults = [];
         _remoteResults = [];
@@ -143,27 +143,22 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       return;
     }
 
-    // Instant local results — no debounce
+    // Instant local results — no debounce needed (pure in-memory)
     final local = SearchIndex.instance.search(q, limit: 20);
-    print('[Search] Local results found: ${local.length}');
     setState(() {
       _localResults = local;
     });
 
-    // Remote enrichment — 350ms debounce for stability
-    if (q.length >= 2) {
-      _debounce = Timer(const Duration(milliseconds: 350), () => _fetchRemote(q));
-    }
+    // Remote enrichment — 350ms debounce to avoid spamming the API
+    _debounce = Timer(const Duration(milliseconds: 350), () => _fetchRemote(q));
   }
 
   Future<void> _fetchRemote(String q) async {
-    if (q.isEmpty) return;
-    print('[Search] Fetching remote results for: "$q"');
+    if (q.isEmpty || q.length < 2) return;
 
-    // Check cache first
+    // Check cache first — avoids duplicate API calls for the same query
     final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
     if (_searchCache.containsKey(cacheKey)) {
-      print('[Search] Cache hit for: "$cacheKey"');
       setState(() {
         _remoteResults = _searchCache[cacheKey]!;
         _remoteLoading = false;
@@ -178,20 +173,15 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     });
 
     try {
-      print('[Search] Calling universalSearch API...');
       final results = await _api.searchUniversal(
         q,
         exchange: _exchangeFilter,
       );
 
-      print('[Search] API returned ${results.length} results');
-
-      // Simple stale response handling: only proceed if query hasn't changed
+      // Stale response guard: discard if query has changed since request was sent
       if (_query != q || !mounted) return;
 
       final parsed = results.map(_RemoteResult.fromJson).toList();
-
-      // Update cache
       _searchCache[cacheKey] = parsed;
 
       setState(() {
@@ -249,9 +239,26 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 
   // ── Navigate to stock ───────────────────────────────────────────────────────
 
-  void _navigateToSymbol(BuildContext context, String symbol, String displaySym) {
+  void _navigateToSymbol(
+    BuildContext context,
+    String symbol,
+    String displaySym, {
+    String exchange = 'NSE',
+    String token = '',
+    double ltp = 0,
+    double changePercent = 0,
+  }) {
     final store = TradingScope.of(context);
     store.addRecentSearch(displaySym);
+    // Register exchange+token so the detail screen can fetch correct prices/charts
+    store.registerSearchResult(
+      symbol: symbol,
+      displayName: displaySym,
+      exchange: exchange,
+      token: token,
+      ltp: ltp,
+      changePercent: changePercent,
+    );
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: symbol)),
@@ -390,7 +397,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
            _LocalInstrumentTile(
              instrument: local[0],
              ltp: _ltpForSymbol(local[0].symbol),
-             onTap: () => _navigateToSymbol(context, local[0].symbol, local[0].displayName),
+             onTap: () => _navigateToSymbol(context, local[0].symbol, local[0].displayName,
+               exchange: local[0].exchange),
            ),
            const Divider(height: 1, indent: 70),
         ],
@@ -401,7 +409,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           ...fromWatchlist.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
-            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName,
+              exchange: i.exchange),
           )),
         ],
 
@@ -411,12 +420,14 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           ...fromHoldings.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
-            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName,
+              exchange: i.exchange),
           )),
           ...fromPositions.map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
-            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName,
+              exchange: i.exchange),
           )),
         ],
 
@@ -425,7 +436,13 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           _SectionHeader(icon: LucideIcons.globe, label: 'Universal Results', color: AppColors.textSecondary),
           ...remote.map((r) => _RemoteResultTile(
             result: r,
-            onTap: () => _navigateToSymbol(context, r.tradingSymbol, r.displaySymbol),
+            // Pass exchange + token so MCX/NFO/CDS detail screens work correctly
+            onTap: () => _navigateToSymbol(context, r.tradingSymbol, r.displaySymbol,
+              exchange: r.exchange,
+              token: r.symbolToken,
+              ltp: r.ltp ?? 0,
+              changePercent: r.percentChange ?? 0,
+            ),
           )),
         ] else if (_remoteLoading) ...[
           _SectionHeader(icon: LucideIcons.globe, label: 'Searching Exchanges...', color: AppColors.textSecondary),
@@ -441,7 +458,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           ...others.where((i) => i != (local.isNotEmpty ? local[0] : null)).map((i) => _LocalInstrumentTile(
             instrument: i,
             ltp: _ltpForSymbol(i.symbol),
-            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName,
+              exchange: i.exchange),
           )),
         ],
 
@@ -537,6 +555,14 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
             stock: stock,
             onTap: () {
               store.addRecentSearch(stock.symbol);
+              store.registerSearchResult(
+                symbol: stock.symbol,
+                displayName: stock.name,
+                exchange: stock.exchange,
+                token: stock.token,
+                ltp: stock.currentPrice,
+                changePercent: stock.changePercentage,
+              );
               Navigator.push(context, MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)));
             },
           )),

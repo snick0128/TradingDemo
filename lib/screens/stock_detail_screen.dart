@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
+import '../data/services/market_settings_service.dart';
+import '../models/market_settings.dart';
 import '../models/trading_models.dart';
 import 'alert_creation_screen.dart';
 import '../screens/advanced_chart_screen.dart';
@@ -28,11 +32,15 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   OrderType _pendingOrderSide = OrderType.buy;
   TradingChartSeries? _series;
-  TradingChartSeries? _prevSeries; // keep old data visible during load
+  TradingChartSeries? _prevSeries;
   bool _loadingSeries = true;
   String? _seriesError;
 
-  // Fade controller for smooth timeframe transitions
+  // Market settings stream
+  final _settingsService = MarketSettingsService();
+  StreamSubscription<MarketSettings>? _settingsSub;
+  MarketSettings _marketSettings = MarketSettings.defaults;
+
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
@@ -44,12 +52,16 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       duration: const Duration(milliseconds: 250),
     );
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+    _settingsSub = _settingsService.stream.listen((s) {
+      if (mounted) setState(() => _marketSettings = s);
+    });
     _loadSeries();
   }
 
   @override
   void dispose() {
     _fadeCtrl.dispose();
+    _settingsSub?.cancel();
     super.dispose();
   }
 
@@ -57,24 +69,27 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     setState(() {
       _loadingSeries = true;
       _seriesError = null;
-      // Keep _prevSeries = _series so old chart stays visible
       _prevSeries = _series;
     });
-    // Fade out gently
     _fadeCtrl.reverse();
     try {
       final now = DateTime.now().toUtc();
       final from = _fromForRange(now, _selectedRange);
       final interval = _intervalForRange(_selectedRange);
+      final store = TradingScope.of(context);
+      final stock = store.stockBySymbol(widget.symbol);
+
+      // Pass exchange + token so MCX/NFO/CDS instruments work correctly
+      // The backend uses these to look up instruments not in its hardcoded symbol list
       final candles = await _api.getHistoricalData(
         widget.symbol.toUpperCase(),
         interval: interval,
         from: _fmtApiDate(from),
         to: _fmtApiDate(now),
+        exchange: stock.exchange.isNotEmpty ? stock.exchange : null,
+        token: stock.token.isNotEmpty ? stock.token : null,
       );
       if (!mounted) return;
-      final store = TradingScope.of(context);
-      final stock = store.stockBySymbol(widget.symbol);
       setState(() {
         _series = TradingChartService.fromRawCandles(
           candles,
@@ -271,7 +286,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             ),
           ),
           const SizedBox(height: 8),
-          // Symbol · NSE
+          // Symbol · Exchange badge (uses actual exchange from stock model)
           Row(
             children: [
               Text(
@@ -285,15 +300,15 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE3F2FD),
+                  color: _exchangeBadgeColor(stock.exchange).withOpacity(0.12),
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text(
-                  'NSE',
+                child: Text(
+                  stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1565C0),
+                    color: _exchangeBadgeColor(stock.exchange),
                   ),
                 ),
               ),
@@ -738,67 +753,89 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   Widget _buildBottomBar(BuildContext context, Stock stock) {
+    final sellBlock = _marketSettings.checkAction(stock.exchange, isBuy: false);
+    final buyBlock  = _marketSettings.checkAction(stock.exchange, isBuy: true);
+    final anyBlock  = sellBlock ?? buyBlock;
+
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: Color(0xFFE0E0E0))),
       ),
       padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        12 + MediaQuery.of(context).padding.bottom,
+        16, 8, 16,
+        8 + MediaQuery.of(context).padding.bottom,
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // SELL
-          Expanded(
-            child: SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                onPressed: () => _openOrderDrawer(context, OrderType.sell),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE53935),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+          // Market closed / disabled banner
+          if (anyBlock != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              margin: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.access_time, size: 13, color: Color(0xFFE65100)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      anyBlock,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFFE65100), fontWeight: FontWeight.w500),
+                    ),
                   ),
-                ),
-                child: const Text(
-                  'SELL',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
+                ],
+              ),
+            ),
+          ],
+          Row(
+            children: [
+              // SELL
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: sellBlock != null ? null : () => _openOrderDrawer(context, OrderType.sell),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE53935),
+                      disabledBackgroundColor: const Color(0xFFE0E0E0),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text(
+                      'SELL',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // BUY
-          Expanded(
-            child: SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                onPressed: () => _openOrderDrawer(context, OrderType.buy),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00C853),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'BUY',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
+              const SizedBox(width: 8),
+              // BUY
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: buyBlock != null ? null : () => _openOrderDrawer(context, OrderType.buy),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00C853),
+                      disabledBackgroundColor: const Color(0xFFE0E0E0),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text(
+                      'BUY',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ],
       ),
@@ -810,8 +847,17 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  Widget _buildOrderDrawer(BuildContext context, Stock stock) {
-    return OrderFormDrawer(stock: stock, initialSide: _pendingOrderSide);
+  /// Returns the badge colour for a given exchange string.
+  Color _exchangeBadgeColor(String exchange) {
+    switch (exchange.toUpperCase()) {
+      case 'MCX':  return const Color(0xFF7B1FA2);
+      case 'NFO':  return const Color(0xFFE65100);
+      case 'BSE':  return const Color(0xFF0277BD);
+      case 'CDS':  return const Color(0xFF00695C);
+      case 'BFO':  return const Color(0xFF558B2F);
+      case 'NCDEX': return const Color(0xFF6D4C41);
+      default:     return const Color(0xFF1565C0); // NSE blue
+    }
   }
 }
 

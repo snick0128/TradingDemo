@@ -95,15 +95,26 @@ class BackendApiService {
 
   /// Returns historical OHLCV candles.
   /// [interval]: '1m' | '5m' | '15m' | '30m' | '1h' | '1d'
+  /// [exchange] + [token]: required for MCX/NFO/CDS instruments not in the
+  /// backend's hardcoded symbol list (e.g. instruments found via universal search)
   Future<List<Map<String, dynamic>>> getHistoricalData(
     String symbol, {
     String interval = '5m',
     String? from,
     String? to,
+    String? exchange,
+    String? token,
   }) async {
     var path = '/market/historical?symbol=$symbol&interval=$interval';
     if (from != null) path += '&from=${Uri.encodeComponent(from)}';
     if (to != null) path += '&to=${Uri.encodeComponent(to)}';
+    // Pass exchange+token so the backend can look up non-standard instruments
+    if (exchange != null && exchange.isNotEmpty) {
+      path += '&exchange=${Uri.encodeComponent(exchange)}';
+    }
+    if (token != null && token.isNotEmpty) {
+      path += '&token=${Uri.encodeComponent(token)}';
+    }
     final res = await _get(path);
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
@@ -224,7 +235,9 @@ class BackendApiService {
     String token, {
     String exchange = 'NSE',
   }) async {
-    final res = await _get('/derivatives/quote?token=$token&exchange=$exchange');
+    // Ensure exchange is never empty — default to NSE only if truly unspecified
+    final ex = (exchange.isNotEmpty) ? exchange.toUpperCase() : 'NSE';
+    final res = await _get('/derivatives/quote?token=$token&exchange=$ex');
     return res['data'] as Map<String, dynamic>;
   }
 

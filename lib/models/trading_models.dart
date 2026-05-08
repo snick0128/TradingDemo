@@ -63,6 +63,9 @@ class Stock {
   final double changePercentage;
   final String sector;
   final String exchange;
+  /// Angel One instrument token — required for MCX/NFO/CDS historical data
+  /// and quote lookups. Empty string for watchlist stocks seeded from REST.
+  final String token;
   final double? open;
   final double? high;
   final double? low;
@@ -74,8 +77,6 @@ class Stock {
   final double? volume;
   final double? marketCap;
   /// True when the price data is stale (market closed or no recent tick).
-  /// The price is still valid — it's the last known price — but the UI
-  /// can show a visual indicator (e.g. a clock icon or muted colour).
   final bool isStale;
 
   Stock({
@@ -85,6 +86,7 @@ class Stock {
     required this.changePercentage,
     required this.sector,
     this.exchange = 'NSE',
+    this.token = '',
     this.open,
     this.high,
     this.low,

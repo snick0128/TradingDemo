@@ -7,7 +7,7 @@ import 'package:syncfusion_flutter_charts/charts.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
-import '../widgets/order_form_drawer.dart';
+import '../widgets/order_form_sheet.dart';
 
 class HoldingsScreen extends StatelessWidget {
   final bool showAppBar;
@@ -396,17 +396,7 @@ class _HoldingCard extends StatelessWidget {
       );
     }
 
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Sell',
-      barrierColor: Colors.black54,
-      transitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (ctx, _, __) => Align(
-        alignment: Alignment.centerRight,
-        child: OrderFormDrawer(stock: stock, initialSide: OrderType.sell),
-      ),
-    );
+    OrderFormSheet.show(context, stock: stock, initialSide: OrderType.sell);
   }
 }
 

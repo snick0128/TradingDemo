@@ -49,7 +49,7 @@ class BackendApiService {
     try {
       final response = await http
           .post(uri, headers: _headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30)); // increased from 15s — Render cold starts + Firestore reads
       return _parse(response);
     } on TimeoutException {
       throw BackendException('The request took too long. Please check your connection and try again.');

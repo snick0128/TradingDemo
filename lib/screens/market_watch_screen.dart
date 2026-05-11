@@ -10,7 +10,7 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/backend_error_widget.dart';
-import '../widgets/order_form_drawer.dart';
+import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
 import 'stock_detail_screen.dart';
 
@@ -41,11 +41,6 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   bool _compactView = false;
   WatchlistSort _sort = WatchlistSort.symbol;
-
-  Stock? _drawerStock;
-  OrderType _drawerSide = OrderType.buy;
-
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -125,14 +120,8 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     return stocks;
   }
 
-  void _openOrderDrawer(Stock stock, OrderType side) {
-    setState(() {
-      _drawerStock = stock;
-      _drawerSide = side;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scaffoldKey.currentState?.openEndDrawer();
-    });
+  void _openOrderSheet(Stock stock, OrderType side) {
+    OrderFormSheet.show(context, stock: stock, initialSide: side);
   }
 
   // ─── Dialogs ────────────────────────────────────────────────────────────────
@@ -239,10 +228,6 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     }
 
     return Scaffold(
-      key: _scaffoldKey,
-      endDrawer: _drawerStock != null
-          ? OrderFormDrawer(stock: _drawerStock!, initialSide: _drawerSide)
-          : null,
       appBar: AppBar(
         title: const Text(
           'Watchlist',
@@ -298,8 +283,8 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
                 _watchlists[i] = _watchlists[i].copyWith(symbols: newSymbols);
               });
             },
-            onBuy: (stock) => _openOrderDrawer(stock, OrderType.buy),
-            onSell: (stock) => _openOrderDrawer(stock, OrderType.sell),
+            onBuy: (stock) => _openOrderSheet(stock, OrderType.buy),
+            onSell: (stock) => _openOrderSheet(stock, OrderType.sell),
             onTap: (stock) => Navigator.push(
               context,
               MaterialPageRoute(

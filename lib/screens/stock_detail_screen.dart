@@ -13,7 +13,7 @@ import 'alert_creation_screen.dart';
 import '../screens/advanced_chart_screen.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
-import '../widgets/order_form_drawer.dart';
+import '../widgets/order_form_sheet.dart';
 
 class StockDetailScreen extends StatefulWidget {
   final String symbol;
@@ -29,7 +29,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   int _selectedRange = 2;
   bool _useCandleChart = false;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   OrderType _pendingOrderSide = OrderType.buy;
   TradingChartSeries? _series;
   TradingChartSeries? _prevSeries;
@@ -82,42 +81,55 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // Already has a live price — nothing to do
     if (stock.currentPrice > 0) return;
 
-    // Need a token to fetch a quote
-    if (stock.token.isEmpty) {
-      debugPrint('[StockDetail] No token for ${widget.symbol} — cannot fetch live quote');
-      return;
+    debugPrint('[StockDetail] No live price for ${widget.symbol} — fetching...');
+
+    double ltp = 0;
+    double pct = 0;
+
+    // Strategy 1: Try /market/stock?symbol= (reads from live WebSocket cache)
+    // This works for any symbol the backend has ever received a tick for.
+    try {
+      final detail = await _api.getStockDetail(widget.symbol.toUpperCase());
+      final rawLtp = (detail['ltp'] as num?)?.toDouble() ?? 0.0;
+      if (rawLtp > 0) {
+        ltp = rawLtp;
+        pct = (detail['changePercent'] as num?)?.toDouble() ?? 0.0;
+        debugPrint('[StockDetail] Got price from /market/stock: ₹$ltp');
+      }
+    } catch (_) {}
+
+    // Strategy 2: Try /derivatives/quote?token=...&exchange=... (Angel One REST)
+    // Works for any instrument with a valid token, including MCX futures.
+    if (ltp <= 0 && stock.token.isNotEmpty) {
+      try {
+        final quote = await _api.getQuoteByToken(
+          stock.token,
+          exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+        );
+        final rawLtp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
+        if (rawLtp > 0) {
+          ltp = rawLtp;
+          pct = (quote['percentChange'] as num?)?.toDouble() ?? 0.0;
+          debugPrint('[StockDetail] Got price from /derivatives/quote: ₹$ltp');
+        }
+      } catch (_) {}
     }
 
-    debugPrint('[StockDetail] Fetching live quote for ${widget.symbol} token=${stock.token} exchange=${stock.exchange}');
+    if (!mounted) return;
 
-    try {
-      final quote = await _api.getQuoteByToken(
-        stock.token,
-        exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+    if (ltp > 0) {
+      store.registerSearchResult(
+        symbol:        widget.symbol,
+        displayName:   stock.name.isNotEmpty ? stock.name : widget.symbol,
+        exchange:      stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+        token:         stock.token,
+        ltp:           ltp,
+        changePercent: pct,
       );
-
-      if (!mounted) return;
-
-      final ltp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
-      final pct = (quote['percentChange'] as num?)?.toDouble() ?? 0.0;
-
-      if (ltp > 0) {
-        // Update the store's universe entry with the live price
-        store.registerSearchResult(
-          symbol:        widget.symbol,
-          displayName:   stock.name.isNotEmpty ? stock.name : widget.symbol,
-          exchange:      stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-          token:         stock.token,
-          ltp:           ltp,
-          changePercent: pct,
-        );
-        // Trigger a rebuild so the header shows the live price
-        if (mounted) setState(() {});
-        debugPrint('[StockDetail] Live quote fetched: ${widget.symbol} = ₹$ltp ($pct%)');
-      }
-    } catch (e) {
-      // Non-fatal — the screen still shows with ₹0.00 if quote fails
-      debugPrint('[StockDetail] Live quote fetch failed for ${widget.symbol}: $e');
+      if (mounted) setState(() {});
+      debugPrint('[StockDetail] Price updated: ${widget.symbol} = ₹$ltp');
+    } else {
+      debugPrint('[StockDetail] Could not fetch price for ${widget.symbol}');
     }
   }
 
@@ -217,7 +229,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
     if (_initializing) {
       return Scaffold(
-        key: _scaffoldKey,
         backgroundColor: Colors.white,
         appBar: _buildAppBar(context, store, rawStock),
         body: const Center(
@@ -231,7 +242,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               ),
               SizedBox(height: 12),
               Text(
-                'Loading instrument data...',
+                'Fetching live price & chart…',
                 style: TextStyle(fontSize: 13, color: Color(0xFF757575)),
               ),
             ],
@@ -255,11 +266,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final chartColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
 
     return Scaffold(
-      key: _scaffoldKey,
       backgroundColor: Colors.white,
       appBar: _buildAppBar(context, store, stock),
       bottomNavigationBar: _buildBottomBar(context, stock),
-      endDrawer: OrderFormDrawer(stock: stock, initialSide: _pendingOrderSide),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1097,7 +1106,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   void _openOrderDrawer(BuildContext context, OrderType type) {
     setState(() => _pendingOrderSide = type);
-    _scaffoldKey.currentState?.openEndDrawer();
+    OrderFormSheet.show(context, stock: _withSeriesFallback(
+      TradingScope.of(context).stockBySymbol(widget.symbol),
+      _series ?? TradingChartService.fromRawCandles(const [], fallbackPrice: 0),
+    ), initialSide: type);
   }
 
   /// Returns the badge colour for a given exchange string.

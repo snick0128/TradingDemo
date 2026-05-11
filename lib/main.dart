@@ -296,7 +296,11 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 status: _mapOrderStatus(rawStatus),
                 dateTime: dateTime,
                 rejectionReason: data['rejectionReason'] as String?,
-                executedAt: (data['executedAt'] as Timestamp?)?.toDate(),
+                executedAt: data['executedAt'] is Timestamp
+                    ? (data['executedAt'] as Timestamp).toDate()
+                    : data['executedAt'] is int
+                        ? DateTime.fromMillisecondsSinceEpoch(data['executedAt'] as int)
+                        : null,
                 executedPrice:
                     ((data['avg_executed_price'] as num?) ??
                             (data['executed_price'] as num?) ??
@@ -343,7 +347,11 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 limitPrice: (data['limitPrice'] as num?)?.toDouble(),
                 isActive: (data['isActive'] as bool?) ?? true,
                 createdAt: createdAt,
-                triggeredAt: (data['triggeredAt'] as Timestamp?)?.toDate(),
+                triggeredAt: data['triggeredAt'] is Timestamp
+                    ? (data['triggeredAt'] as Timestamp).toDate()
+                    : data['triggeredAt'] is int
+                        ? DateTime.fromMillisecondsSinceEpoch(data['triggeredAt'] as int)
+                        : null,
               );
             }).toList();
             _tradingStore.replaceGttOrders(mapped);
@@ -405,39 +413,62 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         );
 
     // Holdings stream — reads from portfolios/{uid}/holdings/{stock}
+    // The backend writes ALL trades here (MIS + CNC/NRML).
+    // Split by productType: MIS → positions, CNC/NRML → holdings.
     _holdingsSub?.cancel();
     _holdingsSub = _tradingService!
         .holdingsStreamForUser(userId)
         .listen(
           (snapshot) {
-            final List<Holding> mapped = snapshot.docs
-                .map((doc) {
-                  final data = doc.data();
-                  final symbol = (data['stock'] as String?) ?? doc.id;
-                  final qty = ((data['qty'] as num?) ?? 0).toInt();
-                  final avgPrice = ((data['avg_price'] as num?) ?? 0)
-                      .toDouble();
-                  final currentPrice = _tradingStore
-                      .stockBySymbol(symbol)
-                      .currentPrice;
-                  final updatedAt = data['updatedAt'];
-                  final purchaseDate = updatedAt is Timestamp
-                      ? updatedAt.toDate()
+            final List<Holding> newHoldings = [];
+            final List<Position> newPositions = [];
+
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              final symbol =
+                  ((data['stock'] as String?) ?? doc.id).toUpperCase();
+              final qty = ((data['qty'] as num?) ?? 0).toInt();
+              if (qty <= 0) continue;
+
+              final avgPrice =
+                  ((data['avg_price'] as num?) ?? 0).toDouble();
+              final productType =
+                  ((data['productType'] as String?) ?? 'MIS').toUpperCase();
+              final currentPrice =
+                  _tradingStore.stockBySymbol(symbol).currentPrice;
+              final updatedAt = data['updatedAt'];
+              final date = updatedAt is Timestamp
+                  ? updatedAt.toDate()
+                  : updatedAt is int
+                      ? DateTime.fromMillisecondsSinceEpoch(updatedAt as int)
                       : DateTime.now();
 
-                  return Holding(
-                    symbol: symbol,
-                    name: symbol,
-                    quantity: qty,
-                    avgPrice: avgPrice,
-                    currentPrice: currentPrice,
-                    purchaseDate: purchaseDate,
-                  );
-                })
-                .where((h) => h.quantity > 0)
-                .toList();
+              if (productType == 'CNC' || productType == 'NRML') {
+                newHoldings.add(Holding(
+                  symbol: symbol,
+                  name: symbol,
+                  quantity: qty,
+                  avgPrice: avgPrice,
+                  currentPrice: currentPrice,
+                  purchaseDate: date,
+                ));
+              } else {
+                // MIS (intraday) → Positions tab
+                newPositions.add(Position(
+                  symbol: symbol,
+                  name: symbol,
+                  product: ProductType.mis,
+                  quantity: qty,
+                  avgPrice: avgPrice,
+                  currentPrice: currentPrice,
+                  side: OrderType.buy,
+                  openedAt: date,
+                ));
+              }
+            }
 
-            _tradingStore.replaceHoldings(mapped);
+            _tradingStore.replaceHoldings(newHoldings);
+            _tradingStore.replacePositions(newPositions);
           },
           onError: (e) {
             // Non-fatal: holdings stream error

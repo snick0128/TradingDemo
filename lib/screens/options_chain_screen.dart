@@ -6,7 +6,7 @@ import 'package:syncfusion_flutter_charts/charts.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
-import '../widgets/order_form_drawer.dart';
+import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
 
 // ─── Mock Data ────────────────────────────────────────────────────────────────
@@ -82,8 +82,6 @@ class OptionsChainScreen extends StatefulWidget {
 class _OptionsChainScreenState extends State<OptionsChainScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  String _orderSymbol = '';
-  OrderType _orderSide = OrderType.buy;
 
   @override
   void initState() {
@@ -119,11 +117,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
                 .map((e) => _OptionsChainView(
                       chain: _buildChain(e),
                       onStrikeTap: (strike, side) {
-                        setState(() {
-                          _orderSymbol = 'NIFTY';
-                          _orderSide = side;
-                        });
-                        Scaffold.of(context).openEndDrawer();
+                        final stock = store.stockBySymbol('NIFTY');
+                        OrderFormSheet.show(context, stock: stock, initialSide: side);
                       },
                     ))
                 .toList(),
@@ -133,15 +128,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
     );
 
     if (!widget.showAppBar) {
-      return Scaffold(
-        body: body,
-        endDrawer: _orderSymbol.isNotEmpty
-            ? OrderFormDrawer(
-                stock: store.stockBySymbol(_orderSymbol),
-                initialSide: _orderSide,
-              )
-            : null,
-      );
+      return Scaffold(body: body);
     }
 
     return Scaffold(
@@ -149,12 +136,6 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
         leading: const BackButton(),
         title: const Text('Options Chain — NIFTY'),
       ),
-      endDrawer: _orderSymbol.isNotEmpty
-          ? OrderFormDrawer(
-              stock: store.stockBySymbol(_orderSymbol),
-              initialSide: _orderSide,
-            )
-          : null,
       body: body,
     );
   }

@@ -36,24 +36,24 @@ service cloud.firestore {
 
     // ── orders ─────────────────────────────────────────────────────────────
     // Written exclusively by the backend (Admin SDK). Clients read only.
+    // NOTE: resource.data.userId check does NOT work on collection queries —
+    // Firestore cannot evaluate document fields before fetching.
+    // The .where('userId', isEqualTo: uid) in the Flutter query scopes results.
     match /orders/{orderId} {
-      allow read:  if isAdmin() ||
-                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
     // ── order_requests ─────────────────────────────────────────────────────
     // No longer used for trading — kept for any legacy reads.
     match /order_requests/{requestId} {
-      allow read:   if isAdmin() ||
-                       (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read:   if isSignedIn();
       allow write:  if false; // backend Admin SDK only
     }
 
     // ── trades ─────────────────────────────────────────────────────────────
     match /trades/{tradeId} {
-      allow read:  if isAdmin() ||
-                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
@@ -78,8 +78,7 @@ service cloud.firestore {
 
     // ── ledger ─────────────────────────────────────────────────────────────
     match /ledger/{entryId} {
-      allow read:  if isAdmin() ||
-                      (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 

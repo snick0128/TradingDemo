@@ -240,6 +240,30 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
     }
   }
 
+  Future<void> _saveSingle(String categoryKey) async {
+    if (_saving) return;
+    final d = _draft[categoryKey];
+    if (d == null) return;
+    setState(() => _saving = true);
+    try {
+      final db  = FirebaseFirestore.instance;
+      final cat = _kCategories.firstWhere((c) => c.key == categoryKey);
+      await db.collection('category_leverage').doc(categoryKey).set({
+        'categoryKey':  categoryKey,
+        'categoryName': cat.name,
+        'leverage':     d['leverage'],
+        'margin':       d['margin'],
+        'updatedAt':    FieldValue.serverTimestamp(),
+      });
+      _saved[categoryKey] = Map.from(d);
+      if (mounted) AppToast.success(context, '${cat.name} saved.');
+    } catch (e) {
+      if (mounted) AppToast.error(context, 'Could not save. Please try again.');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   void _discard() {
     setState(() {
       for (final e in _saved.entries) {
@@ -258,34 +282,33 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
             title: 'Leverage & Margin',
             subtitle: 'Set maximum leverage and margin % per trading category. '
                 'Changes apply to all new orders immediately.',
-            trailing: _isDirty
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      OutlinedButton(
-                        onPressed: _discard,
-                        child: const Text('Discard'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _saving ? null : _saveAll,
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 14, height: 14,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(LucideIcons.save, size: 14),
-                        label: const Text('Save All'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 8),
-                        ),
-                      ),
-                    ],
-                  )
-                : null,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isDirty)
+                  OutlinedButton(
+                    onPressed: _discard,
+                    child: const Text('Discard'),
+                  ),
+                if (_isDirty) const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: (_saving || _loading) ? null : _saveAll,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 14, height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(LucideIcons.save, size: 14),
+                  label: Text(_isDirty ? 'Save Changes' : 'Save All'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
 
@@ -343,18 +366,20 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                     leverage:  data['leverage']!,
                     margin:    data['margin']!,
                     isDirty:   isDirty,
+                    saving:    _saving,
                     onChanged: (lev, mar) {
                       setState(() {
                         _draft[cat.key] = {'leverage': lev, 'margin': mar};
                       });
                     },
+                    onSave: () => _saveSingle(cat.key),
                   );
                 },
               ),
             ),
 
-          // Sticky save bar
-          if (_isDirty && !_loading)
+          // Sticky save bar — always visible at bottom
+          if (!_loading)
             Container(
               padding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
               decoration: const BoxDecoration(
@@ -363,18 +388,29 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
               child: Row(
                 children: [
                   Text(
-                    'You have unsaved changes',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                    _isDirty
+                        ? 'You have unsaved changes'
+                        : 'All changes saved',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _isDirty
+                          ? AppColors.warning
+                          : AppColors.textSecondary,
+                      fontWeight: _isDirty
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                    ),
                   ),
                   const Spacer(),
-                  OutlinedButton(
-                    onPressed: _discard,
-                    child: const Text('Discard'),
-                  ),
-                  const SizedBox(width: 10),
+                  if (_isDirty) ...[
+                    OutlinedButton(
+                      onPressed: _discard,
+                      child: const Text('Discard'),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   ElevatedButton.icon(
-                    onPressed: _saving ? null : _saveAll,
+                    onPressed: (_saving || _loading) ? null : _saveAll,
                     icon: _saving
                         ? const SizedBox(
                             width: 14, height: 14,
@@ -382,7 +418,10 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                                 strokeWidth: 2, color: Colors.white),
                           )
                         : const Icon(LucideIcons.save, size: 14),
-                    label: const Text('Save All Changes'),
+                    label: Text(_isDirty ? 'Save All Changes' : 'Save All'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                    ),
                   ),
                 ],
               ),
@@ -400,14 +439,18 @@ class _CategoryCard extends StatefulWidget {
   final double leverage;
   final double margin;
   final bool isDirty;
+  final bool saving;
   final void Function(double leverage, double margin) onChanged;
+  final VoidCallback onSave;
 
   const _CategoryCard({
     required this.category,
     required this.leverage,
     required this.margin,
     required this.isDirty,
+    required this.saving,
     required this.onChanged,
+    required this.onSave,
   });
 
   @override
@@ -590,8 +633,8 @@ class _CategoryCardState extends State<_CategoryCard> {
                   onChanged: _onMarginChanged,
                 ),
               ),
-              const SizedBox(width: 16),
-              // Reset to default button
+              const SizedBox(width: 12),
+              // Reset to default
               Tooltip(
                 message: 'Reset to default\n'
                     '(${cat.defaultLeverage.toStringAsFixed(0)}x / '
@@ -606,7 +649,31 @@ class _CategoryCardState extends State<_CategoryCard> {
                   },
                   icon: const Icon(LucideIcons.rotateCcw, size: 16),
                   color: AppColors.textSecondary,
-                  tooltip: 'Reset to default',
+                ),
+              ),
+              // Per-card Save button — always visible
+              const SizedBox(width: 4),
+              SizedBox(
+                height: 40,
+                child: ElevatedButton.icon(
+                  onPressed: widget.saving ? null : widget.onSave,
+                  icon: widget.saving && widget.isDirty
+                      ? const SizedBox(
+                          width: 12, height: 12,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(LucideIcons.save, size: 13),
+                  label: const Text('Save'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: widget.isDirty
+                        ? AppColors.primary
+                        : AppColors.primary.withOpacity(0.6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 0),
+                    textStyle: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ],

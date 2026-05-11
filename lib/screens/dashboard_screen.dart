@@ -314,6 +314,10 @@ class _NetWorthCard extends StatelessWidget {
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
+              const Text(
+                '  (cash only)',
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
             ],
           ),
         ],

@@ -172,11 +172,12 @@ class TradingStore extends ChangeNotifier {
     );
 
     // Stream orders → orders list
+    // NOTE: No orderBy here — composite index (userId + createdAt) is not
+    // guaranteed to exist in all environments. We sort client-side instead.
     _ordersSub = db
         .collection('orders')
         .where('userId', isEqualTo: userId)
-        .orderBy('createdAt', descending: true)
-        .limit(50)
+        .limit(100)
         .snapshots()
         .listen(
       (snap) {
@@ -209,11 +210,14 @@ class TradingStore extends ChangeNotifier {
     _positions.clear();
 
     for (final doc in docs) {
-      final d          = doc.data();
-      final symbol     = (d['stock'] as String? ?? doc.id).toUpperCase();
-      final qty        = ((d['qty'] as num?) ?? 0).toInt();
-      final avgPrice   = ((d['avg_price'] as num?) ?? 0).toDouble();
-      final productType = (d['productType'] as String?) ?? 'CNC';
+      final d           = doc.data();
+      final symbol      = (d['stock'] as String? ?? doc.id).toUpperCase();
+      final qty         = ((d['qty'] as num?) ?? 0).toInt();
+      final avgPrice    = ((d['avg_price'] as num?) ?? 0).toDouble();
+      // productType written by backend since RMS fix.
+      // Default to 'MIS' — intraday is the primary product in this app.
+      // Old docs without productType are treated as intraday positions.
+      final productType = ((d['productType'] as String?) ?? 'MIS').toUpperCase();
 
       if (qty <= 0) continue;
 
@@ -221,7 +225,7 @@ class TradingStore extends ChangeNotifier {
       final stock        = stockBySymbolOrNull(symbol);
       final currentPrice = stock?.currentPrice ?? avgPrice;
 
-      // Populate _portfolio (used by dashboard P&L)
+      // Populate _portfolio (used by dashboard P&L) — always, regardless of product
       _portfolio.add(PortfolioItem(
         symbol:        symbol,
         name:          stock?.name ?? symbol,
@@ -230,7 +234,7 @@ class TradingStore extends ChangeNotifier {
         currentPrice:  currentPrice,
       ));
 
-      // Populate _holdings (delivery / CNC)
+      // Populate _holdings (delivery / CNC / NRML only)
       if (productType == 'CNC' || productType == 'NRML') {
         _holdings.add(Holding(
           symbol:       symbol,
@@ -263,24 +267,31 @@ class TradingStore extends ChangeNotifier {
       List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     _orders.clear();
     for (final doc in docs) {
-      final d      = doc.data();
-      final typeStr = (d['type'] as String? ?? 'BUY').toUpperCase();
-      final statusStr = (d['status'] as String? ?? 'EXECUTED').toUpperCase();
+      final d          = doc.data();
+      final typeStr    = (d['type'] as String? ?? 'BUY').toUpperCase();
+      final statusStr  = (d['status'] as String? ?? 'EXECUTED').toUpperCase();
+      final productStr = (d['productType'] as String? ?? 'MIS').toUpperCase();
 
       _orders.add(Order(
-        id:       doc.id,
-        symbol:   (d['stock'] as String? ?? '').toUpperCase(),
-        name:     (d['stock'] as String? ?? '').toUpperCase(),
-        quantity: ((d['qty'] as num?) ?? 0).toInt(),
-        price:    ((d['price'] as num?) ?? 0).toDouble(),
-        type:     typeStr == 'SELL' ? OrderType.sell : OrderType.buy,
-        status:   _orderStatusFromString(statusStr),
-        dateTime: _timestampToDate(d['createdAt']),
-        executedAt: _timestampToDate(d['executedAt'] ?? d['createdAt']),
+        id:            doc.id,
+        symbol:        (d['stock'] as String? ?? '').toUpperCase(),
+        name:          (d['stock'] as String? ?? '').toUpperCase(),
+        quantity:      ((d['qty'] as num?) ?? 0).toInt(),
+        price:         ((d['price'] as num?) ?? 0).toDouble(),
+        type:          typeStr == 'SELL' ? OrderType.sell : OrderType.buy,
+        status:        _orderStatusFromString(statusStr),
+        dateTime:      _timestampToDate(d['createdAt']),
+        executedAt:    _timestampToDate(d['executedAt'] ?? d['createdAt']),
         executedPrice: ((d['executed_price'] as num?) ?? (d['price'] as num?))?.toDouble(),
-        pnl: ((d['pnl'] as num?) ?? 0).toDouble(),
+        pnl:           ((d['pnl'] as num?) ?? 0).toDouble(),
+        product:       productStr == 'NRML' ? ProductType.nrml
+                     : productStr == 'CNC'  ? ProductType.nrml
+                     : ProductType.mis,
+        variety:       OrderVariety.market,
       ));
     }
+    // Sort newest-first client-side (avoids composite index requirement)
+    _orders.sort((a, b) => b.dateTime.compareTo(a.dateTime));
   }
 
   OrderStatus _orderStatusFromString(String s) {
@@ -1162,6 +1173,14 @@ class TradingStore extends ChangeNotifier {
     if (updateBalance) {
       _balance = updated.balance;
     }
+    notifyListeners();
+  }
+
+  /// Optimistically update balance after a successful order response.
+  /// The Firestore stream will confirm/correct this within ~1 second.
+  void setOptimisticBalance(double newBalance) {
+    if (_balance == newBalance) return;
+    _balance = newBalance;
     notifyListeners();
   }
 

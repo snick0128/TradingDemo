@@ -88,8 +88,7 @@ class TradingService {
       _firestore.raw
           .collection('orders')
           .where('userId', isEqualTo: uid)
-          .orderBy('createdAt', descending: true)
-          .limit(50)
+          .limit(100)
           .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> gttOrdersStreamForUser(

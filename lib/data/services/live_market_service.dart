@@ -22,17 +22,15 @@ class LiveMarketService {
       StreamController<Map<String, List<Stock>>>.broadcast();
 
   final Map<String, Stock> _latestMap = {};
+  // Start with all known symbols — MCX commodities included.
+  // This set is updated by setSubscribedSymbols() as the user navigates.
   final Set<String> _subscriptions = {
-    'RELIANCE',
-    'TCS',
-    'INFY',
-    'HDFCBANK',
-    'ICICIBANK',
-    'SBIN',
-    'WIPRO',
-    'AXISBANK',
-    'BAJFINANCE',
-    'HINDUNILVR',
+    // NSE Equities
+    'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK',
+    'SBIN', 'WIPRO', 'AXISBANK', 'BAJFINANCE', 'HINDUNILVR',
+    // MCX Commodities
+    'GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS',
+    'COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL', 'COTTON',
   };
 
   WebSocketChannel? _channel;
@@ -92,7 +90,7 @@ class LiveMarketService {
       _emitMovers();
       _setError(false, '');
     } catch (e) {
-      _setError(true, 'Bootstrap market snapshot failed: $e');
+      _setError(true, 'Could not load market data. Please check your connection and try again.');
     }
   }
 
@@ -103,14 +101,14 @@ class LiveMarketService {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _wsSub = _channel!.stream.listen(
         _onWsMessage,
-        onError: (e) => _onWsError('WebSocket error: $e'),
-        onDone: () => _onWsError('WebSocket disconnected'),
+        onError: (e) => _onWsError('Live market feed interrupted. Reconnecting…'),
+        onDone: () => _onWsError('Live market feed disconnected. Reconnecting…'),
         cancelOnError: true,
       );
       _sendSubscribe();
       _setError(false, '');
     } catch (e) {
-      _onWsError('WebSocket connect failed: $e');
+      _onWsError('Could not connect to the live market feed. Retrying…');
     }
   }
 
@@ -141,7 +139,7 @@ class LiveMarketService {
         _setError(false, '');
       }
     } catch (e) {
-      _onWsError('Invalid market stream payload: $e');
+      _onWsError('Received unexpected data from the market feed. Reconnecting…');
     }
   }
 
@@ -192,20 +190,36 @@ class LiveMarketService {
 
   static Stock? _mapToStock(Map<String, dynamic> d) {
     final symbol = d['symbol'] as String?;
-    final ltp = (d['ltp'] as num?)?.toDouble();
-    if (symbol == null || ltp == null || ltp <= 0) return null;
+    if (symbol == null || symbol.isEmpty) return null;
+
+    // ltp can be null for symbols not yet ticked — skip those
+    final ltpRaw = d['ltp'];
+    final ltp = ltpRaw is num ? ltpRaw.toDouble() : null;
+    if (ltp == null || ltp <= 0) return null;
 
     final stale = d['stale'] == true;
-    final changePercent = (d['changePercent'] as num?)?.toDouble() ?? 0.0;
-    final prevClose = (d['prevClose'] as num?)?.toDouble();
-    final volume = (d['volume'] as num?)?.toDouble();
 
-    // Use exchange from backend data — never hardcode NSE
-    // Backend sends 'NSE', 'MCX', 'NFO', 'CDS', 'BSE' etc.
+    // Backend sends 'changePercent' (not 'changePercentage')
+    final changePercent =
+        (d['changePercent'] as num?)?.toDouble() ??
+        (d['changePercentage'] as num?)?.toDouble() ??
+        0.0;
+
+    final prevClose = (d['prevClose'] as num?)?.toDouble();
+    final volume    = (d['volume']   as num?)?.toDouble();
+
+    // exchange is always present now — backend enriches every payload
     final exchange = (d['exchange'] as String?)?.toUpperCase() ?? 'NSE';
 
-    // Token is needed for MCX/NFO/CDS historical data and quote lookups
+    // token is needed for MCX/NFO historical data and quote lookups
     final token = (d['token'] as String?) ?? '';
+
+    // expiry is sent as ISO-8601 string for futures contracts, null for equities
+    DateTime? expiry;
+    final expiryRaw = d['expiry'];
+    if (expiryRaw is String && expiryRaw.isNotEmpty) {
+      expiry = DateTime.tryParse(expiryRaw);
+    }
 
     return Stock(
       symbol: symbol,
@@ -218,6 +232,7 @@ class LiveMarketService {
       prevClose: prevClose,
       volume: volume,
       isStale: stale,
+      expiry: expiry,
     );
   }
 
@@ -234,28 +249,52 @@ class LiveMarketService {
   }
 
   static const _names = {
-    'RELIANCE': 'Reliance Industries',
-    'TCS': 'Tata Consultancy Services',
-    'INFY': 'Infosys',
-    'HDFCBANK': 'HDFC Bank',
-    'ICICIBANK': 'ICICI Bank',
-    'SBIN': 'State Bank of India',
-    'WIPRO': 'Wipro Limited',
-    'AXISBANK': 'Axis Bank',
+    // NSE Equities
+    'RELIANCE':   'Reliance Industries',
+    'TCS':        'Tata Consultancy Services',
+    'INFY':       'Infosys',
+    'HDFCBANK':   'HDFC Bank',
+    'ICICIBANK':  'ICICI Bank',
+    'SBIN':       'State Bank of India',
+    'WIPRO':      'Wipro Limited',
+    'AXISBANK':   'Axis Bank',
     'BAJFINANCE': 'Bajaj Finance',
     'HINDUNILVR': 'Hindustan Unilever',
+    // MCX Commodities
+    'GOLD':       'Gold Futures',
+    'SILVER':     'Silver Futures',
+    'CRUDEOIL':   'Crude Oil Futures',
+    'NATURALGAS': 'Natural Gas Futures',
+    'COPPER':     'Copper Futures',
+    'ZINC':       'Zinc Futures',
+    'LEAD':       'Lead Futures',
+    'ALUMINIUM':  'Aluminium Futures',
+    'NICKEL':     'Nickel Futures',
+    'COTTON':     'Cotton Futures',
   };
 
   static const _sectors = {
-    'RELIANCE': 'Energy',
-    'TCS': 'IT',
-    'INFY': 'IT',
-    'HDFCBANK': 'Banking',
-    'ICICIBANK': 'Banking',
-    'SBIN': 'Banking',
-    'WIPRO': 'IT',
-    'AXISBANK': 'Banking',
+    // NSE Equities
+    'RELIANCE':   'Energy',
+    'TCS':        'IT',
+    'INFY':       'IT',
+    'HDFCBANK':   'Banking',
+    'ICICIBANK':  'Banking',
+    'SBIN':       'Banking',
+    'WIPRO':      'IT',
+    'AXISBANK':   'Banking',
     'BAJFINANCE': 'Finance',
     'HINDUNILVR': 'FMCG',
+    // MCX Commodities
+    'GOLD':       'Commodity',
+    'SILVER':     'Commodity',
+    'CRUDEOIL':   'Commodity',
+    'NATURALGAS': 'Commodity',
+    'COPPER':     'Commodity',
+    'ZINC':       'Commodity',
+    'LEAD':       'Commodity',
+    'ALUMINIUM':  'Commodity',
+    'NICKEL':     'Commodity',
+    'COTTON':     'Commodity',
   };
 }

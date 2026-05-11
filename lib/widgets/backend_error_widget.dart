@@ -91,16 +91,6 @@ class _FullScreenError extends StatelessWidget {
                   ),
                 ),
               ),
-            const SizedBox(height: 16),
-            const Text(
-              'Make sure the backend is running:\ncd paper_trading_backend && npm start',
-              style: TextStyle(
-                fontSize: 11,
-                color: AppColors.textSecondary,
-                fontFamily: 'monospace',
-              ),
-              textAlign: TextAlign.center,
-            ),
           ],
         ),
       ),

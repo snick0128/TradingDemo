@@ -570,11 +570,21 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       setState(() => _submitting = true);
       try {
         final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+
+        // RMS FIX:
+        // Bug #2 — productType and exchange were never sent to backend.
+        // Problem: Every order was treated as full-value, no leverage, NSE-only.
+        // Solution: Pass _product (MIS/NRML) and stock.exchange to backend.
+        // The backend now applies correct leverage and market-hours check.
         final result = await api.placeOrder(
-          userId: sessionUser.uid,
-          symbol: widget.stock.symbol,
-          qty: _qty,
-          type: _isBuy ? 'BUY' : 'SELL',
+          userId:      sessionUser.uid,
+          symbol:      widget.stock.symbol,
+          qty:         _qty,
+          type:        _isBuy ? 'BUY' : 'SELL',
+          productType: _product == ProductType.mis ? 'MIS' : 'NRML',
+          exchange:    widget.stock.exchange.isNotEmpty
+                           ? widget.stock.exchange
+                           : 'NSE',
         );
 
         // Dismiss the drawer first, then show toast above it

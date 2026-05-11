@@ -156,41 +156,45 @@ class AdminStore extends ChangeNotifier {
 
   bool isStockEnabled(String symbol) => _stockEnabled[symbol] ?? true;
 
-  void enableUser(String userId) {
+  Future<void> enableUser(String userId) async {
     _setUserActiveLocal(userId, true);
     _logAction('SYSTEM', 'Enable User', userId);
     notifyListeners();
 
     if (_isFirebaseMode) {
-      _fireAndForget(
-        () => _tradingService!.setTradingEnabled(
+      try {
+        await _tradingService!.setTradingEnabled(
           adminId: _currentAdminId,
           userId: userId,
           enabled: true,
-        ),
-        onError: (e) => _notifyError('Failed to enable user: $e'),
-      );
+        );
+      } catch (e) {
+        _notifyError('Could not enable this user. Please try again.');
+        rethrow;
+      }
     }
   }
 
-  void disableUser(String userId) {
+  Future<void> disableUser(String userId) async {
     _setUserActiveLocal(userId, false);
     _logAction('SYSTEM', 'Disable User', userId);
     notifyListeners();
 
     if (_isFirebaseMode) {
-      _fireAndForget(
-        () => _tradingService!.setTradingEnabled(
+      try {
+        await _tradingService!.setTradingEnabled(
           adminId: _currentAdminId,
           userId: userId,
           enabled: false,
-        ),
-        onError: (e) => _notifyError('Failed to disable user: $e'),
-      );
+        );
+      } catch (e) {
+        _notifyError('Could not disable this user. Please try again.');
+        rethrow;
+      }
     }
   }
 
-  void adjustUserBalance(String userId, double amount) {
+  Future<void> adjustUserBalance(String userId, double amount) async {
     if (amount == 0) return;
     final index = _users.indexWhere((u) => u.id == userId);
     if (index < 0) return;
@@ -198,14 +202,16 @@ class AdminStore extends ChangeNotifier {
     if (_isFirebaseMode) {
       // In Firebase mode, do NOT update local state optimistically.
       // The Firestore stream will update it once the transaction commits.
-      _fireAndForget(
-        () => _tradingService!.addBalance(
+      try {
+        await _tradingService!.addBalance(
           adminId: _currentAdminId,
           userId: userId,
           amount: amount,
-        ),
-        onError: (e) => _notifyError('Failed to adjust balance: $e'),
-      );
+        );
+      } catch (e) {
+        _notifyError('Balance adjustment failed. Please try again.');
+        rethrow;
+      }
     } else {
       _users[index] = _users[index].copyWith(
         balance: _users[index].balance + amount,
@@ -215,24 +221,26 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
-  void adjustUserMargin(String userId, double amount) {
+  Future<void> adjustUserMargin(String userId, double amount) async {
     final index = _users.indexWhere((u) => u.id == userId);
     if (index < 0 || amount == 0) return;
 
-    _users[index] = _users[index].copyWith(
-      marginLimit: _users[index].marginLimit + amount,
-    );
-    _logAction('SYSTEM', 'Adjust User Margin', '$userId: $amount');
-    notifyListeners();
-
     if (_isFirebaseMode) {
-      _fireAndForget(
-        () => _firestoreService!.updateDocument('users/$userId', {
-          'marginLimit': _users[index].marginLimit,
+      try {
+        await _firestoreService!.updateDocument('users/$userId', {
+          'marginLimit': _users[index].marginLimit + amount,
           'updatedAt': Timestamp.now(),
-        }),
-        onError: (e) => _notifyError('Failed to adjust margin: $e'),
+        });
+      } catch (e) {
+        _notifyError('Margin adjustment failed. Please try again.');
+        rethrow;
+      }
+    } else {
+      _users[index] = _users[index].copyWith(
+        marginLimit: _users[index].marginLimit + amount,
       );
+      _logAction('SYSTEM', 'Adjust User Margin', '$userId: $amount');
+      notifyListeners();
     }
   }
 
@@ -248,7 +256,7 @@ class AdminStore extends ChangeNotifier {
           'tradable': true,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to enable stock: $e'),
+        onError: (e) => _notifyError('Could not enable this stock. Please try again.'),
       );
     }
   }
@@ -265,7 +273,7 @@ class AdminStore extends ChangeNotifier {
           'tradable': false,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to disable stock: $e'),
+        onError: (e) => _notifyError('Could not disable this stock. Please try again.'),
       );
     }
   }
@@ -325,7 +333,7 @@ class AdminStore extends ChangeNotifier {
           'createdBy': _currentAdminId,
           'createdAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to broadcast notification: $e'),
+        onError: (e) => _notifyError('Broadcast failed. Please try again.'),
       );
     }
   }
@@ -342,7 +350,7 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to toggle maintenance mode: $e'),
+        onError: (e) => _notifyError('Could not update maintenance mode. Please try again.'),
       );
     }
   }
@@ -360,7 +368,7 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to set risk limit: $e'),
+        onError: (e) => _notifyError('Could not save risk limit. Please try again.'),
       );
     }
   }
@@ -405,7 +413,7 @@ class AdminStore extends ChangeNotifier {
             'updatedBy': _currentAdminId,
             'updatedAt': Timestamp.now(),
           }),
-          onError: (e) => _notifyError('Failed to set leverage for $symbol: $e'),
+          onError: (e) => _notifyError('Could not save leverage for $symbol. Please try again.'),
         );
       }
     }
@@ -431,7 +439,7 @@ class AdminStore extends ChangeNotifier {
       };
       _fireAndForget(
         () => _firestoreService!.setDocument('risk_limits/$userId', data),
-        onError: (e) => _notifyError('Failed to set leverage: $e'),
+        onError: (e) => _notifyError('Could not save leverage settings. Please try again.'),
       );
     }
   }
@@ -462,19 +470,65 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Failed to toggle trading halt: $e'),
+        onError: (e) => _notifyError('Could not update trading halt status. Please try again.'),
       );
     }
   }
 
+  // RMS FIX Bug #10: forceClosePosition was a no-op (only logged).
+  // Now writes a force-close marker to Firestore so the backend can process it.
   void forceClosePosition(String userId, String positionId) {
-    _logAction('SYSTEM', 'Force Close Position', '$userId / $positionId');
+    _logAction(_currentAdminId, 'Force Close Position', '$userId / $positionId');
     notifyListeners();
+
+    if (_isFirebaseMode) {
+      _fireAndForget(
+        () async {
+          await _firestoreService!.raw
+              .collection('portfolios')
+              .doc(userId)
+              .collection('holdings')
+              .doc(positionId.toUpperCase())
+              .set({
+            'forceClose':   true,
+            'forceCloseBy': _currentAdminId,
+            'forceCloseAt': Timestamp.now(),
+          }, SetOptions(merge: true));
+        },
+        onError: (e) => _notifyError('Could not force close position. Please try again.'),
+      );
+    }
   }
 
+  // RMS FIX Bug #10: forceCloseAllPositions was a no-op.
+  // Now marks ALL holdings for a user as force-close via Firestore batch write.
   void forceCloseAllPositions(String userId) {
-    _logAction('SYSTEM', 'Force Close All Positions', userId);
+    _logAction(_currentAdminId, 'Force Close All Positions', userId);
     notifyListeners();
+
+    if (_isFirebaseMode) {
+      _fireAndForget(
+        () async {
+          final db = _firestoreService!.raw;
+          final holdingsSnap = await db
+              .collection('portfolios')
+              .doc(userId)
+              .collection('holdings')
+              .get();
+
+          final batch = db.batch();
+          for (final doc in holdingsSnap.docs) {
+            batch.set(doc.reference, {
+              'forceClose':   true,
+              'forceCloseBy': _currentAdminId,
+              'forceCloseAt': Timestamp.now(),
+            }, SetOptions(merge: true));
+          }
+          await batch.commit();
+        },
+        onError: (e) => _notifyError('Could not force close all positions. Please try again.'),
+      );
+    }
   }
 
   void toggleUserStatus(String userId) {
@@ -502,13 +556,13 @@ class AdminStore extends ChangeNotifier {
       _users = snapshot.docs.map(_mapUserDoc).toList()
         ..sort((a, b) => b.registeredAt.compareTo(a.registeredAt));
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Users stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load users. Check your connection and try again.'));
 
     _ordersSub = tradingService.ordersStream().listen((snapshot) {
       _masterOrderBook = snapshot.docs.map(_mapOrderDoc).toList()
         ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Orders stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load orders. Check your connection and try again.'));
 
     _auditSub = firestoreService.raw
         .collection('audit_logs')
@@ -518,7 +572,7 @@ class AdminStore extends ChangeNotifier {
         .listen((snapshot) {
       _auditLog = snapshot.docs.map(_mapAuditDoc).toList();
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Audit log stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load audit logs. Check your connection and try again.'));
 
     _broadcastSub = firestoreService.raw
         .collection('notifications')
@@ -528,7 +582,7 @@ class AdminStore extends ChangeNotifier {
         .listen((snapshot) {
       _broadcasts = snapshot.docs.map(_mapNotificationDoc).toList();
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Notifications stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load notifications. Check your connection and try again.'));
 
     _stocksSub = firestoreService.getCollectionStream('stocks').listen((snapshot) {
       for (final doc in snapshot.docs) {
@@ -538,7 +592,7 @@ class AdminStore extends ChangeNotifier {
         _stockEnabled[symbol] = tradable;
       }
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Stocks stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load stock settings. Check your connection and try again.'));
 
     _riskLimitsSub = firestoreService
         .getCollectionStream('risk_limits')
@@ -556,7 +610,7 @@ class AdminStore extends ChangeNotifier {
             },
         });
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Risk limits stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load risk limits. Check your connection and try again.'));
 
     // Per-stock leverage stream
     _stockLeverageSub = firestoreService
@@ -570,7 +624,7 @@ class AdminStore extends ChangeNotifier {
         if (lev != null && lev > 0) _stockLeverage[symbol] = lev;
       }
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Stock leverage stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load leverage settings. Check your connection and try again.'));
 
     _configSub = firestoreService
         .raw
@@ -583,7 +637,7 @@ class AdminStore extends ChangeNotifier {
       _globalTradingHalt =
           (data['globalTradingHalt'] as bool?) ?? _globalTradingHalt;
       notifyListeners();
-    }, onError: (e, _) => _notifyError('Platform config stream error: $e'));
+    }, onError: (e, _) => _notifyError('Unable to load platform config. Check your connection and try again.'));
   }
 
   void _unbindFirebaseStreams() {

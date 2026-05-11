@@ -91,10 +91,7 @@ class _UserLoginPageState extends State<UserLoginPage> {
   }
 
   void _openRegister() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const RegisterScreen()),
-    );
+    context.go('/app/register');
   }
 
   Future<void> _signInWithGoogle() async {

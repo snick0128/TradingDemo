@@ -78,6 +78,8 @@ class Stock {
   final double? marketCap;
   /// True when the price data is stale (market closed or no recent tick).
   final bool isStale;
+  /// Expiry date for futures contracts (MCX/NFO). Null for equities.
+  final DateTime? expiry;
 
   Stock({
     required this.symbol,
@@ -98,9 +100,19 @@ class Stock {
     this.volume,
     this.marketCap,
     this.isStale = false,
+    this.expiry,
   });
 
   bool get isPositive => changePercentage >= 0;
+
+  /// True if this is a futures/commodity contract with a known expiry.
+  bool get isFutures => expiry != null;
+
+  /// Days until expiry. Null for equities or if expiry is unknown.
+  int? get daysToExpiry {
+    if (expiry == null) return null;
+    return expiry!.difference(DateTime.now()).inDays;
+  }
 }
 
 // ─── Order ────────────────────────────────────────────────────────────────────
@@ -125,6 +137,7 @@ class Order {
   final DateTime? executedAt;
   final double? executedPrice;
   final int? executedQuantity;
+  final double? pnl;
   final String? rejectionReason;
   final double? targetPrice;
   final double? stopLossPrice;
@@ -149,6 +162,7 @@ class Order {
     this.executedAt,
     this.executedPrice,
     this.executedQuantity,
+    this.pnl,
     this.rejectionReason,
     this.targetPrice,
     this.stopLossPrice,
@@ -174,6 +188,7 @@ class Order {
     DateTime? executedAt,
     double? executedPrice,
     int? executedQuantity,
+    double? pnl,
     String? rejectionReason,
     double? targetPrice,
     double? stopLossPrice,
@@ -198,6 +213,7 @@ class Order {
       executedAt: executedAt ?? this.executedAt,
       executedPrice: executedPrice ?? this.executedPrice,
       executedQuantity: executedQuantity ?? this.executedQuantity,
+      pnl: pnl ?? this.pnl,
       rejectionReason: rejectionReason ?? this.rejectionReason,
       targetPrice: targetPrice ?? this.targetPrice,
       stopLossPrice: stopLossPrice ?? this.stopLossPrice,

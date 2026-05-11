@@ -49,6 +49,12 @@ class AuthService {
     final firebaseUser = userCredential.user;
     if (firebaseUser == null) throw Exception('Google sign-in failed.');
 
+    // Force a token refresh and small delay for Firestore sync on Web
+    try {
+      await firebaseUser.getIdToken(true).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 400));
+
     // Check if user doc exists; create it on first sign-in
     final doc = await _firestore.raw.doc('users/${firebaseUser.uid}').get();
     if (!doc.exists) {
@@ -142,13 +148,13 @@ class AuthService {
     // before we attempt the write. On Flutter Web this is critical — the
     // SDK may not have propagated the new auth state yet.
     try {
-      await firebaseUser.getIdToken(true);
+      await firebaseUser.getIdToken(true).timeout(const Duration(seconds: 5));
     } catch (_) {
       // Non-fatal — proceed anyway
     }
 
     // Small delay to ensure the Firestore SDK picks up the new auth state.
-    await Future.delayed(const Duration(milliseconds: 300));
+    await Future.delayed(const Duration(milliseconds: 500));
 
     // At this point Firebase Auth has signed the user in automatically.
     // Write the Firestore doc — isOwner(userId) will pass because
@@ -163,6 +169,8 @@ class AuthService {
         'available_balance': 0.0,
         'tradingEnabled': true,
         'createdAt': Timestamp.now(),
+      }).timeout(const Duration(seconds: 10), onTimeout: () {
+        throw Exception('Firestore write timed out.');
       });
     } catch (e) {
       // Firestore write failed — roll back the Auth account so the user
@@ -170,7 +178,7 @@ class AuthService {
       try {
         await firebaseUser.delete();
       } catch (_) {}
-      throw Exception('Failed to create user profile. Please try again.');
+      throw Exception('Failed to create user profile: ${e.toString()}');
     }
 
     return AppUserProfile(

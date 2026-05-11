@@ -296,11 +296,13 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 status: _mapOrderStatus(rawStatus),
                 dateTime: dateTime,
                 rejectionReason: data['rejectionReason'] as String?,
+                executedAt: (data['executedAt'] as Timestamp?)?.toDate(),
                 executedPrice:
                     ((data['avg_executed_price'] as num?) ??
                             (data['executed_price'] as num?) ??
                             (data['fillPrice'] as num?))
                         ?.toDouble(),
+                pnl: ((data['pnl'] as num?) ?? 0).toDouble(),
               );
             }).toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 

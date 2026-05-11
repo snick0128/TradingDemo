@@ -752,9 +752,13 @@ class _StockRow extends StatelessWidget {
                     Text(stock.symbol,
                         style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFF0D0D0D))),
                     const SizedBox(height: 2),
-                    Text(stock.name,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
-                        overflow: TextOverflow.ellipsis),
+                    // For MCX futures: show expiry date instead of just name
+                    if (stock.isFutures && stock.expiry != null)
+                      _ExpirySubtitle(stock: stock)
+                    else
+                      Text(stock.name,
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
+                          overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
@@ -792,6 +796,55 @@ class _StockRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Expiry subtitle for MCX futures rows ────────────────────────────────────
+
+class _ExpirySubtitle extends StatelessWidget {
+  final Stock stock;
+  const _ExpirySubtitle({required this.stock});
+
+  @override
+  Widget build(BuildContext context) {
+    final expiry = stock.expiry!;
+    final days   = stock.daysToExpiry!;
+    final months = const ['Jan','Feb','Mar','Apr','May','Jun',
+                          'Jul','Aug','Sep','Oct','Nov','Dec'];
+    final dateStr =
+        '${expiry.day.toString().padLeft(2, '0')} ${months[expiry.month - 1]} ${expiry.year}';
+
+    // Colour: red ≤7 days, amber ≤30 days, grey otherwise
+    final Color color;
+    if (days <= 7) {
+      color = const Color(0xFFD32F2F);
+    } else if (days <= 30) {
+      color = const Color(0xFFE65100);
+    } else {
+      color = const Color(0xFF757575);
+    }
+
+    return Row(
+      children: [
+        Icon(Icons.event_outlined, size: 10, color: color),
+        const SizedBox(width: 3),
+        Text(
+          'Exp $dateStr',
+          style: TextStyle(
+            fontSize: 11,
+            color: color,
+            fontWeight: days <= 30 ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
+        if (days <= 30) ...[
+          const SizedBox(width: 4),
+          Text(
+            '· $days d left',
+            style: TextStyle(fontSize: 10, color: color.withOpacity(0.75)),
+          ),
+        ],
+      ],
     );
   }
 }

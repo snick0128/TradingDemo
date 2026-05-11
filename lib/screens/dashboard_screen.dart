@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../data/services/market_settings_service.dart';
+import '../models/market_settings.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -138,13 +142,13 @@ class DashboardScreen extends StatelessWidget {
             const SizedBox(height: 24),
           ],
 
-          // 6. Top Movers 2-column grid
+          // 7. Top Movers 2-column grid
           _SectionHeader(title: 'Top Movers'),
           const SizedBox(height: 8),
           _TopMoversGrid(stocks: topMovers),
           const SizedBox(height: 24),
 
-          // 7. Quick Trade section
+          // 8. Quick Trade section
           _SectionHeader(
             title: 'Quick Trade',
             onViewAll: () => Navigator.push(
@@ -1050,6 +1054,268 @@ class _PnlChip extends StatelessWidget {
           fontWeight: FontWeight.w600,
           fontSize: 12,
         ),
+      ),
+    );
+  }
+}
+
+// ─── Category Leverage & Margin Card (Fix 2) ──────────────────────────────────
+//
+// Streams admin-configured leverage and margin settings from Firestore
+// (marketSettings/config) and displays them as read-only info tiles.
+// Users can see their allowed limits per category but cannot edit them.
+
+class _CategoryLimitsCard extends StatefulWidget {
+  const _CategoryLimitsCard();
+
+  @override
+  State<_CategoryLimitsCard> createState() => _CategoryLimitsCardState();
+}
+
+class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
+  final _service = MarketSettingsService();
+  StreamSubscription<MarketSettings>? _sub;
+  MarketSettings _settings = MarketSettings.defaults;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = _service.stream.listen((s) {
+      if (mounted) setState(() => _settings = s);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppColors.cardRadius),
+        border: Border.all(color: AppColors.border, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: Row(
+              children: [
+                const Icon(LucideIcons.shieldCheck,
+                    size: 15, color: AppColors.primary),
+                const SizedBox(width: 8),
+                const Text(
+                  'Margin & Leverage Limits',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'Admin-set',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              'These limits are set by the platform admin and cannot be changed.',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+          const Divider(height: 1),
+          // NSE / Stocks row
+          _CategoryLimitRow(
+            label: 'NSE / BSE — Stocks',
+            icon: LucideIcons.barChart2,
+            color: AppColors.primary,
+            settings: _settings.stocks,
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          // MCX row
+          _CategoryLimitRow(
+            label: 'MCX — Commodities',
+            icon: LucideIcons.flame,
+            color: const Color(0xFF7B1FA2),
+            settings: _settings.mcx,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryLimitRow extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final SegmentSettings settings;
+
+  const _CategoryLimitRow({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.settings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = settings.enabled;
+    final statusColor = isEnabled ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final statusLabel = isEnabled ? 'Open' : 'Closed';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          // Category icon
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 17, color: color),
+          ),
+          const SizedBox(width: 12),
+
+          // Label + status
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      statusLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${settings.marketOpen}–${settings.marketClose} IST',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Leverage tile
+          _LimitTile(
+            label: 'Max Leverage',
+            value: '${settings.maxLeverage.toStringAsFixed(0)}x',
+            color: color,
+          ),
+          const SizedBox(width: 8),
+
+          // Margin tile
+          _LimitTile(
+            label: 'Margin Req.',
+            value: '${settings.marginPercent.toStringAsFixed(2)}%',
+            color: color,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LimitTile extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _LimitTile({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: color.withOpacity(0.7),
+              letterSpacing: 0.3,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: color,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
       ),
     );
   }

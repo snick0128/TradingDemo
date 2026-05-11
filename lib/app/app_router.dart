@@ -8,6 +8,8 @@ import '../presentation/app/app_orders_page.dart';
 import '../presentation/app/app_portfolio_page.dart';
 import '../screens/admin/admin_shell.dart';
 import '../screens/main_shell.dart';
+import '../screens/auth/register_screen.dart';
+import '../screens/auth/pin_setup_screen.dart';
 
 /// Creates the app-wide GoRouter with dual entry points and role-based guards.
 ///
@@ -65,8 +67,9 @@ GoRouter createAppRouter(AuthSession authSession) {
       }
 
       final isAppLogin = loc == '/app/login';
+      final isAppRegister = loc == '/app/register';
       final isAdminLogin = loc == '/admin/login';
-      final isProtectedApp = loc.startsWith('/app/') && !isAppLogin;
+      final isProtectedApp = loc.startsWith('/app/') && !isAppLogin && !isAppRegister;
       final isProtectedAdmin = loc.startsWith('/admin/') && !isAdminLogin;
 
       // Protect /app/* routes
@@ -92,6 +95,14 @@ GoRouter createAppRouter(AuthSession authSession) {
       GoRoute(
         path: '/app/login',
         builder: (context, state) => const UserLoginPage(),
+      ),
+      GoRoute(
+        path: '/app/register',
+        builder: (context, state) => const RegisterScreen(),
+      ),
+      GoRoute(
+        path: '/app/pin-setup',
+        builder: (context, state) => const PinSetupScreen(),
       ),
       GoRoute(
         path: '/app/dashboard',

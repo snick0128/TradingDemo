@@ -43,6 +43,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
+  bool _initializing = true;
 
   @override
   void initState() {
@@ -55,7 +56,69 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _settingsSub = _settingsService.stream.listen((s) {
       if (mounted) setState(() => _marketSettings = s);
     });
-    _loadSeries();
+    // Load required quote + chart data first, then render the detail UI.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeAndOpen());
+  }
+
+  Future<void> _initializeAndOpen() async {
+    try {
+      await _loadSeries();
+      await _fetchLiveQuoteIfNeeded();
+    } finally {
+      if (mounted) {
+        setState(() => _initializing = false);
+      }
+    }
+  }
+
+  /// If the stock has no live price (currentPrice == 0), fetch a quote
+  /// from the backend using the token registered by the search screen.
+  /// This covers indices (NIFTY, SENSEX) and any non-tracked instrument.
+  Future<void> _fetchLiveQuoteIfNeeded() async {
+    if (!mounted) return;
+    final store = TradingScope.of(context);
+    final stock = store.stockBySymbol(widget.symbol);
+
+    // Already has a live price — nothing to do
+    if (stock.currentPrice > 0) return;
+
+    // Need a token to fetch a quote
+    if (stock.token.isEmpty) {
+      debugPrint('[StockDetail] No token for ${widget.symbol} — cannot fetch live quote');
+      return;
+    }
+
+    debugPrint('[StockDetail] Fetching live quote for ${widget.symbol} token=${stock.token} exchange=${stock.exchange}');
+
+    try {
+      final quote = await _api.getQuoteByToken(
+        stock.token,
+        exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+      );
+
+      if (!mounted) return;
+
+      final ltp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
+      final pct = (quote['percentChange'] as num?)?.toDouble() ?? 0.0;
+
+      if (ltp > 0) {
+        // Update the store's universe entry with the live price
+        store.registerSearchResult(
+          symbol:        widget.symbol,
+          displayName:   stock.name.isNotEmpty ? stock.name : widget.symbol,
+          exchange:      stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+          token:         stock.token,
+          ltp:           ltp,
+          changePercent: pct,
+        );
+        // Trigger a rebuild so the header shows the live price
+        if (mounted) setState(() {});
+        debugPrint('[StockDetail] Live quote fetched: ${widget.symbol} = ₹$ltp ($pct%)');
+      }
+    } catch (e) {
+      // Non-fatal — the screen still shows with ₹0.00 if quote fails
+      debugPrint('[StockDetail] Live quote fetch failed for ${widget.symbol}: $e');
+    }
   }
 
   @override
@@ -150,16 +213,45 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final stock = store.stockBySymbol(widget.symbol);
-    final isPos = stock.changePercentage >= 0;
+    final rawStock = store.stockBySymbol(widget.symbol);
+
+    if (_initializing) {
+      return Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Colors.white,
+        appBar: _buildAppBar(context, store, rawStock),
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Loading instrument data...',
+                style: TextStyle(fontSize: 13, color: Color(0xFF757575)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     // Show previous series while loading new one (no blank flash)
     final displaySeries =
         _series ??
         _prevSeries ??
         TradingChartService.fromRawCandles(
           const [],
-          fallbackPrice: stock.currentPrice,
+          fallbackPrice: rawStock.currentPrice,
         );
+    // If watchlist/universe doesn't have a live quote yet (e.g. index symbols),
+    // use latest candle close so header/order UI never shows ₹0.00.
+    final stock = _withSeriesFallback(rawStock, displaySeries);
+    final isPos = stock.changePercentage >= 0;
     final chartColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
 
     return Scaffold(
@@ -196,6 +288,42 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           ],
         ),
       ),
+    );
+  }
+
+  /// Build a display-safe stock model by falling back to chart-derived values
+  /// when stream quote is unavailable.
+  Stock _withSeriesFallback(Stock stock, TradingChartSeries series) {
+    final hasLiveLtp = stock.currentPrice > 0;
+    final hasSeries = series.data.isNotEmpty;
+    if (hasLiveLtp || !hasSeries) return stock;
+
+    final ltp = series.data.last.close;
+    final prevClose = series.data.length > 1
+        ? series.data[series.data.length - 2].close
+        : (series.open > 0 ? series.open : ltp);
+    final pct = prevClose > 0 ? ((ltp - prevClose) / prevClose) * 100 : 0.0;
+
+    return Stock(
+      symbol: stock.symbol,
+      name: stock.name,
+      currentPrice: ltp,
+      changePercentage: pct,
+      sector: stock.sector,
+      exchange: stock.exchange,
+      token: stock.token,
+      open: stock.open,
+      high: stock.high,
+      low: stock.low,
+      prevClose: stock.prevClose ?? prevClose,
+      week52High: stock.week52High,
+      week52Low: stock.week52Low,
+      upperCircuit: stock.upperCircuit,
+      lowerCircuit: stock.lowerCircuit,
+      volume: stock.volume,
+      marketCap: stock.marketCap,
+      isStale: stock.isStale,
+      expiry: stock.expiry,
     );
   }
 
@@ -315,6 +443,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                   ),
                 ),
               ),
+              // Show expiry badge for futures contracts
+              if (stock.isFutures) ...[
+                const SizedBox(width: 6),
+                _ExpiryBadge(stock: stock),
+              ],
             ],
           ),
           const SizedBox(height: 4),
@@ -655,6 +788,34 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   Widget _buildFundamentalsGrid(BuildContext context, Stock stock) {
+    // MCX futures — show contract-relevant info instead of equity fundamentals
+    if (stock.exchange.toUpperCase() == 'MCX' || stock.isFutures) {
+      final expiry = stock.expiry;
+      final daysLeft = stock.daysToExpiry;
+      final expiryStr = expiry != null
+          ? '${expiry.day.toString().padLeft(2, '0')} '
+            '${_monthName(expiry.month)} ${expiry.year}'
+          : '—';
+      final daysStr = daysLeft != null
+          ? daysLeft == 0
+              ? 'Today'
+              : daysLeft == 1
+                  ? '1 day left'
+                  : '$daysLeft days left'
+          : '—';
+      final base = stock.currentPrice;
+      final stats = [
+        ('Contract Expiry', expiryStr),
+        ('Days to Expiry', daysStr),
+        ('Prev Close', stock.prevClose != null ? '₹${stock.prevClose!.toStringAsFixed(2)}' : '—'),
+        ('Volume', stock.volume != null ? _fmtVolume(stock.volume!) : '—'),
+        ('Lot Size', _lotSizeForSymbol(stock.symbol)),
+        ('Tick Size', _tickSizeForSymbol(stock.symbol)),
+      ];
+      return _twoColGrid(stats);
+    }
+
+    // NSE equities — original fundamentals
     final base = stock.currentPrice;
     final stats = [
       ('Market Cap', '₹${(base * 6800000 / 10000000).toStringAsFixed(0)}Cr'),
@@ -665,6 +826,52 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       ('Div. Yield', '${(0.8 + base % 2).toStringAsFixed(2)}%'),
     ];
     return _twoColGrid(stats);
+  }
+
+  String _monthName(int month) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[(month - 1).clamp(0, 11)];
+  }
+
+  String _fmtVolume(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(2)}Cr';
+    if (v >= 100000)   return '${(v / 100000).toStringAsFixed(2)}L';
+    if (v >= 1000)     return '${(v / 1000).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(0);
+  }
+
+  /// Standard MCX lot sizes (contracts per lot).
+  String _lotSizeForSymbol(String symbol) {
+    const lots = {
+      'GOLD':       '100 gm',
+      'SILVER':     '30 kg',
+      'CRUDEOIL':   '100 bbl',
+      'NATURALGAS': '1250 mmBtu',
+      'COPPER':     '2500 kg',
+      'ZINC':       '5000 kg',
+      'LEAD':       '5000 kg',
+      'ALUMINIUM':  '5000 kg',
+      'NICKEL':     '1500 kg',
+      'COTTON':     '25 bales',
+    };
+    return lots[symbol.toUpperCase()] ?? '—';
+  }
+
+  /// Standard MCX tick sizes.
+  String _tickSizeForSymbol(String symbol) {
+    const ticks = {
+      'GOLD':       '₹1',
+      'SILVER':     '₹1',
+      'CRUDEOIL':   '₹1',
+      'NATURALGAS': '₹0.10',
+      'COPPER':     '₹0.05',
+      'ZINC':       '₹0.05',
+      'LEAD':       '₹0.05',
+      'ALUMINIUM':  '₹0.05',
+      'NICKEL':     '₹0.10',
+      'COTTON':     '₹10',
+    };
+    return ticks[symbol.toUpperCase()] ?? '—';
   }
 
   Widget _twoColGrid(List<(String, String)> stats) {
@@ -712,6 +919,13 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   Widget _buildAboutSection(BuildContext context, Stock stock) {
+    final isMcx = stock.exchange.toUpperCase() == 'MCX' || stock.isFutures;
+    final description = isMcx
+        ? _commodityDescription(stock.symbol)
+        : '${stock.name} is a leading company in the ${stock.sector} sector listed on NSE. '
+          'The company operates across multiple business segments and has a strong market presence. '
+          'It is known for its consistent performance and shareholder value creation.';
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -727,9 +941,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            '${stock.name} is a leading company in the ${stock.sector} sector listed on NSE. '
-            'The company operates across multiple business segments and has a strong market presence. '
-            'It is known for its consistent performance and shareholder value creation.',
+            description,
             style: const TextStyle(
               fontSize: 13,
               color: Color(0xFF757575),
@@ -753,6 +965,44 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         ],
       ),
     );
+  }
+
+  String _commodityDescription(String symbol) {
+    const descriptions = {
+      'GOLD':       'Gold futures on MCX track the international spot price of gold. '
+                    'Traded in lots of 100 grams, it is one of the most liquid commodity contracts in India. '
+                    'Prices are influenced by global demand, USD strength, and inflation expectations.',
+      'SILVER':     'Silver futures on MCX are traded in lots of 30 kg. '
+                    'Silver has both industrial and investment demand, making it more volatile than gold. '
+                    'Prices track international silver rates adjusted for INR/USD exchange rates.',
+      'CRUDEOIL':   'Crude Oil futures on MCX are based on WTI crude oil prices. '
+                    'Traded in lots of 100 barrels, it is highly sensitive to OPEC decisions, '
+                    'geopolitical events, and global demand-supply dynamics.',
+      'NATURALGAS': 'Natural Gas futures on MCX track Henry Hub natural gas prices. '
+                    'Traded in lots of 1250 mmBtu, prices are driven by weather patterns, '
+                    'storage levels, and seasonal demand.',
+      'COPPER':     'Copper futures on MCX are traded in lots of 2500 kg. '
+                    'Often called "Dr. Copper" for its ability to predict economic trends, '
+                    'prices are driven by industrial demand, especially from China.',
+      'ZINC':       'Zinc futures on MCX are traded in lots of 5000 kg. '
+                    'Zinc is primarily used for galvanizing steel. '
+                    'Prices are influenced by global mining output and construction activity.',
+      'LEAD':       'Lead futures on MCX are traded in lots of 5000 kg. '
+                    'Lead is primarily used in batteries. '
+                    'Prices are driven by automotive sector demand and recycling rates.',
+      'ALUMINIUM':  'Aluminium futures on MCX are traded in lots of 5000 kg. '
+                    'Aluminium is widely used in packaging, construction, and transportation. '
+                    'Prices are influenced by energy costs and global production levels.',
+      'NICKEL':     'Nickel futures on MCX are traded in lots of 1500 kg. '
+                    'Nickel is a key input for stainless steel and EV batteries. '
+                    'Prices are driven by stainless steel demand and the EV industry.',
+      'COTTON':     'Cotton futures on MCX are traded in lots of 25 bales. '
+                    'Prices are influenced by monsoon patterns, global textile demand, '
+                    'and competition from synthetic fibres.',
+    };
+    return descriptions[symbol.toUpperCase()] ??
+        '${symbol} is a commodity futures contract traded on MCX. '
+        'Prices track international commodity markets adjusted for INR/USD exchange rates.';
   }
 
   Widget _buildBottomBar(BuildContext context, Stock stock) {
@@ -861,6 +1111,69 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       case 'NCDEX': return const Color(0xFF6D4C41);
       default:     return const Color(0xFF1565C0); // NSE blue
     }
+  }
+}
+
+// ─── Expiry badge for futures contracts ──────────────────────────────────────
+
+class _ExpiryBadge extends StatelessWidget {
+  final Stock stock;
+  const _ExpiryBadge({required this.stock});
+
+  @override
+  Widget build(BuildContext context) {
+    final expiry = stock.expiry!;
+    final days = stock.daysToExpiry!;
+
+    // Colour: red if ≤7 days, amber if ≤30 days, grey otherwise
+    final Color bg;
+    final Color fg;
+    if (days <= 7) {
+      bg = const Color(0xFFFFEBEE);
+      fg = const Color(0xFFD32F2F);
+    } else if (days <= 30) {
+      bg = const Color(0xFFFFF8E1);
+      fg = const Color(0xFFE65100);
+    } else {
+      bg = const Color(0xFFF3E5F5);
+      fg = const Color(0xFF7B1FA2);
+    }
+
+    final day   = expiry.day.toString().padLeft(2, '0');
+    final month = const ['Jan','Feb','Mar','Apr','May','Jun',
+                         'Jul','Aug','Sep','Oct','Nov','Dec'][expiry.month - 1];
+    final label = 'Exp $day $month ${expiry.year}';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: fg.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.event_outlined, size: 10, color: fg),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: fg,
+            ),
+          ),
+          if (days <= 30) ...[
+            const SizedBox(width: 4),
+            Text(
+              '($days d)',
+              style: TextStyle(fontSize: 9, color: fg.withOpacity(0.8)),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 

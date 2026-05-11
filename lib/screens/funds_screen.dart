@@ -24,11 +24,17 @@ class FundsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
     final mb = store.marginBreakdown;
+    final now = DateTime.now();
+    bool isSameDay(DateTime d) =>
+        d.year == now.year && d.month == now.month && d.day == now.day;
 
     final unrealizedPnl = store.positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
     final realizedPnl = store.orders
-        .where((o) => o.status == OrderStatus.executed && o.type == OrderType.sell)
-        .fold(0.0, (sum, o) => sum + (o.executedPrice ?? o.price) * o.quantity);
+        .where((o) =>
+            o.status == OrderStatus.executed &&
+            o.type == OrderType.sell &&
+            isSameDay(o.executedAt ?? o.dateTime))
+        .fold(0.0, (sum, o) => sum + (o.pnl ?? 0.0));
     final todayPnl = unrealizedPnl + realizedPnl;
 
     final body = Container(

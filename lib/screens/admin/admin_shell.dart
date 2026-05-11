@@ -6,13 +6,12 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../../app/app_scope.dart';
 import '../../theme.dart';
 import '../../state/security_scope.dart';
-import '../auth/admin_login_screen.dart';
 import 'admin_stats_screen.dart';
 import 'admin_orders_screen.dart';
 import 'admin_users_screen.dart';
-import 'risk_control_screen.dart';
 import 'leverage_control_screen.dart';
 import 'market_settings_screen.dart';
+import 'admin_ipo_orders_screen.dart';
 
 // ── Breakpoint ────────────────────────────────────────────────────────────────
 const _kWebBreakpoint = 768.0;
@@ -23,7 +22,7 @@ const _kDestinations = [
   (LucideIcons.users,           'Users'),
   (LucideIcons.activity,        'Orders'),
   (LucideIcons.zap,             'Leverage'),
-  (LucideIcons.shieldAlert,     'Risk'),
+  (LucideIcons.receipt,         'IPO Orders'),
   (LucideIcons.clock,           'Market'),
 ];
 
@@ -41,7 +40,7 @@ class _AdminShellState extends State<AdminShell> {
     AdminUsersScreen(),
     AdminOrdersScreen(),
     LeverageControlScreen(),
-    RiskControlScreen(),
+    AdminIpoOrdersScreen(),
     MarketSettingsScreen(),
   ];
 

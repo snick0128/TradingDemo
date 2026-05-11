@@ -10,8 +10,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() &&
-        exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
-        get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
     function isOwner(userId) {
@@ -23,20 +22,15 @@ service cloud.firestore {
     // Clients only need to READ their own profile.
     // Self-registration (create) is still allowed from the client.
     match /users/{userId} {
-      allow read:   if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId);
-      // Only allow safe profile fields — no balance/role changes from client
-      allow update: if isAdmin() || (
-        isOwner(userId) &&
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['name', 'updatedAt', 'lastLoginAt', 'brokeragePlan'])
-      );
+      allow read:   if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if isAdmin() || (request.auth != null && request.auth.uid == userId);
       allow delete: if isAdmin();
 
       // Legacy order subcollection — read only for client
       match /orders/{orderId} {
         allow read:  if isOwner(userId) || isAdmin();
-        allow write: if false; // written by backend Admin SDK only
+        allow write: if isAdmin(); // Allow admin to manage user orders if needed
       }
     }
 
@@ -45,7 +39,7 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read:  if isAdmin() ||
                       (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow write: if false; // backend Admin SDK only
+      allow write: if isAdmin();
     }
 
     // ── order_requests ─────────────────────────────────────────────────────
@@ -60,13 +54,13 @@ service cloud.firestore {
     match /trades/{tradeId} {
       allow read:  if isAdmin() ||
                       (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow write: if false; // backend Admin SDK only
+      allow write: if isAdmin();
     }
 
     // ── trade_feed ─────────────────────────────────────────────────────────
     match /trade_feed/{tradeId} {
       allow read:  if isAdmin();
-      allow write: if false; // backend Admin SDK only
+      allow write: if isAdmin();
     }
 
     // ── portfolios/{uid}/holdings ───────────────────────────────────────────
@@ -86,7 +80,7 @@ service cloud.firestore {
     match /ledger/{entryId} {
       allow read:  if isAdmin() ||
                       (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow write: if false; // backend Admin SDK only
+      allow write: if isAdmin();
     }
 
     // ── stocks ─────────────────────────────────────────────────────────────
@@ -125,12 +119,13 @@ service cloud.firestore {
     // ── audit_logs ─────────────────────────────────────────────────────────
     match /audit_logs/{logId} {
       allow read:  if isAdmin();
-      allow write: if false; // backend Admin SDK only
+      allow write: if isAdmin();
     }
 
     // ── notifications ──────────────────────────────────────────────────────
     match /notifications/{notifId} {
-      allow read:  if isSignedIn();
+      allow read:  if isAdmin() ||
+                      (isSignedIn() && resource.data.userId == request.auth.uid);
       allow write: if isAdmin();
     }
 
@@ -161,6 +156,12 @@ service cloud.firestore {
                        request.resource.data.status == 'PENDING' &&
                        request.resource.data.amount > 0;
       allow update, delete: if isAdmin();
+    }
+
+    // ── marketSettings ─────────────────────────────────────────────────────
+    match /marketSettings/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
     }
   }
 }

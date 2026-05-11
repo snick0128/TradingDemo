@@ -37,9 +37,9 @@ class BackendApiService {
       print('[BackendAPI] Response: ${response.statusCode} for $path');
       return _parse(response);
     } on TimeoutException {
-      throw BackendException('Request timed out: $path');
+      throw BackendException('The request took too long. Please check your connection and try again.');
     } catch (e) {
-      throw BackendException('GET $path failed: $e');
+      throw BackendException('Could not reach the server. Please check your connection and try again.');
     }
   }
 
@@ -52,9 +52,9 @@ class BackendApiService {
           .timeout(const Duration(seconds: 15));
       return _parse(response);
     } on TimeoutException {
-      throw BackendException('Request timed out: $path');
+      throw BackendException('The request took too long. Please check your connection and try again.');
     } catch (e) {
-      throw BackendException('POST $path failed: $e');
+      throw BackendException('Could not reach the server. Please check your connection and try again.');
     }
   }
 
@@ -62,7 +62,7 @@ class BackendApiService {
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode >= 400) {
       throw BackendException(
-        body['error'] as String? ?? 'Unknown error',
+        body['error'] as String? ?? 'Something went wrong. Please try again.',
         statusCode: response.statusCode,
       );
     }
@@ -122,18 +122,30 @@ class BackendApiService {
   // ── Orders ──────────────────────────────────────────────────────────────────
 
   /// Place a simulated BUY or SELL order.
-  /// Returns the order result including executedPrice and newBalance.
+  ///
+  // RMS FIX:
+  // Bug #2 — productType and exchange never sent to backend
+  // Problem: Backend received only {userId, symbol, qty, type}.
+  //          Product type (MIS/CNC/NRML) was silently dropped.
+  //          Exchange defaulted to 'NSE' even for MCX orders.
+  // Solution: Add productType and exchange as required parameters.
+  //           Backend now receives full order context for leverage + market check.
+  // Migration notes: Backend orderRoutes.js updated to consume these fields.
   Future<Map<String, dynamic>> placeOrder({
     required String userId,
     required String symbol,
     required int qty,
-    required String type, // 'BUY' or 'SELL'
+    required String type,       // 'BUY' or 'SELL'
+    String productType = 'MIS', // 'MIS' | 'CNC' | 'NRML'
+    String exchange = 'NSE',    // 'NSE' | 'MCX' | 'BSE' etc.
   }) async {
     return _post('/orders', {
-      'userId': userId,
-      'symbol': symbol,
-      'qty': qty,
-      'type': type,
+      'userId':      userId,
+      'symbol':      symbol,
+      'qty':         qty,
+      'type':        type,
+      'productType': productType,
+      'exchange':    exchange,
     });
   }
 

@@ -91,7 +91,8 @@ class TradingChartService {
     }
 
     if (candles.isEmpty) {
-      final px = fallbackPrice > 0 ? fallbackPrice : 1.0;
+      // Avoid showing a fake ₹1.00 placeholder while real quote/candles load.
+      final px = fallbackPrice > 0 ? fallbackPrice : 0.0;
       candles.add(
         TradingCandle(
           time: DateTime.now(),

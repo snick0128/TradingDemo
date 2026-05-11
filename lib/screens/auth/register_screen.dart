@@ -57,7 +57,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
-      context.go('/app/dashboard');
+      context.go('/app/pin-setup');
     } on Exception catch (e) {
       if (!mounted) return;
       final msg = e.toString().replaceFirst('Exception: ', '');
@@ -83,7 +83,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final profile = await appScope.authService.signInWithGoogle(expectedRole: 'user');
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
-      context.go('/app/dashboard');
+      context.go('/app/pin-setup');
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
@@ -293,7 +293,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
               GestureDetector(
-                onTap: () => Navigator.pop(context),
+                onTap: () => context.go('/app/login'),
                 child: const Text(
                   'Sign In',
                   style: TextStyle(

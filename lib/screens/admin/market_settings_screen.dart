@@ -3,7 +3,8 @@
 /// Allows admin to:
 ///   - Enable/disable stocks and MCX segments
 ///   - Enable/disable buy and sell independently
-///   - Change market open/close times (IST)
+///   - Change market open/close times (IST) — with explicit Save button
+///   - Set maximum leverage and margin % per category (Fix 1 & Fix 3)
 ///
 /// Changes write to Firestore marketSettings/config and apply live
 /// to all connected clients without a server restart.
@@ -55,7 +56,7 @@ class _MarketSettingsScreenState extends State<MarketSettingsScreen> {
       await _service.update(updated);
       if (mounted) AppToast.success(context, 'Market settings saved.');
     } catch (e) {
-      if (mounted) AppToast.error(context, 'Save failed: $e');
+      if (mounted) AppToast.error(context, 'Could not save settings. Please check your connection and try again.');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -69,7 +70,8 @@ class _MarketSettingsScreenState extends State<MarketSettingsScreen> {
         children: [
           AdminHeader(
             title: 'Market Settings',
-            subtitle: 'Control trading hours and buy/sell permissions. Changes apply live.',
+            subtitle:
+                'Control trading hours, buy/sell permissions, and leverage & margin per category. Changes apply live.',
           ),
           const SizedBox(height: 16),
           Expanded(
@@ -133,6 +135,9 @@ class _SegmentCardState extends State<_SegmentCard> {
   late TextEditingController _openCtrl;
   late TextEditingController _closeCtrl;
 
+  // Track whether the time fields have unsaved changes
+  bool _timeDirty = false;
+
   @override
   void initState() {
     super.initState();
@@ -143,9 +148,12 @@ class _SegmentCardState extends State<_SegmentCard> {
   @override
   void didUpdateWidget(_SegmentCard old) {
     super.didUpdateWidget(old);
-    // Sync controllers when Firestore pushes an update
-    if (old.settings.marketOpen  != widget.settings.marketOpen)  _openCtrl.text  = widget.settings.marketOpen;
-    if (old.settings.marketClose != widget.settings.marketClose) _closeCtrl.text = widget.settings.marketClose;
+    if (!_timeDirty) {
+      if (old.settings.marketOpen  != widget.settings.marketOpen)
+        _openCtrl.text  = widget.settings.marketOpen;
+      if (old.settings.marketClose != widget.settings.marketClose)
+        _closeCtrl.text = widget.settings.marketClose;
+    }
   }
 
   @override
@@ -155,19 +163,50 @@ class _SegmentCardState extends State<_SegmentCard> {
     super.dispose();
   }
 
-  void _emit({
+  void _emitToggles({
     bool? enabled,
     bool? buyEnabled,
     bool? sellEnabled,
-    String? marketOpen,
-    String? marketClose,
   }) {
     widget.onChanged(widget.settings.copyWith(
       enabled:     enabled,
       buyEnabled:  buyEnabled,
       sellEnabled: sellEnabled,
-      marketOpen:  marketOpen,
-      marketClose: marketClose,
+    ));
+  }
+
+  /// Validate and save market hours from the text controllers.
+  void _saveMarketHours() {
+    final openVal  = _openCtrl.text.trim();
+    final closeVal = _closeCtrl.text.trim();
+    final re = RegExp(r'^\d{2}:\d{2}$');
+
+    if (!re.hasMatch(openVal)) {
+      AppToast.error(
+          context, 'Open time is not valid. Please use HH:MM format (e.g. 09:15).');
+      return;
+    }
+    if (!re.hasMatch(closeVal)) {
+      AppToast.error(
+          context, 'Close time is not valid. Please use HH:MM format (e.g. 15:30).');
+      return;
+    }
+
+    // Validate open < close
+    int _toMin(String t) {
+      final p = t.split(':');
+      return int.parse(p[0]) * 60 + int.parse(p[1]);
+    }
+
+    if (_toMin(openVal) >= _toMin(closeVal)) {
+      AppToast.error(context, 'Open time must be earlier than close time.');
+      return;
+    }
+
+    setState(() => _timeDirty = false);
+    widget.onChanged(widget.settings.copyWith(
+      marketOpen:  openVal,
+      marketClose: closeVal,
     ));
   }
 
@@ -185,7 +224,8 @@ class _SegmentCardState extends State<_SegmentCard> {
           Row(
             children: [
               Container(
-                width: 36, height: 36,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: c.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
@@ -196,7 +236,8 @@ class _SegmentCardState extends State<_SegmentCard> {
               Expanded(
                 child: Text(
                   widget.title,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700),
                 ),
               ),
               // Master enable/disable
@@ -207,13 +248,17 @@ class _SegmentCardState extends State<_SegmentCard> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: s.enabled ? AppColors.success : AppColors.danger,
+                      color: s.enabled
+                          ? AppColors.success
+                          : AppColors.danger,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Switch(
                     value: s.enabled,
-                    onChanged: widget.saving ? null : (v) => _emit(enabled: v),
+                    onChanged: widget.saving
+                        ? null
+                        : (v) => _emitToggles(enabled: v),
                     activeColor: AppColors.success,
                   ),
                 ],
@@ -224,18 +269,21 @@ class _SegmentCardState extends State<_SegmentCard> {
           if (!s.enabled) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.danger.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(LucideIcons.alertCircle, size: 14, color: AppColors.danger),
+                  Icon(LucideIcons.alertCircle,
+                      size: 14, color: AppColors.danger),
                   const SizedBox(width: 8),
                   Text(
                     'This segment is fully disabled. No orders can be placed.',
-                    style: TextStyle(fontSize: 12, color: AppColors.danger),
+                    style:
+                        TextStyle(fontSize: 12, color: AppColors.danger),
                   ),
                 ],
               ),
@@ -256,7 +304,7 @@ class _SegmentCardState extends State<_SegmentCard> {
                   iconColor: AppColors.success,
                   value: s.buyEnabled,
                   disabled: !s.enabled || widget.saving,
-                  onChanged: (v) => _emit(buyEnabled: v),
+                  onChanged: (v) => _emitToggles(buyEnabled: v),
                 ),
               ),
               const SizedBox(width: 16),
@@ -267,7 +315,7 @@ class _SegmentCardState extends State<_SegmentCard> {
                   iconColor: AppColors.danger,
                   value: s.sellEnabled,
                   disabled: !s.enabled || widget.saving,
-                  onChanged: (v) => _emit(sellEnabled: v),
+                  onChanged: (v) => _emitToggles(sellEnabled: v),
                 ),
               ),
             ],
@@ -278,14 +326,21 @@ class _SegmentCardState extends State<_SegmentCard> {
           const SizedBox(height: 20),
 
           // ── Market hours ─────────────────────────────────────────────────
-          Text(
-            'MARKET HOURS (IST)',
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textSecondary,
-              letterSpacing: 0.8,
-            ),
+          Row(
+            children: [
+              Text(
+                'MARKET HOURS (IST)',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const Spacer(),
+              if (_timeDirty)
+                _UnsavedBadge(),
+            ],
           ),
           const SizedBox(height: 12),
           Row(
@@ -295,26 +350,117 @@ class _SegmentCardState extends State<_SegmentCard> {
                   label: 'Open',
                   controller: _openCtrl,
                   disabled: !s.enabled || widget.saving,
-                  onSubmit: (v) => _emit(marketOpen: v),
+                  onChanged: (_) => setState(() => _timeDirty = true),
                 ),
               ),
               const SizedBox(width: 12),
-              const Text('–', style: TextStyle(fontSize: 18, color: AppColors.textSecondary)),
+              const Text('–',
+                  style: TextStyle(
+                      fontSize: 18, color: AppColors.textSecondary)),
               const SizedBox(width: 12),
               Expanded(
                 child: _TimeField(
                   label: 'Close',
                   controller: _closeCtrl,
                   disabled: !s.enabled || widget.saving,
-                  onSubmit: (v) => _emit(marketClose: v),
+                  onChanged: (_) => setState(() => _timeDirty = true),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-            'Format: HH:MM (24-hour). Changes apply immediately.',
-            style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            'Format: HH:MM (24-hour IST).',
+            style: TextStyle(
+                fontSize: 11, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              onPressed: (!s.enabled || widget.saving)
+                  ? null
+                  : _saveMarketHours,
+              icon: widget.saving
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(LucideIcons.save, size: 14),
+              label: const Text('Save Hours'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 10),
+                textStyle: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Unsaved badge ─────────────────────────────────────────────────────────────
+
+class _UnsavedBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.warning.withOpacity(0.4)),
+      ),
+      child: const Text(
+        'Unsaved changes',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: AppColors.warning,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Leverage summary row ──────────────────────────────────────────────────────
+
+class _LeverageSummaryRow extends StatelessWidget {
+  final SegmentSettings settings;
+  final Color color;
+
+  const _LeverageSummaryRow({required this.settings, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.15)),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.info, size: 13, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Currently live: Max leverage ${settings.maxLeverage.toStringAsFixed(0)}x  •  '
+              'Margin required ${settings.marginPercent.toStringAsFixed(2)}%',
+              style: TextStyle(
+                fontSize: 11,
+                color: color.withOpacity(0.85),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ],
       ),
@@ -362,7 +508,9 @@ class _ToggleRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, size: 16, color: disabled ? AppColors.textSecondary : iconColor),
+          Icon(icon,
+              size: 16,
+              color: disabled ? AppColors.textSecondary : iconColor),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -370,7 +518,9 @@ class _ToggleRow extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: disabled ? AppColors.textSecondary : AppColors.textPrimary,
+                color: disabled
+                    ? AppColors.textSecondary
+                    : AppColors.textPrimary,
               ),
             ),
           ),
@@ -391,13 +541,13 @@ class _TimeField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final bool disabled;
-  final ValueChanged<String> onSubmit;
+  final ValueChanged<String>? onChanged;
 
   const _TimeField({
     required this.label,
     required this.controller,
     required this.disabled,
-    required this.onSubmit,
+    this.onChanged,
   });
 
   @override
@@ -407,7 +557,10 @@ class _TimeField extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+          style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500),
         ),
         const SizedBox(height: 6),
         TextField(
@@ -419,21 +572,81 @@ class _TimeField extends StatelessWidget {
           decoration: InputDecoration(
             hintText: 'HH:MM',
             filled: true,
-            fillColor: disabled ? const Color(0xFFF5F5F5) : Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            fillColor:
+                disabled ? const Color(0xFFF5F5F5) : Colors.white,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 12),
           ),
-          onSubmitted: (v) {
-            // Validate HH:MM format
-            final re = RegExp(r'^\d{2}:\d{2}$');
-            if (re.hasMatch(v)) onSubmit(v);
-          },
-          onEditingComplete: () {
-            final v = controller.text.trim();
-            final re = RegExp(r'^\d{2}:\d{2}$');
-            if (re.hasMatch(v)) onSubmit(v);
-          },
+          onChanged: onChanged,
         ),
+      ],
+    );
+  }
+}
+
+// ── Labeled numeric field ─────────────────────────────────────────────────────
+
+class _LabeledField extends StatelessWidget {
+  final String label;
+  final String hint;
+  final String suffix;
+  final TextEditingController controller;
+  final bool disabled;
+  final ValueChanged<String>? onChanged;
+  final String? helperText;
+
+  const _LabeledField({
+    required this.label,
+    required this.hint,
+    required this.suffix,
+    required this.controller,
+    required this.disabled,
+    this.onChanged,
+    this.helperText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          enabled: !disabled,
+          keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          decoration: InputDecoration(
+            hintText: hint,
+            suffixText: suffix,
+            filled: true,
+            fillColor:
+                disabled ? const Color(0xFFF5F5F5) : Colors.white,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 12),
+          ),
+          onChanged: onChanged,
+        ),
+        if (helperText != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            helperText!,
+            style: const TextStyle(
+                fontSize: 10, color: AppColors.textSecondary),
+          ),
+        ],
       ],
     );
   }

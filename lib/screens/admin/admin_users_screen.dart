@@ -203,11 +203,20 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         children: [
           Switch(
             value: user.isActive,
-            onChanged: (enabled) {
-              if (enabled) {
-                admin.enableUser(user.id);
-              } else {
-                admin.disableUser(user.id);
+            onChanged: (enabled) async {
+              try {
+                if (enabled) {
+                  await admin.enableUser(user.id);
+                } else {
+                  await admin.disableUser(user.id);
+                }
+                if (context.mounted) {
+                  AppToast.success(context, 'User ${enabled ? "enabled" : "disabled"} successfully.');
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  AppToast.error(context, 'Failed to update user status: $e');
+                }
               }
             },
             activeColor: AppColors.success,
@@ -290,7 +299,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     BuildContext context,
     User user, {
     required String title,
-    required void Function(double amount) onSubmit,
+    required Future<void> Function(double amount) onSubmit,
   }) {
     AppDialog.input(
       context,
@@ -300,15 +309,19 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       keyboardType:
           const TextInputType.numberWithOptions(decimal: true, signed: true),
       confirmLabel: 'Apply',
-      onSubmit: (value) {
+      onSubmit: (value) async {
         final amount = double.tryParse(value) ?? 0;
         if (amount == 0) return;
         try {
-          onSubmit(amount);
-          AppToast.success(
-              context, 'Adjustment of ₹$amount applied successfully.');
+          await onSubmit(amount);
+          if (context.mounted) {
+            AppToast.success(
+                context, 'Adjustment of ₹$amount applied successfully.');
+          }
         } catch (e) {
-          AppToast.error(context, 'Failed to apply adjustment: $e');
+          if (context.mounted) {
+            AppToast.error(context, 'Failed to apply adjustment: $e');
+          }
         }
       },
     );

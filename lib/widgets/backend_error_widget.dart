@@ -117,7 +117,11 @@ class _CompactError extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(LucideIcons.alertCircle, size: 18, color: AppColors.danger),
+          const Icon(
+            LucideIcons.alertCircle,
+            size: 18,
+            color: AppColors.danger,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -132,10 +136,7 @@ class _CompactError extends StatelessWidget {
           ),
           if (onRetry != null) ...[
             const SizedBox(width: 12),
-            TextButton(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],
         ],
       ),

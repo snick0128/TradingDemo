@@ -102,6 +102,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── category_leverage (group-based leverage) ──────────────────────────
+    match /category_leverage/{catId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // ── gtt_orders ─────────────────────────────────────────────────────────
     // GTT orders are still placed client-side (no backend route for them yet)
     match /gtt_orders/{gttId} {

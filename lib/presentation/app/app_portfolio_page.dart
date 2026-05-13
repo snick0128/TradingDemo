@@ -40,9 +40,7 @@ class AppPortfolioPage extends StatelessWidget {
                         subtitle: Text(
                           'Qty: ${h.quantity}  Avg: ₹${h.avgPrice.toStringAsFixed(2)}',
                         ),
-                        trailing: Text(
-                          '₹${h.currentPrice.toStringAsFixed(2)}',
-                        ),
+                        trailing: Text('₹${h.currentPrice.toStringAsFixed(2)}'),
                       );
                     },
                   ),

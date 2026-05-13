@@ -45,10 +45,13 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Total Buy Qty',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary)),
+                                const Text(
+                                  'Total Buy Qty',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Text(
                                   _fmt(depth.totalBuyQuantity),
@@ -68,10 +71,13 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Total Sell Qty',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary)),
+                                const Text(
+                                  'Total Sell Qty',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Text(
                                   _fmt(depth.totalSellQuantity),
@@ -91,10 +97,13 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Buy/Sell Ratio',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary)),
+                                const Text(
+                                  'Buy/Sell Ratio',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Text(
                                   depth.buyToSellRatio.toStringAsFixed(2),
@@ -169,20 +178,28 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
           Expanded(child: Text('Orders', style: style)),
           Expanded(child: Text('Qty', style: style)),
           Expanded(
-              child: Text('Bid', style: style, textAlign: TextAlign.center)),
+            child: Text('Bid', style: style, textAlign: TextAlign.center),
+          ),
           Expanded(
-              child: Text('Ask', style: style, textAlign: TextAlign.center)),
+            child: Text('Ask', style: style, textAlign: TextAlign.center),
+          ),
           Expanded(
-              child: Text('Qty', style: style, textAlign: TextAlign.right)),
+            child: Text('Qty', style: style, textAlign: TextAlign.right),
+          ),
           Expanded(
-              child: Text('Orders', style: style, textAlign: TextAlign.right)),
+            child: Text('Orders', style: style, textAlign: TextAlign.right),
+          ),
         ],
       ),
     );
   }
 
   Widget _depthRow(
-      BuildContext context, MarketDepthLevel bid, MarketDepthLevel ask, int i) {
+    BuildContext context,
+    MarketDepthLevel bid,
+    MarketDepthLevel ask,
+    int i,
+  ) {
     return Column(
       children: [
         Padding(
@@ -193,14 +210,18 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                 child: Text(
                   '${bid.orders}',
                   style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12, color: AppColors.textSecondary),
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ),
               Expanded(
                 child: Text(
                   _fmt(bid.quantity),
                   style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12, color: AppColors.success),
+                    fontSize: 12,
+                    color: AppColors.success,
+                  ),
                 ),
               ),
               Expanded(
@@ -230,7 +251,9 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                   _fmt(ask.quantity),
                   textAlign: TextAlign.right,
                   style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12, color: AppColors.danger),
+                    fontSize: 12,
+                    color: AppColors.danger,
+                  ),
                 ),
               ),
               Expanded(
@@ -238,7 +261,9 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                   '${ask.orders}',
                   textAlign: TextAlign.right,
                   style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12, color: AppColors.textSecondary),
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ),
             ],
@@ -257,8 +282,10 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Buy vs Sell Pressure',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          const Text(
+            'Buy vs Sell Pressure',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
@@ -266,17 +293,11 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
               children: [
                 Expanded(
                   flex: (buyFraction * 100).round(),
-                  child: Container(
-                    height: 12,
-                    color: AppColors.success,
-                  ),
+                  child: Container(height: 12, color: AppColors.success),
                 ),
                 Expanded(
                   flex: ((1 - buyFraction) * 100).round(),
-                  child: Container(
-                    height: 12,
-                    color: AppColors.danger,
-                  ),
+                  child: Container(height: 12, color: AppColors.danger),
                 ),
               ],
             ),
@@ -288,16 +309,18 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
               Text(
                 'Buy ${(buyFraction * 100).toStringAsFixed(1)}%',
                 style: const TextStyle(
-                    color: AppColors.success,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600),
+                  color: AppColors.success,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               Text(
                 'Sell ${((1 - buyFraction) * 100).toStringAsFixed(1)}%',
                 style: const TextStyle(
-                    color: AppColors.danger,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600),
+                  color: AppColors.danger,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),

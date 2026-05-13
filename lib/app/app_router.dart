@@ -33,7 +33,8 @@ GoRouter createAppRouter(AuthSession authSession) {
 
   // Define what constitutes an "Admin URL"
   // Matches: admin.trade-kosh.web.app, admin-trade-kosh.web.app, localhost with /admin path
-  final bool isAdminHost = host.contains('admin') ||
+  final bool isAdminHost =
+      host.contains('admin') ||
       host.startsWith('admin.') ||
       host.startsWith('admin-') ||
       currentPath.startsWith('/admin');
@@ -69,7 +70,8 @@ GoRouter createAppRouter(AuthSession authSession) {
       final isAppLogin = loc == '/app/login';
       final isAppRegister = loc == '/app/register';
       final isAdminLogin = loc == '/admin/login';
-      final isProtectedApp = loc.startsWith('/app/') && !isAppLogin && !isAppRegister;
+      final isProtectedApp =
+          loc.startsWith('/app/') && !isAppLogin && !isAppRegister;
       final isProtectedAdmin = loc.startsWith('/admin/') && !isAdminLogin;
 
       // Protect /app/* routes
@@ -106,9 +108,8 @@ GoRouter createAppRouter(AuthSession authSession) {
       ),
       GoRoute(
         path: '/app/dashboard',
-        builder: (context, state) => MainShell(
-          onThemeToggle: ThemeControllerRef.of(context),
-        ),
+        builder: (context, state) =>
+            MainShell(onThemeToggle: ThemeControllerRef.of(context)),
       ),
       GoRoute(
         path: '/app/orders',

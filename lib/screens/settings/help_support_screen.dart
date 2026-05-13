@@ -91,8 +91,9 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                                 child: Text(
                                   e.value.question,
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 14),
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
                               Icon(
@@ -114,9 +115,10 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                           child: Text(
                             e.value.answer,
                             style: const TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
-                                height: 1.5),
+                              fontSize: 13,
+                              color: AppColors.textSecondary,
+                              height: 1.5,
+                            ),
                           ),
                         ),
                       if (e.key < _faqs.length - 1) const Divider(height: 1),
@@ -152,8 +154,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                     title: 'Live Chat',
                     subtitle: 'Chat with our support team',
                     onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text('Live chat coming soon!')),
+                      const SnackBar(content: Text('Live chat coming soon!')),
                     ),
                   ),
                   const Divider(height: 1),
@@ -163,7 +164,8 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                     subtitle: 'Submit a support request',
                     onTap: () => ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                          content: Text('Ticket system coming soon!')),
+                        content: Text('Ticket system coming soon!'),
+                      ),
                     ),
                   ),
                 ],
@@ -183,11 +185,16 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
   }) {
     return ListTile(
       leading: Icon(icon, color: AppColors.primary, size: 20),
-      title: Text(title,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+      ),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-      trailing: const Icon(Icons.chevron_right,
-          color: AppColors.textSecondary, size: 20),
+      trailing: const Icon(
+        Icons.chevron_right,
+        color: AppColors.textSecondary,
+        size: 20,
+      ),
       onTap: onTap,
     );
   }

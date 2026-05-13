@@ -39,8 +39,7 @@ class ForceClosePositionsScreen extends StatefulWidget {
       _ForceClosePositionsScreenState();
 }
 
-class _ForceClosePositionsScreenState
-    extends State<ForceClosePositionsScreen> {
+class _ForceClosePositionsScreenState extends State<ForceClosePositionsScreen> {
   // Mock positions — in production these come from Firestore positions stream
   final List<_MockPosition> _positions = [
     const _MockPosition(
@@ -104,7 +103,9 @@ class _ForceClosePositionsScreenState
               label: Text('${_positions.length} open'),
               backgroundColor: AppColors.danger.withOpacity(0.12),
               labelStyle: const TextStyle(
-                  color: AppColors.danger, fontWeight: FontWeight.w700),
+                color: AppColors.danger,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -114,8 +115,11 @@ class _ForceClosePositionsScreenState
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(LucideIcons.checkCircle2,
-                      size: 48, color: AppColors.success),
+                  Icon(
+                    LucideIcons.checkCircle2,
+                    size: 48,
+                    color: AppColors.success,
+                  ),
                   SizedBox(height: 12),
                   Text('No open positions across all users.'),
                 ],
@@ -137,17 +141,26 @@ class _ForceClosePositionsScreenState
                         // User header row
                         Row(
                           children: [
-                            const Icon(LucideIcons.user,
-                                size: 16, color: AppColors.textSecondary),
+                            const Icon(
+                              LucideIcons.user,
+                              size: 16,
+                              color: AppColors.textSecondary,
+                            ),
                             const SizedBox(width: 6),
-                            Text(userName,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700)),
+                            Text(
+                              userName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                             const SizedBox(width: 6),
-                            Text(userId,
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    color: AppColors.textSecondary)),
+                            Text(
+                              userId,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
                             const Spacer(),
                             OutlinedButton.icon(
                               onPressed: () =>
@@ -156,10 +169,11 @@ class _ForceClosePositionsScreenState
                               label: const Text('Close All'),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: AppColors.danger,
-                                side: const BorderSide(
-                                    color: AppColors.danger),
+                                side: const BorderSide(color: AppColors.danger),
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
                               ),
                             ),
                           ],
@@ -167,67 +181,78 @@ class _ForceClosePositionsScreenState
                         const Divider(height: 16),
 
                         // Position rows
-                        ...userPositions.map((pos) => Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 6),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    flex: 2,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(pos.stock,
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w700)),
-                                        Text(
-                                          'Qty: ${pos.qty}  Avg: ₹${pos.avgPrice.toStringAsFixed(2)}',
-                                          style: const TextStyle(
-                                              fontSize: 11,
-                                              color: AppColors.textSecondary),
+                        ...userPositions.map(
+                          (pos) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  flex: 2,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        pos.stock,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
                                         ),
-                                      ],
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        Text(
-                                          '₹${pos.currentPrice.toStringAsFixed(2)}',
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.w600),
+                                      ),
+                                      Text(
+                                        'Qty: ${pos.qty}  Avg: ₹${pos.avgPrice.toStringAsFixed(2)}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: AppColors.textSecondary,
                                         ),
-                                        Text(
-                                          '${pos.unrealizedPnl >= 0 ? '+' : ''}₹${pos.unrealizedPnl.toStringAsFixed(0)} (${pos.pnlPercent.toStringAsFixed(1)}%)',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                            color: pos.unrealizedPnl >= 0
-                                                ? AppColors.success
-                                                : AppColors.danger,
-                                          ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        '₹${pos.currentPrice.toStringAsFixed(2)}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                      Text(
+                                        '${pos.unrealizedPnl >= 0 ? '+' : ''}₹${pos.unrealizedPnl.toStringAsFixed(0)} (${pos.pnlPercent.toStringAsFixed(1)}%)',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: pos.unrealizedPnl >= 0
+                                              ? AppColors.success
+                                              : AppColors.danger,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 10),
-                                  IconButton(
-                                    onPressed: () => _confirmForceClose(
-                                        userId, pos.positionId, pos.stock),
-                                    icon: const Icon(LucideIcons.x,
-                                        size: 16, color: AppColors.danger),
-                                    tooltip: 'Force Close',
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: AppColors.danger
-                                          .withOpacity(0.1),
-                                    ),
+                                ),
+                                const SizedBox(width: 10),
+                                IconButton(
+                                  onPressed: () => _confirmForceClose(
+                                    userId,
+                                    pos.positionId,
+                                    pos.stock,
                                   ),
-                                ],
-                              ),
-                            )),
+                                  icon: const Icon(
+                                    LucideIcons.x,
+                                    size: 16,
+                                    color: AppColors.danger,
+                                  ),
+                                  tooltip: 'Force Close',
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: AppColors.danger
+                                        .withOpacity(0.1),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -237,16 +262,18 @@ class _ForceClosePositionsScreenState
     );
   }
 
-  void _confirmForceClose(
-      String userId, String positionId, String stock) {
+  void _confirmForceClose(String userId, String positionId, String stock) {
     AppDialog.destructive(
       context,
       title: 'Force Close Position?',
-      message: 'Close $stock position for this user? This action is logged and cannot be undone.',
+      message:
+          'Close $stock position for this user? This action is logged and cannot be undone.',
       confirmLabel: 'Force Close',
       onConfirm: () {
         AdminScope.of(context).forceClosePosition(userId, positionId);
-        setState(() => _positions.removeWhere((p) => p.positionId == positionId));
+        setState(
+          () => _positions.removeWhere((p) => p.positionId == positionId),
+        );
         AppToast.warning(context, '$stock position force-closed.');
       },
     );
@@ -256,7 +283,8 @@ class _ForceClosePositionsScreenState
     AppDialog.destructive(
       context,
       title: 'Force Close All Positions?',
-      message: 'Close ALL open positions for $userName? This action is logged and cannot be undone.',
+      message:
+          'Close ALL open positions for $userName? This action is logged and cannot be undone.',
       confirmLabel: 'Close All',
       onConfirm: () {
         AdminScope.of(context).forceCloseAllPositions(userId);

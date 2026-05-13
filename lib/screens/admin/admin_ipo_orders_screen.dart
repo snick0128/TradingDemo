@@ -64,13 +64,12 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
                   );
                 }
 
-                final docs = (snap.data?.docs ?? [])
-                    .where((d) {
-                      if (_statusFilter == 'ALL') return true;
-                      final status = (d.data()['status'] as String? ?? '').toUpperCase();
-                      return status == _statusFilter;
-                    })
-                    .toList();
+                final docs = (snap.data?.docs ?? []).where((d) {
+                  if (_statusFilter == 'ALL') return true;
+                  final status = (d.data()['status'] as String? ?? '')
+                      .toUpperCase();
+                  return status == _statusFilter;
+                }).toList();
 
                 if (docs.isEmpty) {
                   return const Center(child: Text('No IPO orders found.'));
@@ -80,7 +79,8 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
                   child: ListView.separated(
                     itemCount: docs.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, i) => _row(context, appScope, docs[i]),
+                    itemBuilder: (context, i) =>
+                        _row(context, appScope, docs[i]),
                   ),
                 );
               },
@@ -108,10 +108,13 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
     final status = (d['status'] as String? ?? 'PENDING').toUpperCase();
     final isPending = status == 'PENDING';
     final createdAt = (d['createdAt'] as Timestamp?)?.toDate();
-    final fmtTime = createdAt != null ? DateFormat('dd MMM HH:mm').format(createdAt) : '—';
+    final fmtTime = createdAt != null
+        ? DateFormat('dd MMM HH:mm').format(createdAt)
+        : '—';
 
     final userId = (d['userId'] as String? ?? '—');
-    final company = (d['companyName'] as String? ?? (d['ipoId'] as String? ?? 'IPO'));
+    final company =
+        (d['companyName'] as String? ?? (d['ipoId'] as String? ?? 'IPO'));
     final blockedAmount = ((d['blockedAmount'] as num?) ?? 0).toDouble();
     final batchPrice = ((d['batchPrice'] as num?) ?? 0).toDouble();
     final lots = ((d['lots'] as num?) ?? 0).toInt();
@@ -137,12 +140,18 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
             flex: 2,
             child: Text(
               fmtTime,
-              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
             ),
           ),
           Expanded(
             flex: 2,
-            child: Text(userId, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(
+              userId,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
           ),
           Expanded(
             flex: 3,
@@ -152,7 +161,10 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
             flex: 3,
             child: Text(
               'Lots:$lots  Bid:₹${bidPrice.toStringAsFixed(0)}\nBatch:₹${batchPrice.toStringAsFixed(2)}',
-              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.textSecondary,
+              ),
             ),
           ),
           Expanded(
@@ -169,7 +181,11 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
             child: Text(
               status,
               textAlign: TextAlign.right,
-              style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: statusColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           if (isPending) ...[
@@ -204,9 +220,9 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
         try {
           await onTap();
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$label successful')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('$label successful')));
         } catch (e) {
           if (!context.mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -255,7 +271,8 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
       final userId = order['userId'] as String;
       final blockedAmount = ((order['blockedAmount'] as num?) ?? 0).toDouble();
       final batchPrice = ((order['batchPrice'] as num?) ?? 0).toDouble();
-      final listingGainPct = ((order['listingGainPercent'] as num?) ?? 0).toDouble();
+      final listingGainPct = ((order['listingGainPercent'] as num?) ?? 0)
+          .toDouble();
       final profitAmount = batchPrice * listingGainPct / 100.0;
       final creditAmount = blockedAmount + profitAmount;
 
@@ -263,10 +280,11 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
       final userSnap = await tx.get(userRef);
       if (!userSnap.exists) throw Exception('User not found.');
       final userData = userSnap.data()!;
-      final balance = ((userData['balance'] as num?) ??
-              (userData['available_balance'] as num?) ??
-              0)
-          .toDouble();
+      final balance =
+          ((userData['balance'] as num?) ??
+                  (userData['available_balance'] as num?) ??
+                  0)
+              .toDouble();
       final newBalance = balance + creditAmount;
 
       tx.update(userRef, {
@@ -311,7 +329,9 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
             const SizedBox(height: 10),
             TextField(
               controller: cutController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
                 labelText: 'Cut amount',
                 prefixText: '₹',
@@ -320,7 +340,10 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () async {
               final cutRaw = double.tryParse(cutController.text.trim()) ?? 0;
@@ -334,8 +357,10 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
                 final orderSnap = await tx.get(orderRef);
                 if (!orderSnap.exists) throw Exception('Order not found.');
                 final order = orderSnap.data()!;
-                final status = (order['status'] as String? ?? 'PENDING').toUpperCase();
-                if (status != 'PENDING') throw Exception('Order already processed.');
+                final status = (order['status'] as String? ?? 'PENDING')
+                    .toUpperCase();
+                if (status != 'PENDING')
+                  throw Exception('Order already processed.');
 
                 final userId = order['userId'] as String;
                 final userRef = db.collection('users').doc(userId);
@@ -343,10 +368,11 @@ class _AdminIpoOrdersScreenState extends State<AdminIpoOrdersScreen> {
                 if (!userSnap.exists) throw Exception('User not found.');
 
                 final userData = userSnap.data()!;
-                final balance = ((userData['balance'] as num?) ??
-                        (userData['available_balance'] as num?) ??
-                        0)
-                    .toDouble();
+                final balance =
+                    ((userData['balance'] as num?) ??
+                            (userData['available_balance'] as num?) ??
+                            0)
+                        .toDouble();
                 final newBalance = balance + refundAmount;
 
                 tx.update(userRef, {

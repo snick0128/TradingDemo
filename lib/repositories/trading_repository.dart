@@ -90,8 +90,11 @@ class OrderResult {
 
   const OrderResult({required this.success, this.orderId, this.errorMessage});
 
-  factory OrderResult.success(String orderId) => OrderResult(success: true, orderId: orderId);
-  factory OrderResult.failure(String msg) => OrderResult(success: false, errorMessage: msg);
+  factory OrderResult.success(String orderId) =>
+      OrderResult(success: true, orderId: orderId);
+  factory OrderResult.failure(String msg) =>
+      OrderResult(success: false, errorMessage: msg);
 
-  String get message => success ? (orderId ?? 'Success') : (errorMessage ?? 'Error');
+  String get message =>
+      success ? (orderId ?? 'Success') : (errorMessage ?? 'Error');
 }

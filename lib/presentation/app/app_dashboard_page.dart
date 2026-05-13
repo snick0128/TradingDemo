@@ -43,13 +43,14 @@ class _AppDashboardPageState extends State<AppDashboardPage> {
         clientOrderId: clientOrderId,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Order placed')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Order placed')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Order failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Order failed: $e')));
     } finally {
       if (mounted) setState(() => _placing = false);
     }
@@ -146,8 +147,11 @@ class _AppDashboardPageState extends State<AppDashboardPage> {
                       final o = orders[index];
                       return ListTile(
                         title: Text(
-                            '${o.symbol} • ${o.type.name.toUpperCase()} ${o.quantity}'),
-                        subtitle: Text('Status: ${o.status.name.toUpperCase()}'),
+                          '${o.symbol} • ${o.type.name.toUpperCase()} ${o.quantity}',
+                        ),
+                        subtitle: Text(
+                          'Status: ${o.status.name.toUpperCase()}',
+                        ),
                       );
                     },
                   ),

@@ -29,11 +29,69 @@ class SecurityStore extends ChangeNotifier {
   // ─── Authentication ────────────────────────────────────────────────────────
 
   bool authenticate(String clientId, String password) {
+    if (clientId == 'demo' && password == 'password') {
+      _isAuthenticated = true;
+      _currentUser = User(
+        id: 'demo-user',
+        clientId: 'demo',
+        name: 'Demo User',
+        email: 'demo@tradekosh.app',
+        isActive: true,
+        balance: 100000,
+        marginLimit: 0,
+        registeredAt: DateTime.now(),
+      );
+      _sessionLog.add(DateTime.now());
+      _isLocked = false;
+      _resetIdleTimer();
+      notifyListeners();
+      return true;
+    }
+    if (clientId == 'admin' && password == 'admin123') {
+      _isAuthenticated = true;
+      _currentUser = User(
+        id: 'admin-user',
+        clientId: 'admin',
+        name: 'Admin',
+        email: 'admin@tradekosh.app',
+        isActive: true,
+        balance: 0,
+        marginLimit: 0,
+        registeredAt: DateTime.now(),
+        isAdmin: true,
+      );
+      _sessionLog.add(DateTime.now());
+      _isLocked = false;
+      _resetIdleTimer();
+      notifyListeners();
+      return true;
+    }
+    _isAuthenticated = false;
+    _currentUser = null;
+    notifyListeners();
     return false;
   }
 
   bool register(String name, String email, double balance) {
-    return false;
+    if (name.trim().isEmpty || email.trim().isEmpty || balance < 0) {
+      return false;
+    }
+    _isAuthenticated = true;
+    _currentUser = User(
+      id: 'reg-${DateTime.now().millisecondsSinceEpoch}',
+      clientId: email.split('@').first,
+      name: name.trim(),
+      email: email.trim(),
+      isActive: true,
+      balance: balance,
+      marginLimit: 0,
+      registeredAt: DateTime.now(),
+    );
+    _sessionLog.add(DateTime.now());
+    _isLocked = false;
+    _resetIdleTimer();
+    notifyListeners();
+    return true;
   }
 
   void setPin(String pin) {
@@ -58,6 +116,7 @@ class SecurityStore extends ChangeNotifier {
 
   void killAllSessions() {
     _isAuthenticated = false;
+    _currentUser = null;
     _isLocked = true;
     _idleTimer?.cancel();
     notifyListeners();
@@ -119,6 +178,14 @@ class SecurityStore extends ChangeNotifier {
     if (currentPin != _pin || !_isValidPin(newPin)) return false;
     _pin = newPin;
     notifyListeners();
+    return true;
+  }
+
+  bool resetPinWithOtp({required String otp, required String newPin}) {
+    // Demo OTP gate for forgot-pin flow until backend OTP verifier is wired.
+    if (otp.trim() != '123456' || !_isValidPin(newPin)) return false;
+    _pin = newPin;
+    killAllSessions();
     return true;
   }
 

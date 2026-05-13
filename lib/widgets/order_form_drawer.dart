@@ -42,6 +42,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   StreamSubscription<MarketSettings>? _settingsSub;
   MarketSettings _marketSettings = MarketSettings.defaults;
 
+  // Admin-configured leverage/charges loaded from Firestore
+  Map<String, Map<String, dynamic>> _categoryLeverageMap = {};
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +53,20 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     _settingsSub = _settingsService.stream.listen((s) {
       if (mounted) setState(() => _marketSettings = s);
     });
+    _loadCategoryLeverage();
+  }
+
+  Future<void> _loadCategoryLeverage() async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final snap = await db.collection('category_leverage').get();
+      if (!mounted) return;
+      final map = <String, Map<String, dynamic>>{};
+      for (final doc in snap.docs) {
+        map[doc.id] = doc.data();
+      }
+      setState(() => _categoryLeverageMap = map);
+    } catch (_) {}
   }
 
   @override
@@ -61,7 +78,8 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
 
   bool get _isBuy => _side == OrderType.buy;
   bool get _isMarket => _variety == OrderVariety.market;
-  bool get _isPriceEnabled => _variety == OrderVariety.limit || _variety == OrderVariety.sl;
+  bool get _isPriceEnabled =>
+      _variety == OrderVariety.limit || _variety == OrderVariety.sl;
 
   /// Returns null if trading is allowed, or a reason string if blocked.
   /// Uses device IST time for UI feedback only — backend enforces authoritatively.
@@ -72,24 +90,82 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       ? (double.tryParse(_priceController.text) ?? widget.stock.currentPrice)
       : widget.stock.currentPrice;
 
+  /// Resolves which category_leverage document applies to this stock.
+  String _resolveCategoryKey() {
+    final ex = widget.stock.exchange.toUpperCase();
+    final sym = widget.stock.symbol.toUpperCase();
+
+    if (ex == 'MCX') {
+      if (['GOLD', 'GOLDM', 'GOLDPETAL'].contains(sym)) return 'mcx_gold';
+      if (['SILVER', 'SILVERM'].contains(sym)) return 'mcx_silver';
+      if (['CRUDEOIL', 'NATURALGAS'].contains(sym)) return 'mcx_energy';
+      if (['COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL'].contains(sym))
+        return 'mcx_base_metals';
+      if (['COTTON', 'KAPAS'].contains(sym)) return 'mcx_agri';
+      return 'mcx_energy';
+    }
+
+    const nifty50 = {
+      'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'SBIN', 'BHARTIARTL',
+      'ICICIBANK', 'KOTAKBANK', 'LT', 'ITC', 'AXISBANK', 'ASIANPAINT',
+      'MARUTI', 'TITAN', 'NESTLEIND', 'ULTRACEMCO', 'WIPRO', 'ONGC',
+      'HCLTECH', 'POWERGRID', 'TECHM', 'NTPC', 'SUNPHARMA', 'TATAMOTORS',
+      'TATASTEEL', 'JSWSTEEL', 'M&M', 'ADANIENT', 'HDFC', 'BAJAJFINSV',
+      'HDFC'
+    };
+    if (nifty50.contains(sym)) return 'nifty50';
+
+    const bankNifty = {
+      'HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK',
+      'BANKBARODA', 'PNB', 'INDUSINDBK', 'IDFCFIRSTB', 'FEDERALBNK',
+      'BANKINDIA',
+    };
+    if (bankNifty.contains(sym)) return 'banknifty';
+
+    const midcap = {
+      'BAJFINANCE', 'WIPRO', 'HINDUNILVR', 'MARICO', 'DABUR',
+      'MPHASIS', 'PERSISTENT', 'COFORGE', 'LTIM', 'INDUSTOWER', 'ALKEM',
+      'VOLTAS',
+    };
+    if (midcap.contains(sym)) return 'nifty_midcap';
+
+    return 'nse_equity';
+  }
+
   double get _estimatedCharges {
-    final tradeValue = _qty * _effectivePrice;
-    const brokerage = 20.0;
-    final stt = tradeValue * 0.001;
-    final gst = brokerage * 0.18;
-    return brokerage + stt + gst;
+    final categoryKey = _resolveCategoryKey();
+    final catData = _categoryLeverageMap[categoryKey] ??
+        _categoryLeverageMap['nse_equity'];
+    if (catData == null) return 0.0;
+
+    final pStr = _product == ProductType.mis ? 'mis' : 'nrml';
+    final side = _isBuy ? 'buy' : 'sell';
+
+    final trade =
+        (catData['${pStr}_${side}_trade_charge'] as num?)?.toDouble() ?? 0.0;
+    final fixed =
+        (catData['${pStr}_${side}_fixed_charge'] as num?)?.toDouble() ?? 0.0;
+    final percent =
+        (catData['${pStr}_${side}_percent_charge'] as num?)?.toDouble() ?? 0.0;
+    final other =
+        (catData['${pStr}_${side}_other_charge'] as num?)?.toDouble() ?? 0.0;
+
+    final tv = _qty * _effectivePrice;
+    return trade + fixed + (tv * percent / 100) + (tv * other / 100);
   }
 
   double get _totalCost =>
-      _qty * _effectivePrice + (_isBuy ? _estimatedCharges : -_estimatedCharges);
+      _qty * _effectivePrice +
+      (_isBuy ? _estimatedCharges : -_estimatedCharges);
 
-  Color get _sideColor => _isBuy ? const Color(0xFF00C853) : const Color(0xFFE53935);
+  Color get _sideColor =>
+      _isBuy ? const Color(0xFF00C853) : const Color(0xFFE53935);
 
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final hasInsufficientMargin = _isBuy &&
-        (_qty * _effectivePrice) > store.balance;
+    final hasInsufficientMargin =
+        _isBuy && (_qty * _effectivePrice) > store.balance;
 
     return Drawer(
       width: 360,
@@ -167,7 +243,10 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                 ),
                 Text(
                   '₹${widget.stock.currentPrice.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF666666),
+                  ),
                 ),
               ],
             ),
@@ -181,7 +260,11 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                 color: Color(0xFFF5F5F5),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.close, size: 16, color: Color(0xFF666666)),
+              child: const Icon(
+                Icons.close,
+                size: 16,
+                color: Color(0xFF666666),
+              ),
             ),
           ),
         ],
@@ -202,14 +285,18 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         _label('PRODUCT'),
         const SizedBox(height: 8),
         Row(
-          children: chips.map((c) => Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: _pill(
-              label: c.$2,
-              selected: _product == c.$1,
-              onTap: () => setState(() => _product = c.$1),
-            ),
-          )).toList(),
+          children: chips
+              .map(
+                (c) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _pill(
+                    label: c.$2,
+                    selected: _product == c.$1,
+                    onTap: () => setState(() => _product = c.$1),
+                  ),
+                ),
+              )
+              .toList(),
         ),
       ],
     );
@@ -229,14 +316,18 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         _label('ORDER TYPE'),
         const SizedBox(height: 8),
         Row(
-          children: types.map((t) => Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: _pill(
-              label: t.$2,
-              selected: _variety == t.$1,
-              onTap: () => setState(() => _variety = t.$1),
-            ),
-          )).toList(),
+          children: types
+              .map(
+                (t) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _pill(
+                    label: t.$2,
+                    selected: _variety == t.$1,
+                    onTap: () => setState(() => _variety = t.$1),
+                  ),
+                ),
+              )
+              .toList(),
         ),
       ],
     );
@@ -260,7 +351,10 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                   onTap: () => setState(() => _qty = q),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 120),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 7,
+                    ),
                     decoration: BoxDecoration(
                       color: sel ? _sideColor.withOpacity(0.08) : Colors.white,
                       border: Border.all(
@@ -383,9 +477,19 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       ),
       child: Column(
         children: [
-          _costRow('Trade value', '₹${tradeValue.toStringAsFixed(2)}', const Color(0xFF111111)),
-          const SizedBox(height: 8),
-          _costRow('Est. charges', '₹${_estimatedCharges.toStringAsFixed(2)}', const Color(0xFF666666)),
+          _costRow(
+            'Trade value',
+            '₹${tradeValue.toStringAsFixed(2)}',
+            const Color(0xFF111111),
+          ),
+          if (_estimatedCharges > 0) ...[
+            const SizedBox(height: 8),
+            _costRow(
+              'Est. charges',
+              '₹${_estimatedCharges.toStringAsFixed(2)}',
+              const Color(0xFF666666),
+            ),
+          ],
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 10),
             child: Divider(height: 1, color: Color(0xFFEEEEEE)),
@@ -401,11 +505,19 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     );
   }
 
-  Widget _costRow(String label, String value, Color valueColor, {bool bold = false}) {
+  Widget _costRow(
+    String label,
+    String value,
+    Color valueColor, {
+    bool bold = false,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF666666))),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
+        ),
         Text(
           value,
           style: TextStyle(
@@ -420,12 +532,21 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
 
   // ── Sticky bottom ──────────────────────────────────────────────────────────
 
-  Widget _buildStickyBottom(BuildContext context, store, bool hasInsufficientMargin) {
+  Widget _buildStickyBottom(
+    BuildContext context,
+    store,
+    bool hasInsufficientMargin,
+  ) {
     final blockReason = _marketBlockReason;
     final isBlocked = blockReason != null;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.of(context).padding.bottom),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        16 + MediaQuery.of(context).padding.bottom,
+      ),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: Color(0xFFF0F0F0))),
@@ -441,11 +562,17 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
               decoration: BoxDecoration(
                 color: const Color(0xFFFFF3E0),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.4)),
+                border: Border.all(
+                  color: const Color(0xFFFFB300).withValues(alpha: 0.4),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.clock, size: 14, color: Color(0xFFE65100)),
+                  const Icon(
+                    LucideIcons.clock,
+                    size: 14,
+                    color: Color(0xFFE65100),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -513,13 +640,18 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
                 backgroundColor: _sideColor,
                 disabledBackgroundColor: const Color(0xFFE0E0E0),
                 elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               child: _submitting
                   ? const SizedBox(
                       width: 20,
                       height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
                     )
                   : Text(
                       isBlocked
@@ -542,7 +674,11 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
               onPressed: () => Navigator.pop(context),
               child: const Text(
                 'Cancel',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF9E9E9E)),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF9E9E9E),
+                ),
               ),
             ),
           ),
@@ -577,14 +713,14 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         // Solution: Pass _product (MIS/NRML) and stock.exchange to backend.
         // The backend now applies correct leverage and market-hours check.
         final result = await api.placeOrder(
-          userId:      sessionUser.uid,
-          symbol:      widget.stock.symbol,
-          qty:         _qty,
-          type:        _isBuy ? 'BUY' : 'SELL',
+          userId: sessionUser.uid,
+          symbol: widget.stock.symbol,
+          qty: _qty,
+          type: _isBuy ? 'BUY' : 'SELL',
           productType: _product == ProductType.mis ? 'MIS' : 'NRML',
-          exchange:    widget.stock.exchange.isNotEmpty
-                           ? widget.stock.exchange
-                           : 'NSE',
+          exchange: widget.stock.exchange.isNotEmpty
+              ? widget.stock.exchange
+              : 'NSE',
         );
 
         // Dismiss the drawer first, then show toast above it
@@ -601,13 +737,19 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       } on BackendException catch (e) {
         if (mounted) setState(() => _submitting = false);
         String msg = e.message;
-        if (msg.contains('Insufficient balance')) msg = 'Insufficient balance.';
-        else if (msg.contains('No position') || msg.contains('Insufficient quantity')) msg = 'Insufficient holdings.';
-        else if (msg.contains('No market data') || msg.contains('Market may be closed')) msg = 'Market data unavailable.';
+        if (msg.contains('Insufficient balance'))
+          msg = 'Insufficient balance.';
+        else if (msg.contains('No position') ||
+            msg.contains('Insufficient quantity'))
+          msg = 'Insufficient holdings.';
+        else if (msg.contains('No market data') ||
+            msg.contains('Market may be closed'))
+          msg = 'Market data unavailable.';
         if (context.mounted) AppToast.error(context, msg);
       } catch (e) {
         if (mounted) setState(() => _submitting = false);
-        if (context.mounted) AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+        if (context.mounted)
+          AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
       }
       // No finally setState — widget is already popped on success
       return;
@@ -625,18 +767,26 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     );
     nav.pop();
     if (result.success) {
-      if (context.mounted) AppToast.success(context, 'Order placed · ${result.orderId}');
+      if (context.mounted)
+        AppToast.success(context, 'Order placed · ${result.orderId}');
     } else {
-      if (context.mounted) AppToast.error(context, result.errorMessage ?? 'Order failed');
+      if (context.mounted)
+        AppToast.error(context, result.errorMessage ?? 'Order failed');
     }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  Widget _pill({required String label, required bool selected, required VoidCallback onTap}) {
+  Widget _pill({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
     final selBg = _isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
     final selText = _isBuy ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
-    final selBorder = _isBuy ? const Color(0xFF81C784) : const Color(0xFFEF9A9A);
+    final selBorder = _isBuy
+        ? const Color(0xFF81C784)
+        : const Color(0xFFEF9A9A);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -644,7 +794,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
           color: selected ? selBg : Colors.white,
-          border: Border.all(color: selected ? selBorder : const Color(0xFFE0E0E0)),
+          border: Border.all(
+            color: selected ? selBorder : const Color(0xFFE0E0E0),
+          ),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(

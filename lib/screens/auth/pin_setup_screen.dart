@@ -71,7 +71,10 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             child: Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(48),
-                child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380), child: _buildForm()),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 380),
+                  child: _buildForm(),
+                ),
               ),
             ),
           ),
@@ -108,17 +111,32 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       children: [
         // Lock icon
         Container(
-          width: 64, height: 64,
+          width: 64,
+          height: 64,
           decoration: BoxDecoration(
             color: AppColors.primary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Icon(LucideIcons.shieldCheck, color: AppColors.primary, size: 32),
+          child: const Icon(
+            LucideIcons.shieldCheck,
+            color: AppColors.primary,
+            size: 32,
+          ),
         ),
         const SizedBox(height: 20),
-        Text('Set Your PIN', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+        Text(
+          'Set Your PIN',
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textPrimary,
+          ),
+        ),
         const SizedBox(height: 6),
-        Text('Choose a 4-digit PIN to secure your account.', style: TextStyle(fontSize: 15, color: AppColors.textSecondary)),
+        Text(
+          'Choose a 4-digit PIN to secure your account.',
+          style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
+        ),
         const SizedBox(height: 32),
 
         _label('Create PIN'),
@@ -132,7 +150,11 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
           decoration: _inputDecoration('• • • •', LucideIcons.lock).copyWith(
             counterText: '',
             suffixIcon: IconButton(
-              icon: Icon(_obscurePin ? LucideIcons.eyeOff : LucideIcons.eye, size: 18, color: AppColors.textSecondary),
+              icon: Icon(
+                _obscurePin ? LucideIcons.eyeOff : LucideIcons.eye,
+                size: 18,
+                color: AppColors.textSecondary,
+              ),
               onPressed: () => setState(() => _obscurePin = !_obscurePin),
             ),
           ),
@@ -151,8 +173,13 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
           decoration: _inputDecoration('• • • •', LucideIcons.lock).copyWith(
             counterText: '',
             suffixIcon: IconButton(
-              icon: Icon(_obscureConfirm ? LucideIcons.eyeOff : LucideIcons.eye, size: 18, color: AppColors.textSecondary),
-              onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+              icon: Icon(
+                _obscureConfirm ? LucideIcons.eyeOff : LucideIcons.eye,
+                size: 18,
+                color: AppColors.textSecondary,
+              ),
+              onPressed: () =>
+                  setState(() => _obscureConfirm = !_obscureConfirm),
             ),
           ),
           onChanged: (_) => setState(() => _error = ''),
@@ -169,9 +196,18 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             ),
             child: Row(
               children: [
-                Icon(LucideIcons.alertCircle, size: 14, color: AppColors.danger),
+                Icon(
+                  LucideIcons.alertCircle,
+                  size: 14,
+                  color: AppColors.danger,
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: Text(_error, style: TextStyle(color: AppColors.danger, fontSize: 13))),
+                Expanded(
+                  child: Text(
+                    _error,
+                    style: TextStyle(color: AppColors.danger, fontSize: 13),
+                  ),
+                ),
               ],
             ),
           ),
@@ -185,9 +221,18 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
-            child: const Text('Set PIN & Continue', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+            child: const Text(
+              'Set PIN & Continue',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 16),
@@ -215,18 +260,38 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     );
   }
 
-  Widget _label(String text) => Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary));
-
-  InputDecoration _inputDecoration(String hint, IconData icon) => InputDecoration(
-    hintText: hint,
-    prefixIcon: Icon(icon, size: 18, color: AppColors.textSecondary),
-    filled: true,
-    fillColor: AppColors.surfaceAlt,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: AppColors.border)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: AppColors.primary, width: 1.5)),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+  Widget _label(String text) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      color: AppColors.textPrimary,
+    ),
   );
+
+  InputDecoration _inputDecoration(String hint, IconData icon) =>
+      InputDecoration(
+        hintText: hint,
+        prefixIcon: Icon(icon, size: 18, color: AppColors.textSecondary),
+        filled: true,
+        fillColor: AppColors.surfaceAlt,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
+      );
 }
 
 class _PinBrandingPanel extends StatelessWidget {
@@ -249,26 +314,61 @@ class _PinBrandingPanel extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    width: 44, height: 44,
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(LucideIcons.candlestickChart, color: Colors.white, size: 24),
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      LucideIcons.candlestickChart,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Trade Kosh', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+                  const Text(
+                    'Trade Kosh',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
               const Spacer(),
               Container(
-                width: 80, height: 80,
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(24)),
-                child: const Icon(LucideIcons.shieldCheck, color: Colors.white, size: 40),
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Icon(
+                  LucideIcons.shieldCheck,
+                  color: Colors.white,
+                  size: 40,
+                ),
               ),
               const SizedBox(height: 24),
-              const Text('Secure your\naccount', style: TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800, height: 1.2)),
+              const Text(
+                'Secure your\naccount',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 40,
+                  fontWeight: FontWeight.w800,
+                  height: 1.2,
+                ),
+              ),
               const SizedBox(height: 16),
               Text(
                 'Your PIN protects your account from\nunauthorized access.',
-                style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 16, height: 1.6),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 16,
+                  height: 1.6,
+                ),
               ),
               const Spacer(),
             ],
@@ -291,7 +391,10 @@ class _MobilePinHeader extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(32), bottomRight: Radius.circular(32)),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(32),
+          bottomRight: Radius.circular(32),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -299,18 +402,46 @@ class _MobilePinHeader extends StatelessWidget {
           Row(
             children: [
               Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(LucideIcons.candlestickChart, color: Colors.white, size: 20),
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  LucideIcons.candlestickChart,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
-              const Text('Trade Kosh', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+              const Text(
+                'Trade Kosh',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 24),
-          const Text('Secure Your Account', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+          const Text(
+            'Secure Your Account',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           const SizedBox(height: 6),
-          Text('Set a 4-digit PIN to protect your session', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15)),
+          Text(
+            'Set a 4-digit PIN to protect your session',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 15,
+            ),
+          ),
         ],
       ),
     );

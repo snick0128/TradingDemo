@@ -1,12 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
 
-// RMS FIX Bug #9: cloud_firestore exports 'Order' and 'Transaction' which
-// clash with our trading_models.dart classes of the same name.
-// Solution: hide the conflicting Firestore types — we only need
-// FirebaseFirestore, DocumentSnapshot, QuerySnapshot, and Timestamp.
-import 'package:cloud_firestore/cloud_firestore.dart'
-    hide Order, Transaction;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -124,191 +118,11 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── RMS FIX Bug #9: Firestore state streaming ─────────────────────────────
-  // When a Firebase user is authenticated, stream balance, holdings, and orders
-  // directly from Firestore. This makes Flutter a rendering layer only —
-  // the backend is the single source of truth.
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSub;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?    _holdingsSub;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?    _ordersSub;
-  bool _firestoreStreamsActive = false;
-
-  /// Bind Firestore real-time streams for a logged-in user.
-  /// Call this once after Firebase auth succeeds.
-  void bindFirestoreStreams(String userId) {
-    if (_firestoreStreamsActive) return;
-    _firestoreStreamsActive = true;
-
-    final db = FirebaseFirestore.instance;
-
-    // Stream user document → balance
-    _userDocSub = db.collection('users').doc(userId).snapshots().listen(
-      (snap) {
-        if (!snap.exists) return;
-        final data = snap.data()!;
-        final newBalance = ((data['balance'] as num?) ??
-                           (data['available_balance'] as num?) ?? 0)
-            .toDouble();
-        if (_balance != newBalance) {
-          _balance = newBalance;
-          notifyListeners();
-        }
-      },
-      onError: (e) => debugPrint('[TradingStore] User doc stream error: $e'),
-    );
-
-    // Stream holdings → positions + holdings lists
-    _holdingsSub = db
-        .collection('portfolios')
-        .doc(userId)
-        .collection('holdings')
-        .snapshots()
-        .listen(
-      (snap) {
-        _syncHoldingsFromFirestore(snap.docs);
-        notifyListeners();
-      },
-      onError: (e) => debugPrint('[TradingStore] Holdings stream error: $e'),
-    );
-
-    // Stream orders → orders list
-    // NOTE: No orderBy here — composite index (userId + createdAt) is not
-    // guaranteed to exist in all environments. We sort client-side instead.
-    _ordersSub = db
-        .collection('orders')
-        .where('userId', isEqualTo: userId)
-        .limit(100)
-        .snapshots()
-        .listen(
-      (snap) {
-        _syncOrdersFromFirestore(snap.docs);
-        notifyListeners();
-      },
-      onError: (e) => debugPrint('[TradingStore] Orders stream error: $e'),
-    );
-
-    debugPrint('[TradingStore] Firestore streams bound for userId=$userId');
-  }
-
-  /// Unbind Firestore streams (on logout).
-  void unbindFirestoreStreams() {
-    _userDocSub?.cancel();
-    _holdingsSub?.cancel();
-    _ordersSub?.cancel();
-    _userDocSub  = null;
-    _holdingsSub = null;
-    _ordersSub   = null;
-    _firestoreStreamsActive = false;
-    debugPrint('[TradingStore] Firestore streams unbound.');
-  }
-
-  /// Map Firestore holdings documents into _holdings and _portfolio.
-  void _syncHoldingsFromFirestore(
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
-    _holdings.clear();
-    _portfolio.clear();
-    _positions.clear();
-
-    for (final doc in docs) {
-      final d           = doc.data();
-      final symbol      = (d['stock'] as String? ?? doc.id).toUpperCase();
-      final qty         = ((d['qty'] as num?) ?? 0).toInt();
-      final avgPrice    = ((d['avg_price'] as num?) ?? 0).toDouble();
-      // productType written by backend since RMS fix.
-      // Default to 'MIS' — intraday is the primary product in this app.
-      // Old docs without productType are treated as intraday positions.
-      final productType = ((d['productType'] as String?) ?? 'MIS').toUpperCase();
-
-      if (qty <= 0) continue;
-
-      // Get current price from live market feed
-      final stock        = stockBySymbolOrNull(symbol);
-      final currentPrice = stock?.currentPrice ?? avgPrice;
-
-      // Populate _portfolio (used by dashboard P&L) — always, regardless of product
-      _portfolio.add(PortfolioItem(
-        symbol:        symbol,
-        name:          stock?.name ?? symbol,
-        totalQuantity: qty,
-        avgPrice:      avgPrice,
-        currentPrice:  currentPrice,
-      ));
-
-      // Populate _holdings (delivery / CNC / NRML only)
-      if (productType == 'CNC' || productType == 'NRML') {
-        _holdings.add(Holding(
-          symbol:       symbol,
-          name:         stock?.name ?? symbol,
-          quantity:     qty,
-          avgPrice:     avgPrice,
-          currentPrice: currentPrice,
-          purchaseDate: DateTime.now(),
-        ));
-      }
-
-      // Populate _positions (intraday / MIS)
-      if (productType == 'MIS') {
-        _positions.add(Position(
-          symbol:       symbol,
-          name:         stock?.name ?? symbol,
-          product:      ProductType.mis,
-          quantity:     qty,
-          avgPrice:     avgPrice,
-          currentPrice: currentPrice,
-          side:         OrderType.buy,
-          openedAt:     DateTime.now(),
-        ));
-      }
-    }
-  }
-
-  /// Map Firestore order documents into _orders list.
-  void _syncOrdersFromFirestore(
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
-    _orders.clear();
-    for (final doc in docs) {
-      final d          = doc.data();
-      final typeStr    = (d['type'] as String? ?? 'BUY').toUpperCase();
-      final statusStr  = (d['status'] as String? ?? 'EXECUTED').toUpperCase();
-      final productStr = (d['productType'] as String? ?? 'MIS').toUpperCase();
-
-      _orders.add(Order(
-        id:            doc.id,
-        symbol:        (d['stock'] as String? ?? '').toUpperCase(),
-        name:          (d['stock'] as String? ?? '').toUpperCase(),
-        quantity:      ((d['qty'] as num?) ?? 0).toInt(),
-        price:         ((d['price'] as num?) ?? 0).toDouble(),
-        type:          typeStr == 'SELL' ? OrderType.sell : OrderType.buy,
-        status:        _orderStatusFromString(statusStr),
-        dateTime:      _timestampToDate(d['createdAt']),
-        executedAt:    _timestampToDate(d['executedAt'] ?? d['createdAt']),
-        executedPrice: ((d['executed_price'] as num?) ?? (d['price'] as num?))?.toDouble(),
-        pnl:           ((d['pnl'] as num?) ?? 0).toDouble(),
-        product:       productStr == 'NRML' ? ProductType.nrml
-                     : productStr == 'CNC'  ? ProductType.nrml
-                     : ProductType.mis,
-        variety:       OrderVariety.market,
-      ));
-    }
-    // Sort newest-first client-side (avoids composite index requirement)
-    _orders.sort((a, b) => b.dateTime.compareTo(a.dateTime));
-  }
-
-  OrderStatus _orderStatusFromString(String s) {
-    switch (s) {
-      case 'EXECUTED':  return OrderStatus.executed;
-      case 'REJECTED':  return OrderStatus.rejected;
-      case 'CANCELLED': return OrderStatus.cancelled;
-      case 'PENDING':   return OrderStatus.pending;
-      default:          return OrderStatus.executed;
-    }
-  }
-
-  DateTime _timestampToDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
-    if (v is int)       return DateTime.fromMillisecondsSinceEpoch(v);
-    return DateTime.now();
-  }
+  // ── Firestore state streaming ──────────────────────────────────────────────
+  // All Firestore streams are managed by main.dart (_bindUserRealtime).
+  // main.dart calls replaceOrders / replaceHoldings / replacePositions on this
+  // store when Firestore emits. TradingStore is a pure in-memory state holder —
+  // it does NOT open its own Firestore listeners.
 
   /// Called when the live backend emits a fresh batch of stocks.
   void _onLiveStockUpdate(List<Stock> stocks) {
@@ -418,8 +232,6 @@ class TradingStore extends ChangeNotifier {
     _liveMarketService?.dispose();
     _alertService.dispose();
     _marketDataService.dispose();
-    // RMS FIX Bug #9: Cancel Firestore streams on dispose
-    unbindFirestoreStreams();
     super.dispose();
   }
 
@@ -518,26 +330,39 @@ class TradingStore extends ChangeNotifier {
     required String token,
     double ltp = 0,
     double changePercent = 0,
+    InstrumentType instrumentType = InstrumentType.unknown,
+    double? strikePrice,
+    DateTime? expiry,
   }) {
-    final resolvedExchange = exchange.isNotEmpty ? exchange.toUpperCase() : 'NSE';
+    final resolvedExchange = exchange.isNotEmpty
+        ? exchange.toUpperCase()
+        : 'NSE';
 
-    debugPrint('[DETAIL_OPEN] symbol=$symbol exchange=$resolvedExchange token=$token');
+    debugPrint(
+      '[DETAIL_OPEN] symbol=$symbol exchange=$resolvedExchange token=$token type=$instrumentType',
+    );
 
     final existing = _watchlistUniverse[symbol];
     if (existing != null) {
-      // Always overwrite exchange+token from the search result — the existing
-      // entry may have been seeded with NSE defaults from the market bootstrap.
       _watchlistUniverse[symbol] = Stock(
         symbol: existing.symbol,
         name: displayName.isNotEmpty ? displayName : existing.name,
         currentPrice: ltp > 0 ? ltp : existing.currentPrice,
-        changePercentage: changePercent != 0 ? changePercent : existing.changePercentage,
+        changePercentage: changePercent != 0
+            ? changePercent
+            : existing.changePercentage,
         sector: existing.sector,
-        exchange: resolvedExchange,   // ← always use the search result exchange
+        exchange: resolvedExchange,
         token: token.isNotEmpty ? token : existing.token,
         prevClose: existing.prevClose,
         volume: existing.volume,
         isStale: existing.isStale,
+        // Always update from the authoritative search result
+        instrumentType: instrumentType != InstrumentType.unknown
+            ? instrumentType
+            : existing.instrumentType,
+        strikePrice: strikePrice ?? existing.strikePrice,
+        expiry: expiry ?? existing.expiry,
       );
     } else {
       _watchlistUniverse[symbol] = Stock(
@@ -548,6 +373,9 @@ class TradingStore extends ChangeNotifier {
         sector: '',
         exchange: resolvedExchange,
         token: token,
+        instrumentType: instrumentType,
+        strikePrice: strikePrice,
+        expiry: expiry,
       );
     }
     // No notifyListeners — this is a silent registration
@@ -639,7 +467,8 @@ class TradingStore extends ChangeNotifier {
       if (price < 0) {
         return const OrderResult(
           success: false,
-          errorMessage: 'Limit price cannot be negative. Please enter a valid price.',
+          errorMessage:
+              'Limit price cannot be negative. Please enter a valid price.',
         );
       }
     }
@@ -1055,7 +884,8 @@ class TradingStore extends ChangeNotifier {
       if (!result.success) {
         return OrderResult(
           success: false,
-          errorMessage: 'Order for ${entry.symbol} failed: ${result.errorMessage}',
+          errorMessage:
+              'Order for ${entry.symbol} failed: ${result.errorMessage}',
         );
       }
     }

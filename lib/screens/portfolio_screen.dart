@@ -27,7 +27,7 @@ class PortfolioScreen extends StatelessWidget {
 
     final totalValue =
         store.holdings.fold(0.0, (s, h) => s + h.currentValue) +
-            store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice);
+        store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice);
 
     return DefaultTabController(
       length: 3,

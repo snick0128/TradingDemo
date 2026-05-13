@@ -87,8 +87,7 @@ class _SummaryStrip extends StatelessWidget {
     final isPos = totalPnl >= 0;
     final pnlPct = totalInv == 0 ? 0.0 : (totalPnl / totalInv) * 100;
     final arrow = isPos ? '▲' : '▼';
-    final pnlColor =
-        isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final pnlColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
 
     return Container(
       margin: const EdgeInsets.all(16),
@@ -104,12 +103,16 @@ class _SummaryStrip extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _statCell('Total investment',
-                    '₹${totalInv.toStringAsFixed(2)}'),
+                child: _statCell(
+                  'Total investment',
+                  '₹${totalInv.toStringAsFixed(2)}',
+                ),
               ),
               Expanded(
-                child: _statCell('Current value',
-                    '₹${totalCur.toStringAsFixed(2)}'),
+                child: _statCell(
+                  'Current value',
+                  '₹${totalCur.toStringAsFixed(2)}',
+                ),
               ),
             ],
           ),
@@ -138,7 +141,9 @@ class _SummaryStrip extends StatelessWidget {
                   const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: isPos
                           ? const Color(0xFFE8F5E9)
@@ -167,8 +172,10 @@ class _SummaryStrip extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF757575))),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF757575)),
+        ),
         const SizedBox(height: 4),
         Text(
           value,
@@ -251,8 +258,12 @@ class _HoldingCard extends StatelessWidget {
   // Generate a consistent color from the symbol string
   Color _avatarColor(String symbol) {
     const colors = [
-      Color(0xFF1565C0), Color(0xFF00695C), Color(0xFF6A1B9A),
-      Color(0xFFAD1457), Color(0xFF558B2F), Color(0xFFE65100),
+      Color(0xFF1565C0),
+      Color(0xFF00695C),
+      Color(0xFF6A1B9A),
+      Color(0xFFAD1457),
+      Color(0xFF558B2F),
+      Color(0xFFE65100),
     ];
     return colors[symbol.codeUnitAt(0) % colors.length];
   }
@@ -261,8 +272,7 @@ class _HoldingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final h = holding;
     final isPos = h.pnl >= 0;
-    final pnlColor =
-        isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final pnlColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
     final arrow = isPos ? '▲' : '▼';
     final avatarColor = _avatarColor(h.symbol);
 
@@ -329,7 +339,9 @@ class _HoldingCard extends StatelessWidget {
                 onTap: () => _openSellDrawer(context, h),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(8),
@@ -566,8 +578,8 @@ class _AnalyticsSection extends StatelessWidget {
                     valueColor: !xirrValid
                         ? const Color(0xFF9E9E9E)
                         : (xirrPos
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFFD50000)),
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFFD50000)),
                     insufficientData: !xirrValid,
                   ),
                 ),
@@ -582,8 +594,8 @@ class _AnalyticsSection extends StatelessWidget {
                     valueColor: !cagrValid
                         ? const Color(0xFF9E9E9E)
                         : (cagrPos
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFFD50000)),
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFFD50000)),
                     insufficientData: !cagrValid,
                   ),
                 ),
@@ -650,10 +662,7 @@ class _AnalyticsCard extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF757575),
-                ),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF757575)),
               ),
             ],
           ),

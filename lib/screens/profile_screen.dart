@@ -328,9 +328,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               icon: LucideIcons.settings2,
               title: 'Admin Panel',
               subtitle: 'Backend management and monitoring',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AdminShell()),
-              ),
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const AdminShell())),
             ),
           ],
         ],
@@ -584,7 +584,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     error,
-                    style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                    style: const TextStyle(
+                      color: AppColors.danger,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               const SizedBox(height: 20),
@@ -594,12 +597,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   final next = newController.text.trim();
                   final confirm = confirmController.text.trim();
                   if (next != confirm) {
-                    setModalState(() => error = 'New PIN and confirm PIN do not match.');
+                    setModalState(
+                      () => error = 'New PIN and confirm PIN do not match.',
+                    );
                     return;
                   }
-                  final changed = security.changePin(currentPin: current, newPin: next);
+                  final changed = security.changePin(
+                    currentPin: current,
+                    newPin: next,
+                  );
                   if (!changed) {
-                    setModalState(() => error = 'Invalid PIN details. Use 4 digits.');
+                    setModalState(
+                      () => error = 'Invalid PIN details. Use 4 digits.',
+                    );
                     return;
                   }
                   Navigator.pop(ctx);
@@ -622,7 +632,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       confirmLabel: 'Logout',
       onConfirm: () async {
         try {
-          final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+          final appScope = context
+              .dependOnInheritedWidgetOfExactType<AppScope>();
           if (appScope != null) {
             await appScope.authService.logout();
             appScope.notifier?.setUser(null);

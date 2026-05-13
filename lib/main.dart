@@ -299,14 +299,17 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 executedAt: data['executedAt'] is Timestamp
                     ? (data['executedAt'] as Timestamp).toDate()
                     : data['executedAt'] is int
-                        ? DateTime.fromMillisecondsSinceEpoch(data['executedAt'] as int)
-                        : null,
+                    ? DateTime.fromMillisecondsSinceEpoch(
+                        data['executedAt'] as int,
+                      )
+                    : null,
                 executedPrice:
                     ((data['avg_executed_price'] as num?) ??
                             (data['executed_price'] as num?) ??
                             (data['fillPrice'] as num?))
                         ?.toDouble(),
                 pnl: ((data['pnl'] as num?) ?? 0).toDouble(),
+                chargesApplied: (data['chargesApplied'] as num?)?.toDouble(),
               );
             }).toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
@@ -350,8 +353,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 triggeredAt: data['triggeredAt'] is Timestamp
                     ? (data['triggeredAt'] as Timestamp).toDate()
                     : data['triggeredAt'] is int
-                        ? DateTime.fromMillisecondsSinceEpoch(data['triggeredAt'] as int)
-                        : null,
+                    ? DateTime.fromMillisecondsSinceEpoch(
+                        data['triggeredAt'] as int,
+                      )
+                    : null,
               );
             }).toList();
             _tradingStore.replaceGttOrders(mapped);
@@ -425,45 +430,49 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
 
             for (final doc in snapshot.docs) {
               final data = doc.data();
-              final symbol =
-                  ((data['stock'] as String?) ?? doc.id).toUpperCase();
+              final symbol = ((data['stock'] as String?) ?? doc.id)
+                  .toUpperCase();
               final qty = ((data['qty'] as num?) ?? 0).toInt();
               if (qty <= 0) continue;
 
-              final avgPrice =
-                  ((data['avg_price'] as num?) ?? 0).toDouble();
-              final productType =
-                  ((data['productType'] as String?) ?? 'MIS').toUpperCase();
-              final currentPrice =
-                  _tradingStore.stockBySymbol(symbol).currentPrice;
+              final avgPrice = ((data['avg_price'] as num?) ?? 0).toDouble();
+              final productType = ((data['productType'] as String?) ?? 'MIS')
+                  .toUpperCase();
+              final currentPrice = _tradingStore
+                  .stockBySymbol(symbol)
+                  .currentPrice;
               final updatedAt = data['updatedAt'];
               final date = updatedAt is Timestamp
                   ? updatedAt.toDate()
                   : updatedAt is int
-                      ? DateTime.fromMillisecondsSinceEpoch(updatedAt as int)
-                      : DateTime.now();
+                  ? DateTime.fromMillisecondsSinceEpoch(updatedAt as int)
+                  : DateTime.now();
 
               if (productType == 'CNC' || productType == 'NRML') {
-                newHoldings.add(Holding(
-                  symbol: symbol,
-                  name: symbol,
-                  quantity: qty,
-                  avgPrice: avgPrice,
-                  currentPrice: currentPrice,
-                  purchaseDate: date,
-                ));
+                newHoldings.add(
+                  Holding(
+                    symbol: symbol,
+                    name: symbol,
+                    quantity: qty,
+                    avgPrice: avgPrice,
+                    currentPrice: currentPrice,
+                    purchaseDate: date,
+                  ),
+                );
               } else {
                 // MIS (intraday) → Positions tab
-                newPositions.add(Position(
-                  symbol: symbol,
-                  name: symbol,
-                  product: ProductType.mis,
-                  quantity: qty,
-                  avgPrice: avgPrice,
-                  currentPrice: currentPrice,
-                  side: OrderType.buy,
-                  openedAt: date,
-                ));
+                newPositions.add(
+                  Position(
+                    symbol: symbol,
+                    name: symbol,
+                    product: ProductType.mis,
+                    quantity: qty,
+                    avgPrice: avgPrice,
+                    currentPrice: currentPrice,
+                    side: OrderType.buy,
+                    openedAt: date,
+                  ),
+                );
               }
             }
 

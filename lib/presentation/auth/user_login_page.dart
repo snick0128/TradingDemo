@@ -22,7 +22,9 @@ class _GoogleSignInButton extends StatelessWidget {
           foregroundColor: Colors.black87,
           backgroundColor: Colors.white,
           side: const BorderSide(color: Color(0xFFDDDDDD)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -31,12 +33,17 @@ class _GoogleSignInButton extends StatelessWidget {
               'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
               height: 20,
               width: 20,
-              errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata, size: 22, color: Colors.red),
+              errorBuilder: (_, __, ___) =>
+                  const Icon(Icons.g_mobiledata, size: 22, color: Colors.red),
             ),
             const SizedBox(width: 10),
             const Text(
               'Continue with Google',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
             ),
           ],
         ),
@@ -95,14 +102,22 @@ class _UserLoginPageState extends State<UserLoginPage> {
   }
 
   Future<void> _signInWithGoogle() async {
-    setState(() { _loading = true; _error = ''; });
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
     if (appScope == null) {
-      setState(() { _error = 'Firebase not configured.'; _loading = false; });
+      setState(() {
+        _error = 'Firebase not configured.';
+        _loading = false;
+      });
       return;
     }
     try {
-      final profile = await appScope.authService.signInWithGoogle(expectedRole: 'user');
+      final profile = await appScope.authService.signInWithGoogle(
+        expectedRole: 'user',
+      );
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
       context.go('/app/dashboard');
@@ -115,14 +130,19 @@ class _UserLoginPageState extends State<UserLoginPage> {
   }
 
   String _friendlyError(String raw) {
-    if (raw.contains('Role mismatch')) return 'This account is not a customer account.';
-    if (raw.contains('wrong-password') || raw.contains('invalid-credential') ||
+    if (raw.contains('Role mismatch'))
+      return 'This account is not a customer account.';
+    if (raw.contains('wrong-password') ||
+        raw.contains('invalid-credential') ||
         raw.contains('INVALID_LOGIN_CREDENTIALS')) {
       return 'Incorrect email or password.';
     }
-    if (raw.contains('user-not-found')) return 'No account found with this email.';
-    if (raw.contains('too-many-requests')) return 'Too many attempts. Try again later.';
-    if (raw.contains('timed out')) return 'Connection timed out. Check your internet.';
+    if (raw.contains('user-not-found'))
+      return 'No account found with this email.';
+    if (raw.contains('too-many-requests'))
+      return 'Too many attempts. Try again later.';
+    if (raw.contains('timed out'))
+      return 'Connection timed out. Check your internet.';
     if (raw.contains('network')) return 'Network error. Check your connection.';
     return raw; // show raw error for debugging
   }
@@ -225,18 +245,21 @@ class _UserLoginPageState extends State<UserLoginPage> {
             controller: _passwordController,
             obscureText: _obscurePassword,
             style: const TextStyle(color: Colors.black),
-            decoration: _inputDecoration('Enter your password', LucideIcons.lock)
-                .copyWith(
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword ? LucideIcons.eyeOff : LucideIcons.eye,
-                  size: 18,
-                  color: AppColors.textSecondary,
+            decoration:
+                _inputDecoration(
+                  'Enter your password',
+                  LucideIcons.lock,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword ? LucideIcons.eyeOff : LucideIcons.eye,
+                      size: 18,
+                      color: AppColors.textSecondary,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                  ),
                 ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
-              ),
-            ),
             validator: (v) =>
                 (v == null || v.isEmpty) ? 'Password is required' : null,
             onFieldSubmitted: (_) => _submit(),
@@ -252,14 +275,19 @@ class _UserLoginPageState extends State<UserLoginPage> {
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.alertCircle,
-                      size: 14, color: AppColors.danger),
+                  const Icon(
+                    LucideIcons.alertCircle,
+                    size: 14,
+                    color: AppColors.danger,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _error,
                       style: const TextStyle(
-                          color: AppColors.danger, fontSize: 13),
+                        color: AppColors.danger,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ],
@@ -284,12 +312,16 @@ class _UserLoginPageState extends State<UserLoginPage> {
                       height: 20,
                       width: 20,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Text(
                       'Sign In',
                       style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
             ),
           ),
@@ -299,8 +331,7 @@ class _UserLoginPageState extends State<UserLoginPage> {
             children: [
               const Text(
                 "Don't have an account? ",
-                style: TextStyle(
-                    fontSize: 13, color: AppColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
               ),
               GestureDetector(
                 onTap: _openRegister,
@@ -321,7 +352,13 @@ class _UserLoginPageState extends State<UserLoginPage> {
               const Expanded(child: Divider()),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text('or', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                child: Text(
+                  'or',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
               ),
               const Expanded(child: Divider()),
             ],
@@ -334,13 +371,13 @@ class _UserLoginPageState extends State<UserLoginPage> {
   }
 
   Widget _label(String text) => Text(
-        text,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: AppColors.textPrimary,
-        ),
-      );
+    text,
+    style: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      color: AppColors.textPrimary,
+    ),
+  );
 
   InputDecoration _inputDecoration(String hint, IconData icon) =>
       InputDecoration(
@@ -368,8 +405,10 @@ class _UserLoginPageState extends State<UserLoginPage> {
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: AppColors.danger, width: 1.5),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
       );
 }
 
@@ -401,16 +440,20 @@ class _BrandingPanel extends StatelessWidget {
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(LucideIcons.candlestickChart,
-                        color: Colors.white, size: 24),
+                    child: const Icon(
+                      LucideIcons.candlestickChart,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   const Text(
                     'Trade Kosh',
                     style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700),
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
@@ -418,18 +461,20 @@ class _BrandingPanel extends StatelessWidget {
               const Text(
                 'Trade smarter,\nnot harder.',
                 style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 40,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2),
+                  color: Colors.white,
+                  fontSize: 40,
+                  fontWeight: FontWeight.w800,
+                  height: 1.2,
+                ),
               ),
               const SizedBox(height: 20),
               Text(
                 'Professional-grade trading tools for\nIndian equity, F&O, and more.',
                 style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
-                    fontSize: 16,
-                    height: 1.6),
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 16,
+                  height: 1.6,
+                ),
               ),
               const SizedBox(height: 48),
               _featureRow(LucideIcons.zap, 'Real-time market data'),
@@ -458,11 +503,14 @@ class _BrandingPanel extends StatelessWidget {
           child: Icon(icon, color: Colors.white, size: 16),
         ),
         const SizedBox(width: 12),
-        Text(text,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w500)),
+        Text(
+          text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
       ],
     );
   }
@@ -497,16 +545,20 @@ class _MobileBrandingHeader extends StatelessWidget {
                   color: Colors.white.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(LucideIcons.candlestickChart,
-                    color: Colors.white, size: 20),
+                child: const Icon(
+                  LucideIcons.candlestickChart,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
               const Text(
                 'Trade Kosh',
                 style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700),
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -514,15 +566,18 @@ class _MobileBrandingHeader extends StatelessWidget {
           const Text(
             'Welcome back',
             style: TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.w800),
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             'Sign in to continue trading',
             style: TextStyle(
-                color: Colors.white.withOpacity(0.8), fontSize: 15),
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 15,
+            ),
           ),
         ],
       ),

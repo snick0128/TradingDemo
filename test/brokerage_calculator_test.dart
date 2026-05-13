@@ -44,13 +44,13 @@ void main() {
   });
 
   group('Brokerage calculation correctness', () {
-    test('CNC brokerage is min(20, 0.03% of tradeValue)', () {
+    test('NRML brokerage is min(20, 0.03% of tradeValue)', () {
       // For small trade: 0.03% of 1000 = 0.3, which is < 20
-      final small = BrokerageCalculator.compute(1000.0, ProductType.cnc);
+      final small = BrokerageCalculator.compute(1000.0, ProductType.nrml);
       expect(small.brokerage, closeTo(0.3, 1e-9));
 
       // For large trade: 0.03% of 100000 = 30, capped at 20
-      final large = BrokerageCalculator.compute(100000.0, ProductType.cnc);
+      final large = BrokerageCalculator.compute(100000.0, ProductType.nrml);
       expect(large.brokerage, equals(20.0));
     });
 
@@ -61,15 +61,15 @@ void main() {
       }
     });
 
-    test('NRML brokerage is always ₹20 flat', () {
+    test('Overnight brokerage is always ₹20 flat', () {
       for (final tv in tradeValues) {
-        final result = BrokerageCalculator.compute(tv, ProductType.nrml);
+        final result = BrokerageCalculator.compute(tv, ProductType.overnight);
         expect(result.brokerage, equals(20.0));
       }
     });
 
     test('STT is 0.1% of trade value', () {
-      final result = BrokerageCalculator.compute(100000.0, ProductType.cnc);
+      final result = BrokerageCalculator.compute(100000.0, ProductType.nrml);
       expect(result.stt, closeTo(100.0, 1e-9));
     });
 
@@ -79,7 +79,7 @@ void main() {
     });
 
     test('Exchange charges are 0.00325% of trade value', () {
-      final result = BrokerageCalculator.compute(100000.0, ProductType.cnc);
+      final result = BrokerageCalculator.compute(100000.0, ProductType.nrml);
       expect(result.exchangeCharges, closeTo(3.25, 1e-9));
     });
 
@@ -103,7 +103,7 @@ void main() {
     });
 
     test('Zero or negative trade value returns all zeros', () {
-      final zero = BrokerageCalculator.compute(0, ProductType.cnc);
+      final zero = BrokerageCalculator.compute(0, ProductType.nrml);
       expect(zero.totalCharges, equals(0.0));
       expect(zero.netPnl, equals(0.0));
 

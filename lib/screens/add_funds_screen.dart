@@ -52,9 +52,7 @@ class AddFundsScreen extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.warning.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: AppColors.warning.withOpacity(0.3),
-                ),
+                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,

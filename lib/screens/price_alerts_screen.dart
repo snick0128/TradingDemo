@@ -24,13 +24,21 @@ class PriceAlertsScreen extends StatelessWidget {
               children: [
                 Icon(LucideIcons.bellOff, size: 48, color: AppColors.border),
                 SizedBox(height: 16),
-                Text('No active alerts',
-                    style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 16)),
+                Text(
+                  'No active alerts',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 16,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('Tap + to create a price alert.',
-                    style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 13)),
+                Text(
+                  'Tap + to create a price alert.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
               ],
             ),
           )
@@ -111,8 +119,9 @@ class _AlertCard extends StatelessWidget {
                     Text(
                       alert.symbol,
                       style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary),
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
+                      ),
                     ),
                     const SizedBox(width: 8),
                     StatusBadge(label: typeLabel, color: typeColor),
@@ -122,20 +131,27 @@ class _AlertCard extends StatelessWidget {
                 Text(
                   _alertDescription(alert),
                   style: const TextStyle(
-                      fontSize: 12, color: AppColors.textSecondary),
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
                 Text(
                   'Created: ${fmt.format(alert.createdAt)}',
                   style: const TextStyle(
-                      fontSize: 11, color: AppColors.textSecondary),
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ],
             ),
           ),
           IconButton(
             onPressed: onDelete,
-            icon: const Icon(LucideIcons.trash2,
-                size: 18, color: AppColors.danger),
+            icon: const Icon(
+              LucideIcons.trash2,
+              size: 18,
+              color: AppColors.danger,
+            ),
             tooltip: 'Delete alert',
           ),
         ],

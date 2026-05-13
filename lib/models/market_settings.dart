@@ -9,9 +9,9 @@ class SegmentSettings {
   final bool enabled;
   final bool buyEnabled;
   final bool sellEnabled;
-  final String marketOpen;    // "HH:MM" IST
-  final String marketClose;   // "HH:MM" IST
-  final double maxLeverage;   // e.g. 20.0 for 20x
+  final String marketOpen; // "HH:MM" IST
+  final String marketClose; // "HH:MM" IST
+  final double maxLeverage; // e.g. 20.0 for 20x
   final double marginPercent; // e.g. 5.0 for 5%
 
   const SegmentSettings({
@@ -20,29 +20,29 @@ class SegmentSettings {
     required this.sellEnabled,
     required this.marketOpen,
     required this.marketClose,
-    this.maxLeverage   = 20.0,
+    this.maxLeverage = 20.0,
     this.marginPercent = 5.0,
   });
 
   factory SegmentSettings.fromMap(Map<String, dynamic> m) => SegmentSettings(
-        enabled:       (m['enabled']       as bool?)   ?? true,
-        buyEnabled:    (m['buyEnabled']    as bool?)   ?? true,
-        sellEnabled:   (m['sellEnabled']   as bool?)   ?? true,
-        marketOpen:    (m['marketOpen']    as String?) ?? '09:15',
-        marketClose:   (m['marketClose']   as String?) ?? '15:30',
-        maxLeverage:   ((m['maxLeverage']  as num?)    ?? 20).toDouble(),
-        marginPercent: ((m['marginPercent'] as num?)   ?? 5).toDouble(),
-      );
+    enabled: (m['enabled'] as bool?) ?? true,
+    buyEnabled: (m['buyEnabled'] as bool?) ?? true,
+    sellEnabled: (m['sellEnabled'] as bool?) ?? true,
+    marketOpen: (m['marketOpen'] as String?) ?? '09:15',
+    marketClose: (m['marketClose'] as String?) ?? '15:30',
+    maxLeverage: ((m['maxLeverage'] as num?) ?? 20).toDouble(),
+    marginPercent: ((m['marginPercent'] as num?) ?? 5).toDouble(),
+  );
 
   Map<String, dynamic> toMap() => {
-        'enabled':       enabled,
-        'buyEnabled':    buyEnabled,
-        'sellEnabled':   sellEnabled,
-        'marketOpen':    marketOpen,
-        'marketClose':   marketClose,
-        'maxLeverage':   maxLeverage,
-        'marginPercent': marginPercent,
-      };
+    'enabled': enabled,
+    'buyEnabled': buyEnabled,
+    'sellEnabled': sellEnabled,
+    'marketOpen': marketOpen,
+    'marketClose': marketClose,
+    'maxLeverage': maxLeverage,
+    'marginPercent': marginPercent,
+  };
 
   SegmentSettings copyWith({
     bool? enabled,
@@ -52,16 +52,15 @@ class SegmentSettings {
     String? marketClose,
     double? maxLeverage,
     double? marginPercent,
-  }) =>
-      SegmentSettings(
-        enabled:       enabled       ?? this.enabled,
-        buyEnabled:    buyEnabled    ?? this.buyEnabled,
-        sellEnabled:   sellEnabled   ?? this.sellEnabled,
-        marketOpen:    marketOpen    ?? this.marketOpen,
-        marketClose:   marketClose   ?? this.marketClose,
-        maxLeverage:   maxLeverage   ?? this.maxLeverage,
-        marginPercent: marginPercent ?? this.marginPercent,
-      );
+  }) => SegmentSettings(
+    enabled: enabled ?? this.enabled,
+    buyEnabled: buyEnabled ?? this.buyEnabled,
+    sellEnabled: sellEnabled ?? this.sellEnabled,
+    marketOpen: marketOpen ?? this.marketOpen,
+    marketClose: marketClose ?? this.marketClose,
+    maxLeverage: maxLeverage ?? this.maxLeverage,
+    marginPercent: marginPercent ?? this.marginPercent,
+  );
 }
 
 class MarketSettings {
@@ -72,28 +71,36 @@ class MarketSettings {
 
   static const MarketSettings defaults = MarketSettings(
     stocks: SegmentSettings(
-      enabled: true, buyEnabled: true, sellEnabled: true,
-      marketOpen: '09:15', marketClose: '15:30',
-      maxLeverage: 20.0, marginPercent: 5.0,
+      enabled: true,
+      buyEnabled: true,
+      sellEnabled: true,
+      marketOpen: '09:15',
+      marketClose: '15:30',
+      maxLeverage: 20.0,
+      marginPercent: 5.0,
     ),
     mcx: SegmentSettings(
-      enabled: true, buyEnabled: true, sellEnabled: true,
-      marketOpen: '09:00', marketClose: '23:30',
-      maxLeverage: 100.0, marginPercent: 1.0,
+      enabled: true,
+      buyEnabled: true,
+      sellEnabled: true,
+      marketOpen: '09:00',
+      marketClose: '23:30',
+      maxLeverage: 100.0,
+      marginPercent: 1.0,
     ),
   );
 
   factory MarketSettings.fromMap(Map<String, dynamic> m) => MarketSettings(
-        stocks: SegmentSettings.fromMap(
-            (m['stocks'] as Map<String, dynamic>?) ?? {}),
-        mcx: SegmentSettings.fromMap(
-            (m['mcx'] as Map<String, dynamic>?) ?? {}),
-      );
+    stocks: SegmentSettings.fromMap(
+      (m['stocks'] as Map<String, dynamic>?) ?? {},
+    ),
+    mcx: SegmentSettings.fromMap((m['mcx'] as Map<String, dynamic>?) ?? {}),
+  );
 
   Map<String, dynamic> toMap() => {
-        'stocks': stocks.toMap(),
-        'mcx':    mcx.toMap(),
-      };
+    'stocks': stocks.toMap(),
+    'mcx': mcx.toMap(),
+  };
 
   /// Returns the segment settings for a given exchange string.
   /// MCX → mcx, everything else → stocks.
@@ -107,13 +114,15 @@ class MarketSettings {
     final label = exchange.toUpperCase() == 'MCX' ? 'MCX' : 'Stock';
 
     if (!seg.enabled) return '$label market is disabled';
-    if (isBuy  && !seg.buyEnabled)  return '$label buying is disabled';
+    if (isBuy && !seg.buyEnabled) return '$label buying is disabled';
     if (!isBuy && !seg.sellEnabled) return '$label selling is disabled';
 
     // Check IST time
-    final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    final now = DateTime.now().toUtc().add(
+      const Duration(hours: 5, minutes: 30),
+    );
     final nowMin = now.hour * 60 + now.minute;
-    final openMin  = _parseTime(seg.marketOpen);
+    final openMin = _parseTime(seg.marketOpen);
     final closeMin = _parseTime(seg.marketClose);
 
     if (nowMin < openMin || nowMin >= closeMin) {

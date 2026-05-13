@@ -22,7 +22,15 @@ import 'global_toast.dart';
 
 // ─── Dialog Type ──────────────────────────────────────────────────────────────
 
-enum AppDialogType { confirm, destructive, success, error, warning, info, input }
+enum AppDialogType {
+  confirm,
+  destructive,
+  success,
+  error,
+  warning,
+  info,
+  input,
+}
 
 // ─── Dialog Config ────────────────────────────────────────────────────────────
 
@@ -30,7 +38,7 @@ class AppDialogConfig {
   final AppDialogType type;
   final String title;
   final String? message;
-  final Widget? body;           // custom content below message
+  final Widget? body; // custom content below message
   final String? confirmLabel;
   final String? cancelLabel;
   final VoidCallback? onConfirm;
@@ -56,7 +64,10 @@ class AppDialog {
   AppDialog._();
 
   /// Generic show — full control via config
-  static Future<void> show(BuildContext context, {required AppDialogConfig config}) {
+  static Future<void> show(
+    BuildContext context, {
+    required AppDialogConfig config,
+  }) {
     return showGeneralDialog(
       context: context,
       barrierDismissible: config.barrierDismissible,
@@ -64,7 +75,10 @@ class AppDialog {
       barrierColor: Colors.black.withOpacity(0.45),
       transitionDuration: const Duration(milliseconds: 220),
       transitionBuilder: (ctx, anim, _, child) {
-        final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: anim,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -88,16 +102,19 @@ class AppDialog {
     required VoidCallback onConfirm,
     VoidCallback? onCancel,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.confirm,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: confirmLabel,
-      cancelLabel: cancelLabel,
-      onConfirm: onConfirm,
-      onCancel: onCancel,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.confirm,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: confirmLabel,
+        cancelLabel: cancelLabel,
+        onConfirm: onConfirm,
+        onCancel: onCancel,
+      ),
+    );
   }
 
   /// Destructive action dialog (red confirm button)
@@ -111,16 +128,19 @@ class AppDialog {
     required VoidCallback onConfirm,
     VoidCallback? onCancel,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.destructive,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: confirmLabel,
-      cancelLabel: cancelLabel,
-      onConfirm: onConfirm,
-      onCancel: onCancel,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.destructive,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: confirmLabel,
+        cancelLabel: cancelLabel,
+        onConfirm: onConfirm,
+        onCancel: onCancel,
+      ),
+    );
   }
 
   /// Success dialog (green icon, single close button)
@@ -132,14 +152,17 @@ class AppDialog {
     String closeLabel = 'Done',
     VoidCallback? onClose,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.success,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: closeLabel,
-      onConfirm: onClose,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.success,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: closeLabel,
+        onConfirm: onClose,
+      ),
+    );
   }
 
   /// Error dialog (red icon, single close button)
@@ -151,14 +174,17 @@ class AppDialog {
     String closeLabel = 'OK',
     VoidCallback? onClose,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.error,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: closeLabel,
-      onConfirm: onClose,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.error,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: closeLabel,
+        onConfirm: onClose,
+      ),
+    );
   }
 
   /// Warning dialog (orange icon)
@@ -172,16 +198,19 @@ class AppDialog {
     VoidCallback? onConfirm,
     VoidCallback? onCancel,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.warning,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: confirmLabel,
-      cancelLabel: cancelLabel,
-      onConfirm: onConfirm,
-      onCancel: onCancel,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.warning,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: confirmLabel,
+        cancelLabel: cancelLabel,
+        onConfirm: onConfirm,
+        onCancel: onCancel,
+      ),
+    );
   }
 
   /// Info dialog (blue icon, single close button)
@@ -193,14 +222,17 @@ class AppDialog {
     String closeLabel = 'Got it',
     VoidCallback? onClose,
   }) {
-    return show(context, config: AppDialogConfig(
-      type: AppDialogType.info,
-      title: title,
-      message: message,
-      body: body,
-      confirmLabel: closeLabel,
-      onConfirm: onClose,
-    ));
+    return show(
+      context,
+      config: AppDialogConfig(
+        type: AppDialogType.info,
+        title: title,
+        message: message,
+        body: body,
+        confirmLabel: closeLabel,
+        onConfirm: onClose,
+      ),
+    );
   }
 
   /// Input dialog — single text field
@@ -224,7 +256,10 @@ class AppDialog {
       barrierColor: Colors.black.withOpacity(0.45),
       transitionDuration: const Duration(milliseconds: 220),
       transitionBuilder: (ctx, anim, _, child) {
-        final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: anim,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -260,13 +295,16 @@ class _AppDialogWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF0F0F0);
+    final borderColor = isDark
+        ? const Color(0xFF2A2A2A)
+        : const Color(0xFFF0F0F0);
 
     final typeData = _typeData(config.type);
-    final hasTwoButtons = config.cancelLabel != null &&
+    final hasTwoButtons =
+        config.cancelLabel != null &&
         (config.type == AppDialogType.confirm ||
-         config.type == AppDialogType.destructive ||
-         config.type == AppDialogType.warning);
+            config.type == AppDialogType.destructive ||
+            config.type == AppDialogType.warning);
 
     return Center(
       child: Material(
@@ -303,7 +341,11 @@ class _AppDialogWidget extends StatelessWidget {
                         color: typeData.iconBg,
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(typeData.icon, color: typeData.iconColor, size: 24),
+                      child: Icon(
+                        typeData.icon,
+                        color: typeData.iconColor,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(height: 16),
                     // Title
@@ -325,7 +367,9 @@ class _AppDialogWidget extends StatelessWidget {
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
                           fontSize: 14,
-                          color: isDark ? const Color(0xFF9E9E9E) : AppColors.textSecondary,
+                          color: isDark
+                              ? const Color(0xFF9E9E9E)
+                              : AppColors.textSecondary,
                           height: 1.5,
                         ),
                       ),
@@ -608,10 +652,14 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF0F0F0);
+    final borderColor = isDark
+        ? const Color(0xFF2A2A2A)
+        : const Color(0xFFF0F0F0);
     final inputBorder = OutlineInputBorder(
       borderRadius: BorderRadius.circular(10),
-      borderSide: BorderSide(color: isDark ? const Color(0xFF333333) : AppColors.border),
+      borderSide: BorderSide(
+        color: isDark ? const Color(0xFF333333) : AppColors.border,
+      ),
     );
 
     return Center(
@@ -657,7 +705,9 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           widget.message!,
                           style: GoogleFonts.inter(
                             fontSize: 13,
-                            color: isDark ? const Color(0xFF9E9E9E) : AppColors.textSecondary,
+                            color: isDark
+                                ? const Color(0xFF9E9E9E)
+                                : AppColors.textSecondary,
                             height: 1.4,
                           ),
                         ),
@@ -675,21 +725,33 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           hintText: widget.hint,
                           hintStyle: GoogleFonts.inter(
                             fontSize: 14,
-                            color: isDark ? const Color(0xFF666666) : AppColors.textSecondary,
+                            color: isDark
+                                ? const Color(0xFF666666)
+                                : AppColors.textSecondary,
                           ),
                           filled: true,
-                          fillColor: isDark ? const Color(0xFF2A2A2A) : AppColors.surfaceAlt,
+                          fillColor: isDark
+                              ? const Color(0xFF2A2A2A)
+                              : AppColors.surfaceAlt,
                           border: inputBorder,
                           enabledBorder: inputBorder,
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+                            borderSide: const BorderSide(
+                              color: AppColors.primary,
+                              width: 1.5,
+                            ),
                           ),
                           errorBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: AppColors.danger),
+                            borderSide: const BorderSide(
+                              color: AppColors.danger,
+                            ),
                           ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 13,
+                          ),
                           errorText: _error,
                         ),
                         validator: widget.validator,
@@ -710,7 +772,9 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           Navigator.of(context).pop();
                           widget.onCancel?.call();
                         },
-                        color: isDark ? const Color(0xFF9E9E9E) : AppColors.textSecondary,
+                        color: isDark
+                            ? const Color(0xFF9E9E9E)
+                            : AppColors.textSecondary,
                         filled: false,
                         isDark: isDark,
                       ),
@@ -759,19 +823,35 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
 class AppToast {
   AppToast._();
 
-  static void success(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
+  static void success(
+    BuildContext context,
+    String message, {
+    Duration duration = const Duration(seconds: 3),
+  }) {
     GlobalToast.success(context, message, duration: duration);
   }
 
-  static void error(BuildContext context, String message, {Duration duration = const Duration(seconds: 4)}) {
+  static void error(
+    BuildContext context,
+    String message, {
+    Duration duration = const Duration(seconds: 4),
+  }) {
     GlobalToast.error(context, message, duration: duration);
   }
 
-  static void warning(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
+  static void warning(
+    BuildContext context,
+    String message, {
+    Duration duration = const Duration(seconds: 3),
+  }) {
     GlobalToast.warning(context, message, duration: duration);
   }
 
-  static void info(BuildContext context, String message, {Duration duration = const Duration(seconds: 3)}) {
+  static void info(
+    BuildContext context,
+    String message, {
+    Duration duration = const Duration(seconds: 3),
+  }) {
     GlobalToast.info(context, message, duration: duration);
   }
 }
@@ -809,7 +889,9 @@ class _AppBottomSheetWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF0F0F0);
+    final borderColor = isDark
+        ? const Color(0xFF2A2A2A)
+        : const Color(0xFFF0F0F0);
 
     return Container(
       decoration: BoxDecoration(
@@ -849,11 +931,16 @@ class _AppBottomSheetWrapper extends StatelessWidget {
                     icon: Icon(
                       LucideIcons.x,
                       size: 18,
-                      color: isDark ? const Color(0xFF9E9E9E) : AppColors.textSecondary,
+                      color: isDark
+                          ? const Color(0xFF9E9E9E)
+                          : AppColors.textSecondary,
                     ),
                     onPressed: () => Navigator.pop(context),
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
                   ),
                 ],
               ),
@@ -864,7 +951,9 @@ class _AppBottomSheetWrapper extends StatelessWidget {
           Flexible(
             child: SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
-                20, 16, 20,
+                20,
+                16,
+                20,
                 MediaQuery.of(context).viewInsets.bottom + 24,
               ),
               child: child,

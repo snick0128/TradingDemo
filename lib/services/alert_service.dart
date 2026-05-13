@@ -38,7 +38,9 @@ class AlertService {
         // Add more types as needed
         case AlertType.percentageMove:
           if (alert.percentageThreshold != null && alert.basePrice != null) {
-            final move = ((currentPrice - alert.basePrice!) / alert.basePrice!).abs() * 100;
+            final move =
+                ((currentPrice - alert.basePrice!) / alert.basePrice!).abs() *
+                100;
             if (move >= alert.percentageThreshold!) {
               triggered = true;
               message = '${alert.symbol} moved by ${move.toStringAsFixed(2)}%';

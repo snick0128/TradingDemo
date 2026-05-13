@@ -160,10 +160,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
       notifier: _securityStore,
       child: TradingScope(
         notifier: _tradingStore,
-        child: AdminScope(
-          notifier: _adminStore,
-          child: app,
-        ),
+        child: AdminScope(notifier: _adminStore, child: app),
       ),
     );
   }

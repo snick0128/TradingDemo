@@ -11,16 +11,15 @@ import 'package:box_trading_web/models/trading_models.dart';
 /// Returns whether a given field is enabled for the specified [variety].
 ///
 /// Fields:
-///   - 'price'           : enabled for Limit and SL-Limit
-///   - 'triggerPrice'    : enabled for SL-Limit and SL-Market
+///   - 'price'           : enabled for Limit and SL
+///   - 'triggerPrice'    : enabled for SL
 ///   - 'disclosedQty'    : shown/enabled only for Iceberg
 bool isFieldEnabled(OrderVariety variety, String field) {
   switch (field) {
     case 'price':
-      return variety == OrderVariety.limit || variety == OrderVariety.slLimit;
+      return variety == OrderVariety.limit || variety == OrderVariety.sl;
     case 'triggerPrice':
-      return variety == OrderVariety.slLimit ||
-          variety == OrderVariety.slMarket;
+      return variety == OrderVariety.sl;
     case 'disclosedQty':
       return variety == OrderVariety.iceberg;
     default:
@@ -61,35 +60,19 @@ void main() {
     });
   });
 
-  // ── SL-Limit variety ──────────────────────────────────────────────────────
+  // ── SL variety ────────────────────────────────────────────────────────────
 
-  group('SL-Limit variety', () {
+  group('SL variety', () {
     test('price field is enabled', () {
-      expect(isFieldEnabled(OrderVariety.slLimit, 'price'), isTrue);
+      expect(isFieldEnabled(OrderVariety.sl, 'price'), isTrue);
     });
 
     test('trigger price field is enabled', () {
-      expect(isFieldEnabled(OrderVariety.slLimit, 'triggerPrice'), isTrue);
+      expect(isFieldEnabled(OrderVariety.sl, 'triggerPrice'), isTrue);
     });
 
     test('disclosed quantity field is hidden', () {
-      expect(isFieldEnabled(OrderVariety.slLimit, 'disclosedQty'), isFalse);
-    });
-  });
-
-  // ── SL-Market variety ─────────────────────────────────────────────────────
-
-  group('SL-Market variety', () {
-    test('price field is disabled', () {
-      expect(isFieldEnabled(OrderVariety.slMarket, 'price'), isFalse);
-    });
-
-    test('trigger price field is enabled', () {
-      expect(isFieldEnabled(OrderVariety.slMarket, 'triggerPrice'), isTrue);
-    });
-
-    test('disclosed quantity field is hidden', () {
-      expect(isFieldEnabled(OrderVariety.slMarket, 'disclosedQty'), isFalse);
+      expect(isFieldEnabled(OrderVariety.sl, 'disclosedQty'), isFalse);
     });
   });
 
@@ -127,21 +110,20 @@ void main() {
 
   // ── Exhaustive property: exactly the right varieties enable each field ────
 
-  group('Property: price field enabled only for Limit and SL-Limit', () {
+  group('Property: price field enabled only for Limit and SL', () {
     for (final variety in OrderVariety.values) {
       test('variety=${variety.name}', () {
         final expected =
-            variety == OrderVariety.limit || variety == OrderVariety.slLimit;
+            variety == OrderVariety.limit || variety == OrderVariety.sl;
         expect(isFieldEnabled(variety, 'price'), equals(expected));
       });
     }
   });
 
-  group('Property: trigger field enabled only for SL-Limit and SL-Market', () {
+  group('Property: trigger field enabled only for SL', () {
     for (final variety in OrderVariety.values) {
       test('variety=${variety.name}', () {
-        final expected =
-            variety == OrderVariety.slLimit || variety == OrderVariety.slMarket;
+        final expected = variety == OrderVariety.sl;
         expect(isFieldEnabled(variety, 'triggerPrice'), equals(expected));
       });
     }

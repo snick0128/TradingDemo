@@ -27,14 +27,14 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
     super.dispose();
   }
 
-  TextEditingController _posCtrl(String userId) =>
-      _maxPositionControllers.putIfAbsent(userId, () => TextEditingController());
+  TextEditingController _posCtrl(String userId) => _maxPositionControllers
+      .putIfAbsent(userId, () => TextEditingController());
 
-  TextEditingController _lossCtrl(String userId) =>
-      _maxDailyLossControllers.putIfAbsent(userId, () => TextEditingController());
+  TextEditingController _lossCtrl(String userId) => _maxDailyLossControllers
+      .putIfAbsent(userId, () => TextEditingController());
 
-  TextEditingController _levCtrl(String userId) =>
-      _maxLeverageControllers.putIfAbsent(userId, () => TextEditingController());
+  TextEditingController _levCtrl(String userId) => _maxLeverageControllers
+      .putIfAbsent(userId, () => TextEditingController());
 
   @override
   Widget build(BuildContext context) {
@@ -55,18 +55,25 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
                 children: [
                   Row(
                     children: [
-                      const Icon(LucideIcons.alertTriangle,
-                          color: AppColors.danger, size: 20),
+                      const Icon(
+                        LucideIcons.alertTriangle,
+                        color: AppColors.danger,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
-                      Text('Global Trading Halt',
-                          style: Theme.of(context).textTheme.titleMedium),
+                      Text(
+                        'Global Trading Halt',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
                   const Text(
                     'Immediately prevents all users from placing new orders.',
                     style: TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -97,98 +104,114 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
             const SizedBox(height: 16),
 
             // ── Per-User Risk Limits ─────────────────────────────────────
-            Text('Per-User Risk Limits',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Per-User Risk Limits',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 10),
-            ...users.map((user) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: CustomCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(LucideIcons.user,
-                                size: 16, color: AppColors.textSecondary),
-                            const SizedBox(width: 6),
-                            Text(user.name,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700)),
-                            const SizedBox(width: 6),
-                            Text(user.clientId,
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    color: AppColors.textSecondary)),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _limitField(
-                                controller: _posCtrl(user.id),
-                                label: 'Max Position (₹)',
-                                hint: admin.getRiskLimit(
-                                            user.id, 'maxPosition') !=
-                                        null
-                                    ? admin
+            ...users.map(
+              (user) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: CustomCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            LucideIcons.user,
+                            size: 16,
+                            color: AppColors.textSecondary,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            user.name,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            user.clientId,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _limitField(
+                              controller: _posCtrl(user.id),
+                              label: 'Max Position (₹)',
+                              hint:
+                                  admin.getRiskLimit(user.id, 'maxPosition') !=
+                                      null
+                                  ? admin
                                         .getRiskLimit(user.id, 'maxPosition')!
                                         .toStringAsFixed(0)
-                                    : 'Unlimited',
-                              ),
+                                  : 'Unlimited',
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: _limitField(
-                                controller: _lossCtrl(user.id),
-                                label: 'Max Daily Loss (₹)',
-                                hint: admin.getRiskLimit(
-                                            user.id, 'maxDailyLoss') !=
-                                        null
-                                    ? admin
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _limitField(
+                              controller: _lossCtrl(user.id),
+                              label: 'Max Daily Loss (₹)',
+                              hint:
+                                  admin.getRiskLimit(user.id, 'maxDailyLoss') !=
+                                      null
+                                  ? admin
                                         .getRiskLimit(user.id, 'maxDailyLoss')!
                                         .toStringAsFixed(0)
-                                    : 'Unlimited',
-                              ),
+                                  : 'Unlimited',
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: _limitField(
-                                controller: _levCtrl(user.id),
-                                label: 'Max Leverage',
-                                hint: admin.getRiskLimit(
-                                            user.id, 'maxLeverage') !=
-                                        null
-                                    ? admin
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _limitField(
+                              controller: _levCtrl(user.id),
+                              label: 'Max Leverage',
+                              hint:
+                                  admin.getRiskLimit(user.id, 'maxLeverage') !=
+                                      null
+                                  ? admin
                                         .getRiskLimit(user.id, 'maxLeverage')!
                                         .toStringAsFixed(1)
-                                    : 'Default',
-                              ),
+                                  : 'Default',
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: ElevatedButton.icon(
-                            onPressed: () => _saveLimits(user.id),
-                            icon: const Icon(LucideIcons.save, size: 14),
-                            label: const Text('Save'),
-                            style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          onPressed: () => _saveLimits(user.id),
+                          icon: const Icon(LucideIcons.save, size: 14),
+                          label: const Text('Save'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                )),
+                ),
+              ),
+            ),
 
             const SizedBox(height: 16),
 
             // ── Real-Time Risk Exposure ──────────────────────────────────
-            Text('Real-Time Risk Exposure',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Real-Time Risk Exposure',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 10),
             CustomCard(
               padding: EdgeInsets.zero,
@@ -202,9 +225,11 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
                 children: [
                   TableRow(
                     decoration: const BoxDecoration(
-                        color: AppColors.surfaceAlt,
-                        borderRadius:
-                            BorderRadius.vertical(top: Radius.circular(12))),
+                      color: AppColors.surfaceAlt,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(12),
+                      ),
+                    ),
                     children: [
                       _headerCell('User'),
                       _headerCell('Open Position Value'),
@@ -215,7 +240,8 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
                   ...users.map((user) {
                     // Mock exposure data
                     final posValue = user.balance * 0.4;
-                    final dailyPnl = user.balance * 0.02 * (user.isActive ? 1 : -1);
+                    final dailyPnl =
+                        user.balance * 0.02 * (user.isActive ? 1 : -1);
                     final isAtRisk = posValue > user.marginLimit * 0.8;
                     return TableRow(
                       children: [
@@ -257,30 +283,37 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
         labelText: label,
         hintText: hint,
         isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: 10,
+        ),
       ),
     );
   }
 
   Widget _headerCell(String text) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Text(text,
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textSecondary)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        color: AppColors.textSecondary,
+      ),
+    ),
+  );
 
   Widget _cell(String text, {Color? color}) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Text(text,
-            style: TextStyle(
-                fontSize: 12,
-                color: color ?? AppColors.textPrimary,
-                fontWeight:
-                    color != null ? FontWeight.w700 : FontWeight.normal)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 12,
+        color: color ?? AppColors.textPrimary,
+        fontWeight: color != null ? FontWeight.w700 : FontWeight.normal,
+      ),
+    ),
+  );
 
   void _saveLimits(String userId) {
     final admin = AdminScope.of(context);
@@ -294,8 +327,9 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-          content: Text('Risk limits saved.'),
-          backgroundColor: AppColors.success),
+        content: Text('Risk limits saved.'),
+        backgroundColor: AppColors.success,
+      ),
     );
   }
 

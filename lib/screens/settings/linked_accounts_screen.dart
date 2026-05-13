@@ -40,8 +40,7 @@ class LinkedAccountsScreen extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.primary.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: AppColors.primary.withOpacity(0.2)),
+                border: Border.all(color: AppColors.primary.withOpacity(0.2)),
               ),
               child: const Row(
                 children: [
@@ -51,7 +50,9 @@ class LinkedAccountsScreen extends StatelessWidget {
                     child: Text(
                       'Bank accounts are verified via NACH mandate. Contact support to add or remove accounts.',
                       style: TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary),
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
@@ -67,15 +68,18 @@ class LinkedAccountsScreen extends StatelessWidget {
                 ),
               )
             else
-              ..._accounts.map((acc) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _AccountCard(account: acc),
-                  )),
+              ..._accounts.map(
+                (acc) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _AccountCard(account: acc),
+                ),
+              ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                    content: Text('Contact support to add a new bank account.')),
+                  content: Text('Contact support to add a new bank account.'),
+                ),
               ),
               icon: const Icon(LucideIcons.plus, size: 16),
               label: const Text('Add Bank Account'),
@@ -103,8 +107,11 @@ class _AccountCard extends StatelessWidget {
               color: AppColors.surfaceAlt,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(LucideIcons.building2,
-                color: AppColors.textSecondary, size: 20),
+            child: const Icon(
+              LucideIcons.building2,
+              color: AppColors.textSecondary,
+              size: 20,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -113,8 +120,10 @@ class _AccountCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(account.bankName,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text(
+                      account.bankName,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                     if (account.isPrimary) ...[
                       const SizedBox(width: 8),
                       StatusBadge(label: 'Primary', color: AppColors.success),
@@ -122,17 +131,28 @@ class _AccountCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 2),
-                Text(account.accountNumber,
-                    style: const TextStyle(
-                        fontSize: 13, color: AppColors.textSecondary)),
-                Text('IFSC: ${account.ifsc}',
-                    style: const TextStyle(
-                        fontSize: 11, color: AppColors.textSecondary)),
+                Text(
+                  account.accountNumber,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                Text(
+                  'IFSC: ${account.ifsc}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
               ],
             ),
           ),
-          const Icon(LucideIcons.checkCircle,
-              color: AppColors.success, size: 20),
+          const Icon(
+            LucideIcons.checkCircle,
+            color: AppColors.success,
+            size: 20,
+          ),
         ],
       ),
     );

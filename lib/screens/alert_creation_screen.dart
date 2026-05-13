@@ -161,9 +161,7 @@ class _AlertCreationScreenState extends State<AlertCreationScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.primary.withOpacity(0.08),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: AppColors.primary.withOpacity(0.2),
-                  ),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.2)),
                 ),
                 child: const Row(
                   children: [

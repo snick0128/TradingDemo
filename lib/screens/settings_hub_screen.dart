@@ -27,14 +27,22 @@ class SettingsHubScreen extends StatelessWidget {
             icon: LucideIcons.palette,
             title: 'Appearance',
             subtitle: 'Dark mode, theme colors, font size',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppearanceSettingsScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const AppearanceSettingsScreen(),
+              ),
+            ),
           ),
           const SizedBox(height: 8),
           _SettingsTile(
             icon: LucideIcons.shieldCheck,
             title: 'Security',
             subtitle: 'PIN, biometrics, session log',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SecuritySettingsScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SecuritySettingsScreen()),
+            ),
           ),
           const SizedBox(height: 16),
           _sectionHeader('Account'),
@@ -42,7 +50,10 @@ class SettingsHubScreen extends StatelessWidget {
             icon: LucideIcons.creditCard,
             title: 'Brokerage Plan',
             subtitle: 'View or change your trading plan',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BrokeragePlanScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BrokeragePlanScreen()),
+            ),
           ),
           const SizedBox(height: 8),
           _SettingsTile(
@@ -57,14 +68,20 @@ class SettingsHubScreen extends StatelessWidget {
             icon: LucideIcons.headphones,
             title: 'Help & Support',
             subtitle: 'Contact us, FAQs, tickets',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HelpSupportScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HelpSupportScreen()),
+            ),
           ),
           const SizedBox(height: 8),
           _SettingsTile(
             icon: LucideIcons.info,
             title: 'About',
             subtitle: 'Version, terms, privacy policy',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AboutScreen()),
+            ),
           ),
           const SizedBox(height: 32),
           Center(
@@ -126,9 +143,16 @@ class _SettingsTile extends StatelessWidget {
           ),
           child: Icon(icon, size: 20, color: AppColors.primary),
         ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        title: Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+        ),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-        trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textSecondary),
+        trailing: const Icon(
+          Icons.chevron_right,
+          size: 18,
+          color: AppColors.textSecondary,
+        ),
         onTap: onTap,
       ),
     );

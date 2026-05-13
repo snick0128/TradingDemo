@@ -17,27 +17,27 @@ class _SymbolInfo {
 
 const _kAllSymbols = [
   // NSE Equities
-  _SymbolInfo('RELIANCE',   'NSE', 'Reliance Industries'),
-  _SymbolInfo('TCS',        'NSE', 'Tata Consultancy Services'),
-  _SymbolInfo('INFY',       'NSE', 'Infosys'),
-  _SymbolInfo('HDFCBANK',   'NSE', 'HDFC Bank'),
-  _SymbolInfo('ICICIBANK',  'NSE', 'ICICI Bank'),
-  _SymbolInfo('SBIN',       'NSE', 'State Bank of India'),
-  _SymbolInfo('WIPRO',      'NSE', 'Wipro'),
-  _SymbolInfo('AXISBANK',   'NSE', 'Axis Bank'),
+  _SymbolInfo('RELIANCE', 'NSE', 'Reliance Industries'),
+  _SymbolInfo('TCS', 'NSE', 'Tata Consultancy Services'),
+  _SymbolInfo('INFY', 'NSE', 'Infosys'),
+  _SymbolInfo('HDFCBANK', 'NSE', 'HDFC Bank'),
+  _SymbolInfo('ICICIBANK', 'NSE', 'ICICI Bank'),
+  _SymbolInfo('SBIN', 'NSE', 'State Bank of India'),
+  _SymbolInfo('WIPRO', 'NSE', 'Wipro'),
+  _SymbolInfo('AXISBANK', 'NSE', 'Axis Bank'),
   _SymbolInfo('BAJFINANCE', 'NSE', 'Bajaj Finance'),
   _SymbolInfo('HINDUNILVR', 'NSE', 'Hindustan Unilever'),
   // MCX Commodities
-  _SymbolInfo('GOLD',       'MCX', 'Gold 1kg'),
-  _SymbolInfo('SILVER',     'MCX', 'Silver 30kg'),
-  _SymbolInfo('CRUDEOIL',   'MCX', 'Crude Oil 100bbl'),
+  _SymbolInfo('GOLD', 'MCX', 'Gold 1kg'),
+  _SymbolInfo('SILVER', 'MCX', 'Silver 30kg'),
+  _SymbolInfo('CRUDEOIL', 'MCX', 'Crude Oil 100bbl'),
   _SymbolInfo('NATURALGAS', 'MCX', 'Natural Gas 1250mmBtu'),
-  _SymbolInfo('COPPER',     'MCX', 'Copper 1MT'),
-  _SymbolInfo('ZINC',       'MCX', 'Zinc 5MT'),
-  _SymbolInfo('LEAD',       'MCX', 'Lead 5MT'),
-  _SymbolInfo('ALUMINIUM',  'MCX', 'Aluminium 5MT'),
-  _SymbolInfo('NICKEL',     'MCX', 'Nickel 250kg'),
-  _SymbolInfo('COTTON',     'MCX', 'Cotton 25 bales'),
+  _SymbolInfo('COPPER', 'MCX', 'Copper 1MT'),
+  _SymbolInfo('ZINC', 'MCX', 'Zinc 5MT'),
+  _SymbolInfo('LEAD', 'MCX', 'Lead 5MT'),
+  _SymbolInfo('ALUMINIUM', 'MCX', 'Aluminium 5MT'),
+  _SymbolInfo('NICKEL', 'MCX', 'Nickel 250kg'),
+  _SymbolInfo('COTTON', 'MCX', 'Cotton 25 bales'),
 ];
 
 class StockControlScreen extends StatefulWidget {
@@ -79,7 +79,8 @@ class _StockControlScreenState extends State<StockControlScreen> {
         children: [
           AdminHeader(
             title: 'Stock Control',
-            subtitle: '$enabledCount / ${_kAllSymbols.length} instruments enabled.',
+            subtitle:
+                '$enabledCount / ${_kAllSymbols.length} instruments enabled.',
           ),
           const SizedBox(height: 12),
 

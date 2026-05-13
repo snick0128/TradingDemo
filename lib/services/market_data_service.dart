@@ -9,8 +9,7 @@ import '../models/trading_models.dart';
 /// for market depth and trade streams (which are not yet wired to the backend).
 /// The price update stream never emits — prices come from LiveMarketService.
 class MarketDataService {
-  final _priceController =
-      StreamController<Map<String, double>>.broadcast();
+  final _priceController = StreamController<Map<String, double>>.broadcast();
   final _depthControllers = <String, StreamController<MarketDepth>>{};
   final _tradeControllers = <String, StreamController<Trade>>{};
 

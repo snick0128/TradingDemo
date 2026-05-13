@@ -36,6 +36,8 @@ class LiveMarketService {
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
   Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  final Map<String, int> _lastSeqBySymbol = {};
   bool _started = false;
   bool _hasError = false;
   bool get hasError => _hasError;
@@ -90,7 +92,10 @@ class LiveMarketService {
       _emitMovers();
       _setError(false, '');
     } catch (e) {
-      _setError(true, 'Could not load market data. Please check your connection and try again.');
+      _setError(
+        true,
+        'Could not load market data. Please check your connection and try again.',
+      );
     }
   }
 
@@ -101,12 +106,15 @@ class LiveMarketService {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _wsSub = _channel!.stream.listen(
         _onWsMessage,
-        onError: (e) => _onWsError('Live market feed interrupted. Reconnecting…'),
-        onDone: () => _onWsError('Live market feed disconnected. Reconnecting…'),
+        onError: (e) =>
+            _onWsError('Live market feed interrupted. Reconnecting…'),
+        onDone: () =>
+            _onWsError('Live market feed disconnected. Reconnecting…'),
         cancelOnError: true,
       );
       _sendSubscribe();
       _setError(false, '');
+      _reconnectAttempt = 0;
     } catch (e) {
       _onWsError('Could not connect to the live market feed. Retrying…');
     }
@@ -129,6 +137,15 @@ class LiveMarketService {
         return;
       }
       if (type == 'tick') {
+        final symbol = (m['symbol'] as String? ?? '').toUpperCase();
+        final seq = (m['seq'] as num?)?.toInt() ?? 0;
+        if (symbol.isNotEmpty && seq > 0) {
+          final lastSeq = _lastSeqBySymbol[symbol] ?? 0;
+          if (seq <= lastSeq) {
+            return;
+          }
+          _lastSeqBySymbol[symbol] = seq;
+        }
         final row = m['data'] as Map<String, dynamic>?;
         if (row == null) return;
         final stock = _mapToStock(row);
@@ -139,7 +156,9 @@ class LiveMarketService {
         _setError(false, '');
       }
     } catch (e) {
-      _onWsError('Received unexpected data from the market feed. Reconnecting…');
+      _onWsError(
+        'Received unexpected data from the market feed. Reconnecting…',
+      );
     }
   }
 
@@ -147,7 +166,11 @@ class LiveMarketService {
     _setError(true, message);
     if (!_started || _disposed) return;
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 2), _connectWs);
+    _reconnectAttempt += 1;
+    final delaySeconds = _reconnectAttempt <= 2
+        ? 1
+        : (_reconnectAttempt <= 5 ? 2 : 5);
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), _connectWs);
   }
 
   void _emitStocks() {
@@ -169,6 +192,7 @@ class LiveMarketService {
   void _sendSubscribe() {
     final channel = _channel;
     if (channel == null) return;
+    if (_subscriptions.isEmpty) return;
     final payload = jsonEncode({
       'type': 'subscribe',
       'symbols': _subscriptions.toList(growable: false),
@@ -206,7 +230,7 @@ class LiveMarketService {
         0.0;
 
     final prevClose = (d['prevClose'] as num?)?.toDouble();
-    final volume    = (d['volume']   as num?)?.toDouble();
+    final volume = (d['volume'] as num?)?.toDouble();
 
     // exchange is always present now — backend enriches every payload
     final exchange = (d['exchange'] as String?)?.toUpperCase() ?? 'NSE';
@@ -239,62 +263,68 @@ class LiveMarketService {
   /// Returns a sensible default sector label based on exchange.
   static String _sectorForExchange(String exchange) {
     switch (exchange) {
-      case 'MCX':   return 'Commodity';
-      case 'NFO':   return 'F&O';
-      case 'CDS':   return 'Currency';
-      case 'BFO':   return 'F&O';
-      case 'NCDEX': return 'Commodity';
-      default:      return 'Equity';
+      case 'MCX':
+        return 'Commodity';
+      case 'NFO':
+        return 'F&O';
+      case 'CDS':
+        return 'Currency';
+      case 'BFO':
+        return 'F&O';
+      case 'NCDEX':
+        return 'Commodity';
+      default:
+        return 'Equity';
     }
   }
 
   static const _names = {
     // NSE Equities
-    'RELIANCE':   'Reliance Industries',
-    'TCS':        'Tata Consultancy Services',
-    'INFY':       'Infosys',
-    'HDFCBANK':   'HDFC Bank',
-    'ICICIBANK':  'ICICI Bank',
-    'SBIN':       'State Bank of India',
-    'WIPRO':      'Wipro Limited',
-    'AXISBANK':   'Axis Bank',
+    'RELIANCE': 'Reliance Industries',
+    'TCS': 'Tata Consultancy Services',
+    'INFY': 'Infosys',
+    'HDFCBANK': 'HDFC Bank',
+    'ICICIBANK': 'ICICI Bank',
+    'SBIN': 'State Bank of India',
+    'WIPRO': 'Wipro Limited',
+    'AXISBANK': 'Axis Bank',
     'BAJFINANCE': 'Bajaj Finance',
     'HINDUNILVR': 'Hindustan Unilever',
     // MCX Commodities
-    'GOLD':       'Gold Futures',
-    'SILVER':     'Silver Futures',
-    'CRUDEOIL':   'Crude Oil Futures',
+    'GOLD': 'Gold Futures',
+    'SILVER': 'Silver Futures',
+    'CRUDEOIL': 'Crude Oil Futures',
     'NATURALGAS': 'Natural Gas Futures',
-    'COPPER':     'Copper Futures',
-    'ZINC':       'Zinc Futures',
-    'LEAD':       'Lead Futures',
-    'ALUMINIUM':  'Aluminium Futures',
-    'NICKEL':     'Nickel Futures',
-    'COTTON':     'Cotton Futures',
+    'COPPER': 'Copper Futures',
+    'ZINC': 'Zinc Futures',
+    'LEAD': 'Lead Futures',
+    'ALUMINIUM': 'Aluminium Futures',
+    'NICKEL': 'Nickel Futures',
+    'COTTON': 'Cotton Futures',
   };
 
   static const _sectors = {
     // NSE Equities
-    'RELIANCE':   'Energy',
-    'TCS':        'IT',
-    'INFY':       'IT',
-    'HDFCBANK':   'Banking',
-    'ICICIBANK':  'Banking',
-    'SBIN':       'Banking',
-    'WIPRO':      'IT',
-    'AXISBANK':   'Banking',
+    'RELIANCE': 'Energy',
+    'TCS': 'IT',
+    'INFY': 'IT',
+    'HDFCBANK': 'Banking',
+    'ICICIBANK': 'Banking',
+    'SBIN': 'Banking',
+    'WIPRO': 'IT',
+    'AXISBANK': 'Banking',
     'BAJFINANCE': 'Finance',
     'HINDUNILVR': 'FMCG',
     // MCX Commodities
-    'GOLD':       'Commodity',
-    'SILVER':     'Commodity',
-    'CRUDEOIL':   'Commodity',
+    'GOLD': 'Commodity',
+    'SILVER': 'Commodity',
+    'CRUDEOIL': 'Commodity',
     'NATURALGAS': 'Commodity',
-    'COPPER':     'Commodity',
-    'ZINC':       'Commodity',
-    'LEAD':       'Commodity',
-    'ALUMINIUM':  'Commodity',
-    'NICKEL':     'Commodity',
-    'COTTON':     'Commodity',
+    'COPPER': 'Commodity',
+    'ZINC': 'Commodity',
+    'LEAD': 'Commodity',
+    'ALUMINIUM': 'Commodity',
+    'NICKEL': 'Commodity',
+    'COTTON': 'Commodity',
   };
 }

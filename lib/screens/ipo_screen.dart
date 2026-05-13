@@ -74,7 +74,10 @@ class _IPOScreenState extends State<IPOScreen>
             children: [
               Text(
                 'Price Band: ₹${ipo.priceMin.toStringAsFixed(0)} – ₹${ipo.priceMax.toStringAsFixed(0)}',
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -88,7 +91,9 @@ class _IPOScreenState extends State<IPOScreen>
               const SizedBox(height: 12),
               TextField(
                 controller: bidController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Bid Price',
                   hintText: ipo.priceMax.toStringAsFixed(0),
@@ -99,9 +104,15 @@ class _IPOScreenState extends State<IPOScreen>
                 initialValue: selectedUpi,
                 decoration: const InputDecoration(labelText: 'UPI ID'),
                 items: const [
-                  DropdownMenuItem(value: 'user@okaxis', child: Text('user@okaxis')),
+                  DropdownMenuItem(
+                    value: 'user@okaxis',
+                    child: Text('user@okaxis'),
+                  ),
                   DropdownMenuItem(value: 'user@ybl', child: Text('user@ybl')),
-                  DropdownMenuItem(value: 'user@paytm', child: Text('user@paytm')),
+                  DropdownMenuItem(
+                    value: 'user@paytm',
+                    child: Text('user@paytm'),
+                  ),
                 ],
                 onChanged: (v) => setDialogState(() => selectedUpi = v!),
               ),
@@ -142,7 +153,10 @@ class _IPOScreenState extends State<IPOScreen>
                 );
               } catch (e) {
                 if (!mounted) return;
-                AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+                AppToast.error(
+                  context,
+                  e.toString().replaceAll('Exception: ', ''),
+                );
               }
             },
             child: const Text('Submit Application'),
@@ -177,10 +191,11 @@ class _IPOScreenState extends State<IPOScreen>
         throw Exception('User account not found.');
       }
       final userData = userSnap.data()!;
-      final balance = ((userData['balance'] as num?) ??
-              (userData['available_balance'] as num?) ??
-              0)
-          .toDouble();
+      final balance =
+          ((userData['balance'] as num?) ??
+                  (userData['available_balance'] as num?) ??
+                  0)
+              .toDouble();
       if (balance < blockedAmount) {
         throw Exception(
           'Insufficient balance. Need ₹${blockedAmount.toStringAsFixed(2)} to apply.',
@@ -269,7 +284,11 @@ class _IPOScreenState extends State<IPOScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.wifiOff, color: AppColors.textSecondary, size: 40),
+            const Icon(
+              LucideIcons.wifiOff,
+              color: AppColors.textSecondary,
+              size: 40,
+            ),
             const SizedBox(height: 12),
             Text(
               'Failed to load IPOs',
@@ -278,7 +297,10 @@ class _IPOScreenState extends State<IPOScreen>
             const SizedBox(height: 4),
             Text(
               _error!,
-              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
@@ -519,5 +541,4 @@ class _IPOCard extends StatelessWidget {
       ),
     );
   }
-
 }

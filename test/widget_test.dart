@@ -9,7 +9,10 @@ void main() {
       await tester.pump();
     });
 
-    // The splash screen shows the app name
-    expect(find.text('Trade Kosh'), findsOneWidget);
+    // In firebaseReady=false mode, app shows firebase-required fallback message.
+    expect(
+      find.textContaining('Firebase initialization failed'),
+      findsOneWidget,
+    );
   });
 }

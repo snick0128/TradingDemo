@@ -134,10 +134,7 @@ class _SectorCell extends StatelessWidget {
             ),
             Text(
               '${data.stocks.length} stocks',
-              style: TextStyle(
-                fontSize: 10,
-                color: textColor.withOpacity(0.8),
-              ),
+              style: TextStyle(fontSize: 10, color: textColor.withOpacity(0.8)),
             ),
           ],
         ),

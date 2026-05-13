@@ -29,8 +29,10 @@ class AuthResult {
 
   const AuthResult({required this.success, this.user, this.errorMessage});
 
-  factory AuthResult.success(AppUser user) => AuthResult(success: true, user: user);
-  factory AuthResult.failure(String message) => AuthResult(success: false, errorMessage: message);
+  factory AuthResult.success(AppUser user) =>
+      AuthResult(success: true, user: user);
+  factory AuthResult.failure(String message) =>
+      AuthResult(success: false, errorMessage: message);
 }
 
 class AppUser {

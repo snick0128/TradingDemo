@@ -39,14 +39,14 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
       scope.notifier!.setUser(profile);
       if (!mounted) return;
       context.go('/admin/dashboard');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Admin login successful')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Admin login successful')));
     } catch (e) {
       setState(() => _error = e.toString());
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Admin login failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Admin login failed: $e')));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -105,7 +105,10 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
                 const Text(
                   'ID: $kPrimaryAdminEmail\nPassword: $kPrimaryAdminPassword',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 TextButton(

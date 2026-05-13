@@ -21,11 +21,15 @@ void main() {
 
   // ─── Property 1: CNC full margin ──────────────────────────────────────────
 
-  group('CNC product uses full margin (qty * price)', () {
+  group('Overnight product uses full margin (qty * price)', () {
     for (final qty in quantities) {
       for (final price in prices) {
         test('qty=$qty, price=$price', () {
-          final margin = store.requiredMargin(qty, price, ProductType.cnc);
+          final margin = store.requiredMargin(
+            qty,
+            price,
+            ProductType.overnight,
+          );
           expect(margin, equals(qty * price));
         });
       }
@@ -73,13 +77,17 @@ void main() {
 
   // ─── Property 3: MIS margin is always less than CNC margin ────────────────
 
-  group('MIS margin < CNC margin for positive qty and price', () {
+  group('MIS margin < Overnight margin for positive qty and price', () {
     for (final qty in quantities) {
       for (final price in prices) {
         test('qty=$qty, price=$price', () {
           final misMargin = store.requiredMargin(qty, price, ProductType.mis);
-          final cncMargin = store.requiredMargin(qty, price, ProductType.cnc);
-          expect(misMargin, lessThan(cncMargin));
+          final overnightMargin = store.requiredMargin(
+            qty,
+            price,
+            ProductType.overnight,
+          );
+          expect(misMargin, lessThan(overnightMargin));
         });
       }
     }

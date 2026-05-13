@@ -56,7 +56,11 @@ class _MarketSettingsScreenState extends State<MarketSettingsScreen> {
       await _service.update(updated);
       if (mounted) AppToast.success(context, 'Market settings saved.');
     } catch (e) {
-      if (mounted) AppToast.error(context, 'Could not save settings. Please check your connection and try again.');
+      if (mounted)
+        AppToast.error(
+          context,
+          'Could not save settings. Please check your connection and try again.',
+        );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -141,7 +145,7 @@ class _SegmentCardState extends State<_SegmentCard> {
   @override
   void initState() {
     super.initState();
-    _openCtrl  = TextEditingController(text: widget.settings.marketOpen);
+    _openCtrl = TextEditingController(text: widget.settings.marketOpen);
     _closeCtrl = TextEditingController(text: widget.settings.marketClose);
   }
 
@@ -149,8 +153,8 @@ class _SegmentCardState extends State<_SegmentCard> {
   void didUpdateWidget(_SegmentCard old) {
     super.didUpdateWidget(old);
     if (!_timeDirty) {
-      if (old.settings.marketOpen  != widget.settings.marketOpen)
-        _openCtrl.text  = widget.settings.marketOpen;
+      if (old.settings.marketOpen != widget.settings.marketOpen)
+        _openCtrl.text = widget.settings.marketOpen;
       if (old.settings.marketClose != widget.settings.marketClose)
         _closeCtrl.text = widget.settings.marketClose;
     }
@@ -163,32 +167,34 @@ class _SegmentCardState extends State<_SegmentCard> {
     super.dispose();
   }
 
-  void _emitToggles({
-    bool? enabled,
-    bool? buyEnabled,
-    bool? sellEnabled,
-  }) {
-    widget.onChanged(widget.settings.copyWith(
-      enabled:     enabled,
-      buyEnabled:  buyEnabled,
-      sellEnabled: sellEnabled,
-    ));
+  void _emitToggles({bool? enabled, bool? buyEnabled, bool? sellEnabled}) {
+    widget.onChanged(
+      widget.settings.copyWith(
+        enabled: enabled,
+        buyEnabled: buyEnabled,
+        sellEnabled: sellEnabled,
+      ),
+    );
   }
 
   /// Validate and save market hours from the text controllers.
   void _saveMarketHours() {
-    final openVal  = _openCtrl.text.trim();
+    final openVal = _openCtrl.text.trim();
     final closeVal = _closeCtrl.text.trim();
     final re = RegExp(r'^\d{2}:\d{2}$');
 
     if (!re.hasMatch(openVal)) {
       AppToast.error(
-          context, 'Open time is not valid. Please use HH:MM format (e.g. 09:15).');
+        context,
+        'Open time is not valid. Please use HH:MM format (e.g. 09:15).',
+      );
       return;
     }
     if (!re.hasMatch(closeVal)) {
       AppToast.error(
-          context, 'Close time is not valid. Please use HH:MM format (e.g. 15:30).');
+        context,
+        'Close time is not valid. Please use HH:MM format (e.g. 15:30).',
+      );
       return;
     }
 
@@ -204,10 +210,9 @@ class _SegmentCardState extends State<_SegmentCard> {
     }
 
     setState(() => _timeDirty = false);
-    widget.onChanged(widget.settings.copyWith(
-      marketOpen:  openVal,
-      marketClose: closeVal,
-    ));
+    widget.onChanged(
+      widget.settings.copyWith(marketOpen: openVal, marketClose: closeVal),
+    );
   }
 
   @override
@@ -237,7 +242,9 @@ class _SegmentCardState extends State<_SegmentCard> {
                 child: Text(
                   widget.title,
                   style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               // Master enable/disable
@@ -248,9 +255,7 @@ class _SegmentCardState extends State<_SegmentCard> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: s.enabled
-                          ? AppColors.success
-                          : AppColors.danger,
+                      color: s.enabled ? AppColors.success : AppColors.danger,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -269,21 +274,22 @@ class _SegmentCardState extends State<_SegmentCard> {
           if (!s.enabled) ...[
             const SizedBox(height: 12),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.danger.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(LucideIcons.alertCircle,
-                      size: 14, color: AppColors.danger),
+                  Icon(
+                    LucideIcons.alertCircle,
+                    size: 14,
+                    color: AppColors.danger,
+                  ),
                   const SizedBox(width: 8),
                   Text(
                     'This segment is fully disabled. No orders can be placed.',
-                    style:
-                        TextStyle(fontSize: 12, color: AppColors.danger),
+                    style: TextStyle(fontSize: 12, color: AppColors.danger),
                   ),
                 ],
               ),
@@ -338,8 +344,7 @@ class _SegmentCardState extends State<_SegmentCard> {
                 ),
               ),
               const Spacer(),
-              if (_timeDirty)
-                _UnsavedBadge(),
+              if (_timeDirty) _UnsavedBadge(),
             ],
           ),
           const SizedBox(height: 12),
@@ -354,9 +359,10 @@ class _SegmentCardState extends State<_SegmentCard> {
                 ),
               ),
               const SizedBox(width: 12),
-              const Text('–',
-                  style: TextStyle(
-                      fontSize: 18, color: AppColors.textSecondary)),
+              const Text(
+                '–',
+                style: TextStyle(fontSize: 18, color: AppColors.textSecondary),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: _TimeField(
@@ -371,8 +377,7 @@ class _SegmentCardState extends State<_SegmentCard> {
           const SizedBox(height: 8),
           Text(
             'Format: HH:MM (24-hour IST).',
-            style: TextStyle(
-                fontSize: 11, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 10),
           Align(
@@ -386,7 +391,9 @@ class _SegmentCardState extends State<_SegmentCard> {
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Icon(LucideIcons.save, size: 14),
               label: const Text('Save Hours'),
@@ -394,9 +401,13 @@ class _SegmentCardState extends State<_SegmentCard> {
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 10),
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 textStyle: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
@@ -495,22 +506,24 @@ class _ToggleRow extends StatelessWidget {
         color: disabled
             ? const Color(0xFFF5F5F5)
             : value
-                ? iconColor.withValues(alpha: 0.06)
-                : AppColors.danger.withValues(alpha: 0.04),
+            ? iconColor.withValues(alpha: 0.06)
+            : AppColors.danger.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: disabled
               ? const Color(0xFFE0E0E0)
               : value
-                  ? iconColor.withValues(alpha: 0.3)
-                  : AppColors.danger.withValues(alpha: 0.2),
+              ? iconColor.withValues(alpha: 0.3)
+              : AppColors.danger.withValues(alpha: 0.2),
         ),
       ),
       child: Row(
         children: [
-          Icon(icon,
-              size: 16,
-              color: disabled ? AppColors.textSecondary : iconColor),
+          Icon(
+            icon,
+            size: 16,
+            color: disabled ? AppColors.textSecondary : iconColor,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -558,9 +571,10 @@ class _TimeField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-              fontWeight: FontWeight.w500),
+            fontSize: 11,
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 6),
         TextField(
@@ -572,12 +586,12 @@ class _TimeField extends StatelessWidget {
           decoration: InputDecoration(
             hintText: 'HH:MM',
             filled: true,
-            fillColor:
-                disabled ? const Color(0xFFF5F5F5) : Colors.white,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8)),
+            fillColor: disabled ? const Color(0xFFF5F5F5) : Colors.white,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             contentPadding: const EdgeInsets.symmetric(
-                horizontal: 12, vertical: 12),
+              horizontal: 12,
+              vertical: 12,
+            ),
           ),
           onChanged: onChanged,
         ),
@@ -615,27 +629,27 @@ class _LabeledField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-              fontWeight: FontWeight.w500),
+            fontSize: 11,
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 6),
         TextField(
           controller: controller,
           enabled: !disabled,
-          keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           decoration: InputDecoration(
             hintText: hint,
             suffixText: suffix,
             filled: true,
-            fillColor:
-                disabled ? const Color(0xFFF5F5F5) : Colors.white,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8)),
+            fillColor: disabled ? const Color(0xFFF5F5F5) : Colors.white,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             contentPadding: const EdgeInsets.symmetric(
-                horizontal: 12, vertical: 12),
+              horizontal: 12,
+              vertical: 12,
+            ),
           ),
           onChanged: onChanged,
         ),
@@ -644,7 +658,9 @@ class _LabeledField extends StatelessWidget {
           Text(
             helperText!,
             style: const TextStyle(
-                fontSize: 10, color: AppColors.textSecondary),
+              fontSize: 10,
+              color: AppColors.textSecondary,
+            ),
           ),
         ],
       ],

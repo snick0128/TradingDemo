@@ -24,10 +24,7 @@ class AppScaffold extends StatelessWidget {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1200),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: body,
-          ),
+          child: Padding(padding: const EdgeInsets.all(16), child: body),
         ),
       ),
     );

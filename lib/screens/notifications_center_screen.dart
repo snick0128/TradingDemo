@@ -24,13 +24,21 @@ class NotificationsCenterScreen extends StatelessWidget {
               children: [
                 Icon(LucideIcons.bellOff, size: 48, color: AppColors.border),
                 SizedBox(height: 16),
-                Text('No notifications',
-                    style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 16)),
+                Text(
+                  'No notifications',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 16,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('Alerts and order updates will appear here.',
-                    style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 13)),
+                Text(
+                  'Alerts and order updates will appear here.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
               ],
             ),
           )
@@ -51,7 +59,8 @@ class NotificationsCenterScreen extends StatelessWidget {
       return Scaffold(
         body: Column(
           children: [
-            if (notifications.isNotEmpty) _buildActionBar(context, store, unread),
+            if (notifications.isNotEmpty)
+              _buildActionBar(context, store, unread),
             Expanded(child: body),
           ],
         ),
@@ -61,8 +70,7 @@ class NotificationsCenterScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
-        title: Text(
-            'Notifications${unread > 0 ? ' ($unread unread)' : ''}'),
+        title: Text('Notifications${unread > 0 ? ' ($unread unread)' : ''}'),
         actions: [
           if (notifications.isNotEmpty) ...[
             TextButton(
@@ -71,8 +79,10 @@ class NotificationsCenterScreen extends StatelessWidget {
             ),
             TextButton(
               onPressed: () => store.clearNotifications(),
-              child: const Text('Clear all',
-                  style: TextStyle(color: AppColors.danger)),
+              child: const Text(
+                'Clear all',
+                style: TextStyle(color: AppColors.danger),
+              ),
             ),
           ],
         ],
@@ -81,8 +91,7 @@ class NotificationsCenterScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildActionBar(
-      BuildContext context, store, int unread) {
+  Widget _buildActionBar(BuildContext context, store, int unread) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: const BoxDecoration(
@@ -99,8 +108,10 @@ class NotificationsCenterScreen extends StatelessWidget {
             ),
           TextButton(
             onPressed: () => store.clearNotifications(),
-            child: const Text('Clear all',
-                style: TextStyle(color: AppColors.danger)),
+            child: const Text(
+              'Clear all',
+              style: TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),
@@ -112,8 +123,7 @@ class _NotificationCard extends StatelessWidget {
   final AppNotification notification;
   final VoidCallback onTap;
 
-  const _NotificationCard(
-      {required this.notification, required this.onTap});
+  const _NotificationCard({required this.notification, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -159,9 +169,7 @@ class _NotificationCard extends StatelessWidget {
                   Text(
                     notification.title,
                     style: TextStyle(
-                      fontWeight: isUnread
-                          ? FontWeight.w700
-                          : FontWeight.w500,
+                      fontWeight: isUnread ? FontWeight.w700 : FontWeight.w500,
                       fontSize: 14,
                       color: AppColors.textPrimary,
                     ),
@@ -170,13 +178,17 @@ class _NotificationCard extends StatelessWidget {
                   Text(
                     notification.message,
                     style: const TextStyle(
-                        fontSize: 13, color: AppColors.textSecondary),
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     fmt.format(notification.timestamp),
                     style: const TextStyle(
-                        fontSize: 11, color: AppColors.textSecondary),
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 ],
               ),

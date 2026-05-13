@@ -31,12 +31,10 @@ class _FnoPosition {
     required this.expiryDate,
   });
 
-  double get pnl => side == OrderType.buy
-      ? (ltp - avgPrice) * qty
-      : (avgPrice - ltp) * qty;
+  double get pnl =>
+      side == OrderType.buy ? (ltp - avgPrice) * qty : (avgPrice - ltp) * qty;
 
-  bool get isExpiringSoon =>
-      expiryDate.difference(DateTime.now()).inDays <= 7;
+  bool get isExpiringSoon => expiryDate.difference(DateTime.now()).inDays <= 7;
 }
 
 // Local UI projection from live/store positions (no hardcoded F&O positions).
@@ -111,7 +109,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
     final nrmlPositions = store.positions
-        .where((p) => p.product == ProductType.nrml || p.product == ProductType.mis)
+        .where(
+          (p) => p.product == ProductType.nrml || p.product == ProductType.mis,
+        )
         .toList();
     final fnoPositions = nrmlPositions.map(_mapFromPosition).toList();
 
@@ -164,7 +164,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
 
     final totalPnl = positions.fold(0.0, (sum, p) => sum + p.pnl);
     final totalMargin = positions.fold(
-        0.0, (sum, p) => sum + p.avgPrice * p.qty * 0.1);
+      0.0,
+      (sum, p) => sum + p.avgPrice * p.qty * 0.1,
+    );
     final isPos = totalPnl >= 0;
 
     return SingleChildScrollView(
@@ -180,9 +182,13 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Total F&O P&L',
-                          style: TextStyle(
-                              fontSize: 12, color: AppColors.textSecondary)),
+                      const Text(
+                        'Total F&O P&L',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                       const SizedBox(height: 4),
                       Text(
                         '${isPos ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)}',
@@ -202,9 +208,13 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Margin Used',
-                          style: TextStyle(
-                              fontSize: 12, color: AppColors.textSecondary)),
+                      const Text(
+                        'Margin Used',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                       const SizedBox(height: 4),
                       Text(
                         '₹${totalMargin.toStringAsFixed(0)}',
@@ -221,8 +231,10 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
             ],
           ),
           const SizedBox(height: 16),
-          Text('Open Positions (${positions.length})',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Open Positions (${positions.length})',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           ...positions.map((p) => _positionCard(p)),
         ],
@@ -248,8 +260,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                             ? '${p.symbol} ${p.strike.toStringAsFixed(0)} ${p.optionType}'
                             : '${p.symbol} ${p.optionType}',
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary),
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
                       ),
                       const SizedBox(width: 8),
                       StatusBadge(
@@ -261,7 +274,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                       if (p.isExpiringSoon) ...[
                         const SizedBox(width: 6),
                         StatusBadge(
-                            label: 'Expiring Soon', color: AppColors.warning),
+                          label: 'Expiring Soon',
+                          color: AppColors.warning,
+                        ),
                       ],
                     ],
                   ),
@@ -269,7 +284,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                   Text(
                     'Expiry: ${p.expiry}  •  Qty: ${p.qty}  •  Avg: ₹${p.avgPrice}',
                     style: const TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 ],
               ),
@@ -280,7 +297,9 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                 Text(
                   '₹${p.ltp.toStringAsFixed(2)}',
                   style: GoogleFonts.jetBrainsMono(
-                      fontWeight: FontWeight.w700, fontSize: 14),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
                 ),
                 Text(
                   '${isPos ? '+' : ''}₹${p.pnl.toStringAsFixed(2)}',
@@ -299,8 +318,7 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
   }
 
   Widget _buildRolloverTab(List<_FnoPosition> positions) {
-    final expiringSoon =
-        positions.where((p) => p.isExpiringSoon).toList();
+    final expiringSoon = positions.where((p) => p.isExpiringSoon).toList();
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -311,8 +329,10 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
-                child: Text('No positions expiring within 7 days.',
-                    style: TextStyle(color: AppColors.textSecondary)),
+                child: Text(
+                  'No positions expiring within 7 days.',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
               ),
             )
           else ...[
@@ -321,18 +341,22 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
               decoration: BoxDecoration(
                 color: AppColors.warning.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: AppColors.warning.withOpacity(0.3)),
+                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.alertTriangle,
-                      color: AppColors.warning, size: 16),
+                  const Icon(
+                    LucideIcons.alertTriangle,
+                    color: AppColors.warning,
+                    size: 16,
+                  ),
                   const SizedBox(width: 8),
                   Text(
                     '${expiringSoon.length} position(s) expiring within 7 days',
                     style: const TextStyle(
-                        color: AppColors.warning, fontWeight: FontWeight.w600),
+                      color: AppColors.warning,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -346,8 +370,7 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
   }
 
   Widget _rolloverCard(_FnoPosition p) {
-    final daysLeft =
-        p.expiryDate.difference(DateTime.now()).inDays;
+    final daysLeft = p.expiryDate.difference(DateTime.now()).inDays;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: CustomCard(
@@ -366,15 +389,16 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                   Text(
                     'Expires: ${p.expiry}  •  $daysLeft days left',
                     style: const TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 ],
               ),
             ),
             ElevatedButton(
               onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('Rollover for ${p.symbol} initiated')),
+                SnackBar(content: Text('Rollover for ${p.symbol} initiated')),
               ),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(80, 36),
@@ -397,14 +421,17 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Strategy Legs',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Strategy Legs',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               ElevatedButton.icon(
                 onPressed: () => setState(() => _legs.add(_StrategyLeg())),
                 icon: const Icon(LucideIcons.plus, size: 16),
                 label: const Text('Add Leg'),
                 style: ElevatedButton.styleFrom(
-                    minimumSize: const Size(100, 36)),
+                  minimumSize: const Size(100, 36),
+                ),
               ),
             ],
           ),
@@ -413,8 +440,10 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
-                child: Text('Add legs to build your strategy.',
-                    style: TextStyle(color: AppColors.textSecondary)),
+                child: Text(
+                  'Add legs to build your strategy.',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
               ),
             )
           else
@@ -443,13 +472,18 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
           children: [
             Row(
               children: [
-                Text('Leg ${index + 1}',
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  'Leg ${index + 1}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
                 const Spacer(),
                 IconButton(
                   onPressed: () => setState(() => _legs.removeAt(index)),
-                  icon: const Icon(LucideIcons.trash2,
-                      size: 16, color: AppColors.danger),
+                  icon: const Icon(
+                    LucideIcons.trash2,
+                    size: 16,
+                    color: AppColors.danger,
+                  ),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                 ),
@@ -477,9 +511,13 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                     decoration: const InputDecoration(labelText: 'Side'),
                     items: const [
                       DropdownMenuItem(
-                          value: OrderType.buy, child: Text('Buy')),
+                        value: OrderType.buy,
+                        child: Text('Buy'),
+                      ),
                       DropdownMenuItem(
-                          value: OrderType.sell, child: Text('Sell')),
+                        value: OrderType.sell,
+                        child: Text('Sell'),
+                      ),
                     ],
                     onChanged: (v) => setState(() => leg.side = v!),
                   ),
@@ -514,21 +552,26 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Payoff Summary',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Payoff Summary',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           InfoRow(
-              label: 'Max Profit',
-              value: '₹${maxProfit.toStringAsFixed(0)}',
-              valueColor: AppColors.success),
+            label: 'Max Profit',
+            value: '₹${maxProfit.toStringAsFixed(0)}',
+            valueColor: AppColors.success,
+          ),
           InfoRow(
-              label: 'Max Loss',
-              value: '-₹${maxLoss.toStringAsFixed(0)}',
-              valueColor: AppColors.danger),
+            label: 'Max Loss',
+            value: '-₹${maxLoss.toStringAsFixed(0)}',
+            valueColor: AppColors.danger,
+          ),
           InfoRow(
-              label: 'Legs',
-              value: '${_legs.length}',
-              valueColor: AppColors.primary),
+            label: 'Legs',
+            value: '${_legs.length}',
+            valueColor: AppColors.primary,
+          ),
         ],
       ),
     );

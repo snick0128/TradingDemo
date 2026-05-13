@@ -31,9 +31,9 @@ class AppOrdersPage extends StatelessWidget {
                 final o = orders[index];
                 return ListTile(
                   title: Text(
-                      '${o.symbol}  ${o.type.name.toUpperCase()} ${o.quantity}'),
-                  subtitle:
-                      Text('Status: ${o.status.name.toUpperCase()}'),
+                    '${o.symbol}  ${o.type.name.toUpperCase()} ${o.quantity}',
+                  ),
+                  subtitle: Text('Status: ${o.status.name.toUpperCase()}'),
                   trailing: o.executedPrice != null
                       ? Text('₹${o.executedPrice!.toStringAsFixed(2)}')
                       : null,

@@ -1,133 +1,175 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
 import '../../theme.dart';
 
-/// Live trading terminal dashboard for admins.
-///
-/// ⚠️ NO StreamBuilders here — all data comes from AdminStore which already
-/// holds the Firestore subscriptions. Adding more streams here was causing
-/// Firestore SDK internal assertion failures (WatchChangeAggregator overload).
 class AdminStatsScreen extends StatelessWidget {
   const AdminStatsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final store = AdminScope.of(context);
-    return _AdminDashboard(store: store);
+    return _Dashboard(store: store);
   }
 }
 
-// ── Main layout ───────────────────────────────────────────────────────────────
+// ── Layout root ────────────────────────────────────────────────────────────────
 
-class _AdminDashboard extends StatelessWidget {
+class _Dashboard extends StatelessWidget {
   final AdminStore store;
-  const _AdminDashboard({required this.store});
+  const _Dashboard({required this.store});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final isWide = MediaQuery.of(context).size.width >= 900;
+
+    return isWide
+        ? _WideLayout(store: store)
+        : _NarrowLayout(store: store);
+  }
+}
+
+// ── Wide layout (≥900px): KPIs top, sidebar + table below ─────────────────────
+
+class _WideLayout extends StatelessWidget {
+  final AdminStore store;
+  const _WideLayout({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
       children: [
-        // Left: KPIs + Live Feed + Anomaly Detection
-        SizedBox(
-          width: 340,
-          child: Column(
+        _KpiGrid(store: store),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _KpiStrip(store: store),
-              const Divider(height: 1),
-              Expanded(
-                child: DefaultTabController(
-                  length: 2,
-                  child: Column(
-                    children: [
-                      const TabBar(
-                        tabs: [
-                          Tab(text: 'Live Feed'),
-                          Tab(text: '⚠ Anomalies'),
-                        ],
-                        labelStyle: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w700),
-                      ),
-                      Expanded(
-                        child: TabBarView(
-                          children: [
-                            _LiveTradeFeed(store: store),
-                            _AnomalyPanel(store: store),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+              SizedBox(
+                width: 320,
+                child: Column(
+                  children: [
+                    Expanded(child: _SidePanel(store: store)),
+                  ],
                 ),
               ),
+              const VerticalDivider(width: 1),
+              Expanded(child: _OrderTable(store: store)),
             ],
           ),
         ),
-        const VerticalDivider(width: 1),
-        // Right: Order table
-        Expanded(child: _OrderTable(store: store)),
       ],
     );
   }
 }
 
-// ── KPI Strip — reads from AdminStore, no extra streams ──────────────────────
+// ── Narrow layout (mobile): stack vertically ───────────────────────────────────
 
-class _KpiStrip extends StatelessWidget {
+class _NarrowLayout extends StatefulWidget {
   final AdminStore store;
-  const _KpiStrip({required this.store});
+  const _NarrowLayout({required this.store});
+
+  @override
+  State<_NarrowLayout> createState() => _NarrowLayoutState();
+}
+
+class _NarrowLayoutState extends State<_NarrowLayout>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tab;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _KpiGrid(store: widget.store),
+        TabBar(
+          controller: _tab,
+          tabs: const [Tab(text: 'Live Feed'), Tab(text: 'Order Book')],
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          unselectedLabelStyle: const TextStyle(fontSize: 12),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: TabBarView(
+            controller: _tab,
+            children: [
+              _SidePanel(store: widget.store),
+              _OrderTable(store: widget.store),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── KPI Grid ───────────────────────────────────────────────────────────────────
+
+class _KpiGrid extends StatelessWidget {
+  final AdminStore store;
+  const _KpiGrid({required this.store});
 
   @override
   Widget build(BuildContext context) {
     final today = DateTime.now();
-    final todayOrders = store.masterOrderBook.where((o) {
-      return o.dateTime.year == today.year &&
-          o.dateTime.month == today.month &&
-          o.dateTime.day == today.day;
-    }).toList();
+    final todayOrders = store.masterOrderBook.where((o) =>
+        o.dateTime.year == today.year &&
+        o.dateTime.month == today.month &&
+        o.dateTime.day == today.day).toList();
 
-    final volume = todayOrders.fold<double>(
-        0, (s, o) => s + (o.quantity * o.price));
+    final todayVolume = todayOrders.fold<double>(0, (s, o) => s + o.quantity * o.price);
+    final activeSymbols = todayOrders.map((o) => o.symbol).toSet().length;
+    final executedToday = todayOrders.where((o) =>
+        o.status == OrderStatus.executed || o.status == OrderStatus.approved).length;
 
-    final activeStocks = todayOrders.map((o) => o.symbol).toSet().length;
+    final kpis = [
+      _KpiData('Total Users', '${store.totalUsers}', LucideIcons.users, AppColors.primary),
+      _KpiData('Trades Today', '${todayOrders.length}', LucideIcons.activity, AppColors.success),
+      _KpiData('Volume Today', _fmt(todayVolume), LucideIcons.trendingUp, const Color(0xFF7B1FA2)),
+      _KpiData('Live Exposure', _fmt(store.liveExposure), LucideIcons.zap, AppColors.warning),
+      _KpiData('Executed', '$executedToday', LucideIcons.checkCircle, AppColors.success),
+      _KpiData('Active Symbols', '$activeSymbols', LucideIcons.barChart2, AppColors.accent),
+      _KpiData('Revenue', '₹${_fmt(store.revenue)}', LucideIcons.dollarSign, const Color(0xFF00838F)),
+      _KpiData('Risk Est.', '₹${_fmt(store.operatorRiskLossEstimate)}', LucideIcons.shieldAlert, AppColors.danger),
+    ];
 
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Live Dashboard',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _Kpi('Users', '${store.totalUsers}', AppColors.primary),
-              const SizedBox(width: 8),
-              _Kpi('Trades Today', '${todayOrders.length}', AppColors.success),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _Kpi('Volume', '₹${_fmt(volume)}', AppColors.accent),
-              const SizedBox(width: 8),
-              _Kpi('Active Stocks', '$activeStocks', AppColors.warning),
-            ],
-          ),
-        ],
+    final cols = MediaQuery.of(context).size.width >= 900 ? 8 : 4;
+
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: cols == 8 ? 2.4 : 2.0,
+        ),
+        itemCount: kpis.length,
+        itemBuilder: (_, i) => _KpiCard(data: kpis[i]),
       ),
     );
   }
 
-  String _fmt(double v) {
+  static String _fmt(double v) {
     if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
     if (v >= 100000) return '${(v / 100000).toStringAsFixed(1)}L';
     if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}K';
@@ -135,90 +177,166 @@ class _KpiStrip extends StatelessWidget {
   }
 }
 
-class _Kpi extends StatelessWidget {
-  final String label;
-  final String value;
+class _KpiData {
+  final String label, value;
+  final IconData icon;
   final Color color;
-  const _Kpi(this.label, this.value, this.color);
+  const _KpiData(this.label, this.value, this.icon, this.color);
+}
+
+class _KpiCard extends StatelessWidget {
+  final _KpiData data;
+  const _KpiCard({required this.data});
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.2)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 10,
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(value,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: data.color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: data.color.withOpacity(0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Icon(data.icon, size: 13, color: data.color),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                data.value,
                 style: GoogleFonts.jetBrainsMono(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: color)),
-          ],
-        ),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: data.color,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                data.label,
+                style: TextStyle(
+                  fontSize: 9,
+                  color: data.color.withOpacity(0.7),
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-// ── Live Trade Feed — reads from AdminStore.masterOrderBook ──────────────────
+// ── Side panel: Live Feed + Anomaly tabs ───────────────────────────────────────
 
-class _LiveTradeFeed extends StatelessWidget {
+class _SidePanel extends StatefulWidget {
   final AdminStore store;
-  const _LiveTradeFeed({required this.store});
+  const _SidePanel({required this.store});
+
+  @override
+  State<_SidePanel> createState() => _SidePanelState();
+}
+
+class _SidePanelState extends State<_SidePanel>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tab;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TabBar(
+          controller: _tab,
+          tabs: const [Tab(text: 'Live Feed'), Tab(text: '⚠ Anomalies')],
+          labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+          unselectedLabelStyle: const TextStyle(fontSize: 11),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: TabBarView(
+            controller: _tab,
+            children: [
+              _LiveFeed(store: widget.store),
+              _AnomalyPanel(store: widget.store),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Live Feed ──────────────────────────────────────────────────────────────────
+
+class _LiveFeed extends StatelessWidget {
+  final AdminStore store;
+  const _LiveFeed({required this.store});
 
   @override
   Widget build(BuildContext context) {
     final orders = store.masterOrderBook;
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
               Container(
-                width: 8,
-                height: 8,
+                width: 7,
+                height: 7,
                 decoration: const BoxDecoration(
                   color: AppColors.success,
                   shape: BoxShape.circle,
                 ),
               ),
               const SizedBox(width: 6),
-              Text('Live Trades',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(fontWeight: FontWeight.w700)),
+              Text(
+                'Real-time trades',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${orders.length} total',
+                style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+              ),
             ],
           ),
         ),
+        const Divider(height: 1),
         Expanded(
           child: orders.isEmpty
               ? const Center(
-                  child: Text('No trades yet.',
-                      style: TextStyle(
-                          color: AppColors.textSecondary, fontSize: 12)))
+                  child: Text(
+                    'No trades yet.',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                  ),
+                )
               : ListView.builder(
-                  padding: EdgeInsets.zero,
                   itemCount: orders.length,
-                  itemBuilder: (context, i) {
-                    final o = orders[i];
-                    return _FeedRow(order: o);
-                  },
+                  itemBuilder: (_, i) => _FeedTile(order: orders[i]),
                 ),
         ),
       ],
@@ -226,66 +344,249 @@ class _LiveTradeFeed extends StatelessWidget {
   }
 }
 
-class _FeedRow extends StatelessWidget {
+class _FeedTile extends StatelessWidget {
   final AdminOrderRecord order;
-  const _FeedRow({required this.order});
+  const _FeedTile({required this.order});
 
   @override
   Widget build(BuildContext context) {
     final isBuy = order.type == OrderType.buy;
-    final color = isBuy ? AppColors.success : AppColors.danger;
+    final sideColor = isBuy ? AppColors.success : AppColors.danger;
     final time = DateFormat('HH:mm:ss').format(order.dateTime);
-    final userId = order.userId.length > 6
-        ? order.userId.substring(0, 6)
-        : order.userId;
+    final total = order.quantity * order.price;
+    final uid = order.userClientId.isNotEmpty
+        ? order.userClientId
+        : order.userId.substring(0, order.userId.length.clamp(0, 6));
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
         border: Border(
-            bottom: BorderSide(color: AppColors.border.withOpacity(0.5))),
+          bottom: BorderSide(color: AppColors.border.withOpacity(0.4)),
+        ),
       ),
       child: Row(
         children: [
-          Text(time,
-              style: GoogleFonts.jetBrainsMono(
-                  fontSize: 10, color: AppColors.textSecondary)),
-          const SizedBox(width: 6),
+          // Side badge
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            width: 36,
+            padding: const EdgeInsets.symmetric(vertical: 2),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(3),
+              color: sideColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
             ),
-            child: Text(isBuy ? 'BUY' : 'SELL',
-                style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    color: color)),
+            child: Text(
+              isBuy ? 'BUY' : 'SELL',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                color: sideColor,
+              ),
+            ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
+          // Symbol + user
           Expanded(
-            child: Text(order.symbol,
-                style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w700)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.symbol,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Text(
+                  uid,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
           ),
-          Text('${order.quantity} × ',
-              style: const TextStyle(
-                  fontSize: 10, color: AppColors.textSecondary)),
-          Text('₹${order.price.toStringAsFixed(0)}',
-              style: GoogleFonts.jetBrainsMono(
-                  fontSize: 10, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 4),
-          Text('($userId…)',
-              style: const TextStyle(
-                  fontSize: 9, color: AppColors.textSecondary)),
+          // Amount + time
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '₹${_fmt(total)}',
+                style: GoogleFonts.jetBrainsMono(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Text(
+                time,
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
+
+  static String _fmt(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
+    if (v >= 100000) return '${(v / 100000).toStringAsFixed(1)}L';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(0);
+  }
 }
 
-// ── Order Table — reads from AdminStore.masterOrderBook ──────────────────────
+// ── Anomaly Panel ──────────────────────────────────────────────────────────────
+
+class _AnomalyPanel extends StatelessWidget {
+  final AdminStore store;
+  const _AnomalyPanel({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final cutoff = now.subtract(const Duration(minutes: 1));
+    final recentOrders = store.masterOrderBook.where((o) => o.dateTime.isAfter(cutoff)).toList();
+
+    final userCounts = <String, int>{};
+    final userVolumes = <String, double>{};
+    for (final o in recentOrders) {
+      userCounts[o.userId] = (userCounts[o.userId] ?? 0) + 1;
+      userVolumes[o.userId] = (userVolumes[o.userId] ?? 0) + o.quantity * o.price;
+    }
+
+    final anomalies = <_Anomaly>[];
+    for (final e in userCounts.entries) {
+      if (e.value > 10) {
+        anomalies.add(_Anomaly(e.key, '${e.value} trades in 1 min', true));
+      } else if (e.value > 5) {
+        anomalies.add(_Anomaly(e.key, '${e.value} trades in 1 min', false));
+      }
+    }
+    for (final e in userVolumes.entries) {
+      if (e.value > 1000000) {
+        anomalies.add(_Anomaly(
+          e.key,
+          'Volume ₹${(e.value / 100000).toStringAsFixed(1)}L in 1 min',
+          true,
+        ));
+      }
+    }
+    // Check for high-value single orders
+    for (final o in recentOrders) {
+      if (o.quantity * o.price > 5000000) {
+        anomalies.add(_Anomaly(o.userId, 'Large order: ${o.symbol} ₹${(o.quantity * o.price / 100000).toStringAsFixed(1)}L', true));
+      }
+    }
+
+    if (anomalies.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.success.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check_circle_outline, color: AppColors.success, size: 24),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'No anomalies',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'All trading activity looks normal.',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(10),
+      itemCount: anomalies.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (_, i) {
+        final a = anomalies[i];
+        final color = a.isHigh ? AppColors.danger : AppColors.warning;
+        final short = a.userId.substring(0, a.userId.length.clamp(0, 7));
+        return Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color.withOpacity(0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                a.isHigh ? Icons.warning_rounded : Icons.info_outline,
+                color: color,
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$short…',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      a.message,
+                      style: TextStyle(fontSize: 10, color: color),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  a.isHigh ? 'HIGH' : 'MED',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _Anomaly {
+  final String userId, message;
+  final bool isHigh;
+  const _Anomaly(this.userId, this.message, this.isHigh);
+}
+
+// ── Order Table ────────────────────────────────────────────────────────────────
 
 class _OrderTable extends StatefulWidget {
   final AdminStore store;
@@ -296,137 +597,163 @@ class _OrderTable extends StatefulWidget {
 }
 
 class _OrderTableState extends State<_OrderTable> {
-  String _filterType = 'ALL';
-  String _filterStock = '';
+  String _typeFilter = 'ALL';
+  String _query = '';
 
   @override
   Widget build(BuildContext context) {
     var orders = widget.store.masterOrderBook.toList();
+    if (_typeFilter != 'ALL') {
+      orders = orders.where((o) => (_typeFilter == 'BUY') == (o.type == OrderType.buy)).toList();
+    }
+    if (_query.isNotEmpty) {
+      final q = _query.toUpperCase();
+      orders = orders.where((o) => o.symbol.contains(q) || o.userClientId.contains(q)).toList();
+    }
 
-    if (_filterType != 'ALL') {
-      orders = orders
-          .where((o) =>
-              (_filterType == 'BUY') == (o.type == OrderType.buy))
-          .toList();
-    }
-    if (_filterStock.isNotEmpty) {
-      orders = orders
-          .where((o) => o.symbol.contains(_filterStock))
-          .toList();
-    }
+    final isWide = MediaQuery.of(context).size.width >= 900;
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Filter bar
+        // ── Filter bar ───────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: const BoxDecoration(
+            color: Colors.white,
             border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
           child: Row(
             children: [
-              Text('Order Book',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w700)),
+              Text(
+                'Order Book',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${orders.length}',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
               const Spacer(),
+              // Type filter chips
               for (final t in ['ALL', 'BUY', 'SELL'])
                 Padding(
                   padding: const EdgeInsets.only(left: 4),
-                  child: ChoiceChip(
-                    label: Text(t, style: const TextStyle(fontSize: 11)),
-                    selected: _filterType == t,
-                    onSelected: (_) => setState(() => _filterType = t),
-                    selectedColor: t == 'BUY'
-                        ? AppColors.success.withOpacity(0.2)
-                        : t == 'SELL'
-                            ? AppColors.danger.withOpacity(0.2)
-                            : AppColors.primary.withOpacity(0.2),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 0),
-                    visualDensity: VisualDensity.compact,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _typeFilter = t),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _typeFilter == t
+                            ? (t == 'BUY'
+                                ? AppColors.success
+                                : t == 'SELL'
+                                    ? AppColors.danger
+                                    : AppColors.primary)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _typeFilter == t
+                              ? Colors.transparent
+                              : AppColors.border,
+                        ),
+                      ),
+                      child: Text(
+                        t,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: _typeFilter == t
+                              ? Colors.white
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               SizedBox(
-                width: 120,
-                height: 30,
+                width: isWide ? 140 : 90,
+                height: 28,
                 child: TextField(
+                  onChanged: (v) => setState(() => _query = v.toUpperCase()),
                   decoration: const InputDecoration(
-                    hintText: 'Stock…',
+                    hintText: 'Symbol / User…',
                     isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    prefixIcon: Icon(LucideIcons.search, size: 13),
+                    prefixIconConstraints: BoxConstraints(minWidth: 28),
                   ),
-                  style: const TextStyle(fontSize: 12),
-                  onChanged: (v) =>
-                      setState(() => _filterStock = v.toUpperCase()),
+                  style: const TextStyle(fontSize: 11),
                 ),
               ),
             ],
           ),
         ),
 
-        // Table header
-        _TableHeader(),
+        // ── Table header ─────────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          color: AppColors.surfaceAlt,
+          child: Row(
+            children: [
+              _th('Time', 2),
+              if (isWide) _th('User', 2),
+              _th('Symbol', 2),
+              _th('Side', 1),
+              _th('Qty', 1, right: true),
+              if (isWide) _th('Price', 2, right: true),
+              _th('Total', 2, right: true),
+              if (isWide) _th('P&L', 2, right: true),
+              _th('Status', 2),
+            ],
+          ),
+        ),
 
-        // Table rows — from store, no StreamBuilder
+        // ── Rows ─────────────────────────────────────────────────────────────
         Expanded(
           child: orders.isEmpty
               ? const Center(
-                  child: Text('No orders.',
-                      style: TextStyle(color: AppColors.textSecondary)))
+                  child: Text(
+                    'No orders.',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                  ),
+                )
               : ListView.builder(
                   itemCount: orders.length,
-                  itemBuilder: (context, i) => _OrderRow(order: orders[i]),
+                  itemBuilder: (_, i) => _OrderRow(order: orders[i], isWide: isWide),
                 ),
         ),
       ],
     );
   }
-}
 
-class _TableHeader extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      color: AppColors.surfaceAlt,
-      child: const Row(
-        children: [
-          _TH('Time', flex: 2),
-          _TH('User', flex: 2),
-          _TH('Stock', flex: 2),
-          _TH('Type', flex: 1),
-          _TH('Qty', flex: 1, right: true),
-          _TH('Price', flex: 2, right: true),
-          _TH('Total', flex: 2, right: true),
-          _TH('Status', flex: 2),
-        ],
-      ),
-    );
-  }
-}
-
-class _TH extends StatelessWidget {
-  final String label;
-  final int flex;
-  final bool right;
-  const _TH(this.label, {this.flex = 1, this.right = false});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _th(String label, int flex, {bool right = false}) {
     return Expanded(
       flex: flex,
       child: Text(
         label,
         textAlign: right ? TextAlign.right : TextAlign.left,
         style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textSecondary),
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textSecondary,
+        ),
       ),
     );
   }
@@ -434,103 +761,150 @@ class _TH extends StatelessWidget {
 
 class _OrderRow extends StatelessWidget {
   final AdminOrderRecord order;
-  const _OrderRow({required this.order});
+  final bool isWide;
+  const _OrderRow({required this.order, required this.isWide});
 
   @override
   Widget build(BuildContext context) {
     final isBuy = order.type == OrderType.buy;
-    final typeColor = isBuy ? AppColors.success : AppColors.danger;
-    final statusStr = _statusLabel(order.status);
-    final isExecuted = order.status == OrderStatus.executed ||
-        order.status == OrderStatus.approved;
-    final time = DateFormat('HH:mm:ss').format(order.dateTime);
-    final userId = order.userId.length > 6
-        ? order.userId.substring(0, 6)
-        : order.userId;
+    final sideColor = isBuy ? AppColors.success : AppColors.danger;
     final total = order.quantity * order.price;
+    final isExec = order.status == OrderStatus.executed || order.status == OrderStatus.approved;
+    final time = DateFormat('HH:mm:ss').format(order.dateTime);
+
+    // Simulated P&L (same formula used throughout app)
+    final h = order.id.hashCode.abs();
+    final movement = (h % 200 - 100) / 1000.0;
+    final pnl = order.quantity * order.price * movement;
+
+    final statusColor = _statusColor(order.status);
+    final statusLabel = _statusLabel(order.status);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
         border: Border(
-            bottom: BorderSide(
-                color: AppColors.border.withOpacity(0.5))),
+          bottom: BorderSide(color: AppColors.border.withOpacity(0.4)),
+        ),
       ),
       child: Row(
         children: [
           Expanded(
             flex: 2,
-            child: Text(time,
-                style: GoogleFonts.jetBrainsMono(
-                    fontSize: 11, color: AppColors.textSecondary)),
+            child: Text(
+              time,
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 10,
+                color: AppColors.textSecondary,
+              ),
+            ),
           ),
+          if (isWide)
+            Expanded(
+              flex: 2,
+              child: Text(
+                order.userClientId.isNotEmpty
+                    ? order.userClientId
+                    : '${order.userId.substring(0, order.userId.length.clamp(0, 6))}…',
+                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           Expanded(
             flex: 2,
-            child: Text('$userId…',
-                style: const TextStyle(
-                    fontSize: 11, color: AppColors.textSecondary)),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(order.symbol,
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700)),
+            child: Text(
+              order.symbol,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           Expanded(
             flex: 1,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
-                color: typeColor.withOpacity(0.12),
+                color: sideColor.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(3),
               ),
               child: Text(
-                isBuy ? 'BUY' : 'SELL',
+                isBuy ? 'B' : 'S',
+                textAlign: TextAlign.center,
                 style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: typeColor),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: sideColor,
+                ),
               ),
             ),
           ),
           Expanded(
             flex: 1,
-            child: Text('${order.quantity}',
-                textAlign: TextAlign.right,
-                style: GoogleFonts.jetBrainsMono(fontSize: 11)),
+            child: Text(
+              '${order.quantity}',
+              textAlign: TextAlign.right,
+              style: GoogleFonts.jetBrainsMono(fontSize: 10),
+            ),
           ),
+          if (isWide)
+            Expanded(
+              flex: 2,
+              child: Text(
+                '₹${order.price.toStringAsFixed(0)}',
+                textAlign: TextAlign.right,
+                style: GoogleFonts.jetBrainsMono(fontSize: 10),
+              ),
+            ),
           Expanded(
             flex: 2,
-            child: Text('₹${order.price.toStringAsFixed(2)}',
-                textAlign: TextAlign.right,
-                style: GoogleFonts.jetBrainsMono(
-                    fontSize: 11, fontWeight: FontWeight.w600)),
+            child: Text(
+              '₹${_fmt(total)}',
+              textAlign: TextAlign.right,
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
-          Expanded(
-            flex: 2,
-            child: Text('₹${total.toStringAsFixed(0)}',
-                textAlign: TextAlign.right,
-                style: GoogleFonts.jetBrainsMono(
-                    fontSize: 11, fontWeight: FontWeight.w600)),
-          ),
+          if (isWide)
+            Expanded(
+              flex: 2,
+              child: isExec
+                  ? Text(
+                      '${pnl >= 0 ? '+' : ''}₹${_fmt(pnl.abs())}',
+                      textAlign: TextAlign.right,
+                      style: GoogleFonts.jetBrainsMono(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: pnl >= 0 ? AppColors.success : AppColors.danger,
+                      ),
+                    )
+                  : const Text(
+                      '—',
+                      textAlign: TextAlign.right,
+                      style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                    ),
+            ),
           Expanded(
             flex: 2,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              margin: const EdgeInsets.only(left: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
               decoration: BoxDecoration(
-                color: isExecuted
-                    ? AppColors.success.withOpacity(0.1)
-                    : AppColors.danger.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(3),
+                color: statusColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                statusStr,
+                statusLabel,
                 style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: isExecuted
-                        ? AppColors.success
-                        : AppColors.danger),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: statusColor,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
@@ -539,7 +913,22 @@ class _OrderRow extends StatelessWidget {
     );
   }
 
-  String _statusLabel(OrderStatus s) {
+  static Color _statusColor(OrderStatus s) {
+    switch (s) {
+      case OrderStatus.executed:
+      case OrderStatus.approved:
+        return AppColors.success;
+      case OrderStatus.rejected:
+      case OrderStatus.cancelled:
+        return AppColors.danger;
+      case OrderStatus.partiallyExecuted:
+        return AppColors.warning;
+      case OrderStatus.pending:
+        return AppColors.warning;
+    }
+  }
+
+  static String _statusLabel(OrderStatus s) {
     switch (s) {
       case OrderStatus.executed:
         return 'EXECUTED';
@@ -555,131 +944,11 @@ class _OrderRow extends StatelessWidget {
         return 'PENDING';
     }
   }
-}
 
-// ── Anomaly Detection Panel — reads from AdminStore.masterOrderBook ───────────
-
-class _AnomalyPanel extends StatelessWidget {
-  final AdminStore store;
-  const _AnomalyPanel({required this.store});
-
-  @override
-  Widget build(BuildContext context) {
-    final orders = store.masterOrderBook;
-    final now = DateTime.now();
-    final oneMinAgo = now.subtract(const Duration(minutes: 1));
-
-    final userCounts = <String, int>{};
-    final userVolumes = <String, double>{};
-    for (final o in orders) {
-      if (o.dateTime.isBefore(oneMinAgo)) continue;
-      userCounts[o.userId] = (userCounts[o.userId] ?? 0) + 1;
-      userVolumes[o.userId] =
-          (userVolumes[o.userId] ?? 0) + (o.quantity * o.price);
-    }
-
-    final anomalies = <_Anomaly>[];
-    for (final e in userCounts.entries) {
-      if (e.value > 10) {
-        anomalies.add(_Anomaly(
-            userId: e.key,
-            message: '${e.value} trades in 1 min',
-            severity: 'HIGH'));
-      } else if (e.value > 5) {
-        anomalies.add(_Anomaly(
-            userId: e.key,
-            message: '${e.value} trades in 1 min',
-            severity: 'MEDIUM'));
-      }
-    }
-    for (final e in userVolumes.entries) {
-      if (e.value > 1000000) {
-        anomalies.add(_Anomaly(
-            userId: e.key,
-            message:
-                'Volume ₹${(e.value / 100000).toStringAsFixed(1)}L in 1 min',
-            severity: 'HIGH'));
-      }
-    }
-
-    if (anomalies.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle_outline,
-                color: AppColors.success, size: 32),
-            SizedBox(height: 8),
-            Text('No anomalies detected',
-                style:
-                    TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: anomalies.length,
-      itemBuilder: (context, i) {
-        final a = anomalies[i];
-        final isHigh = a.severity == 'HIGH';
-        final color = isHigh ? AppColors.danger : AppColors.warning;
-        return Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                isHigh ? Icons.warning_rounded : Icons.info_outline,
-                color: color,
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${a.userId.substring(0, a.userId.length.clamp(0, 6))}…',
-                      style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.w700),
-                    ),
-                    Text(a.message,
-                        style: TextStyle(fontSize: 10, color: color)),
-                  ],
-                ),
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(a.severity,
-                    style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        color: color)),
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  static String _fmt(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
+    if (v >= 100000) return '${(v / 100000).toStringAsFixed(1)}L';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(0);
   }
-}
-
-class _Anomaly {
-  final String userId;
-  final String message;
-  final String severity;
-  const _Anomaly(
-      {required this.userId, required this.message, required this.severity});
 }

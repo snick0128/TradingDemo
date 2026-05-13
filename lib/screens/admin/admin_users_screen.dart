@@ -14,10 +14,10 @@ import 'admin_ui.dart';
 // The admin picks one from a dropdown; the selected value is saved.
 
 class _SegmentConfig {
-  final String key;        // Firestore / store key
-  final String label;      // Display label
+  final String key; // Firestore / store key
+  final String label; // Display label
   final List<double> options; // Allowed leverage values (descending)
-  final String unit;       // 'x' or 'per_lot'
+  final String unit; // 'x' or 'per_lot'
 
   const _SegmentConfig({
     required this.key,
@@ -70,16 +70,8 @@ const _kSegments = [
     label: 'Crypto',
     options: [200, 100, 50, 20, 10],
   ),
-  _SegmentConfig(
-    key: 'comex',
-    label: 'COMEX',
-    options: [100, 50, 20, 10, 5],
-  ),
-  _SegmentConfig(
-    key: 'forex',
-    label: 'Forex',
-    options: [100, 50, 20, 10, 5],
-  ),
+  _SegmentConfig(key: 'comex', label: 'COMEX', options: [100, 50, 20, 10, 5]),
+  _SegmentConfig(key: 'forex', label: 'Forex', options: [100, 50, 20, 10, 5]),
   _SegmentConfig(
     key: 'usStocks',
     label: 'US Stocks',
@@ -211,7 +203,10 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                   await admin.disableUser(user.id);
                 }
                 if (context.mounted) {
-                  AppToast.success(context, 'User ${enabled ? "enabled" : "disabled"} successfully.');
+                  AppToast.success(
+                    context,
+                    'User ${enabled ? "enabled" : "disabled"} successfully.',
+                  );
                 }
               } catch (e) {
                 if (context.mounted) {
@@ -306,8 +301,10 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       title: title,
       message: 'User: ${user.clientId}  •  Use + to add, - to deduct',
       hint: 'e.g. 5000 or -2000',
-      keyboardType:
-          const TextInputType.numberWithOptions(decimal: true, signed: true),
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: true,
+        signed: true,
+      ),
       confirmLabel: 'Apply',
       onSubmit: (value) async {
         final amount = double.tryParse(value) ?? 0;
@@ -316,7 +313,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           await onSubmit(amount);
           if (context.mounted) {
             AppToast.success(
-                context, 'Adjustment of ₹$amount applied successfully.');
+              context,
+              'Adjustment of ₹$amount applied successfully.',
+            );
           }
         } catch (e) {
           if (context.mounted) {
@@ -392,8 +391,11 @@ class _LeverageDialogState extends State<_LeverageDialog> {
                       color: AppColors.warning.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(LucideIcons.zap,
-                        size: 18, color: AppColors.warning),
+                    child: const Icon(
+                      LucideIcons.zap,
+                      size: 18,
+                      color: AppColors.warning,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -403,12 +405,16 @@ class _LeverageDialogState extends State<_LeverageDialog> {
                         const Text(
                           'Set Leverage',
                           style: TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 16),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
                         ),
                         Text(
                           '${widget.user.name}  •  ${widget.user.clientId}',
                           style: const TextStyle(
-                              fontSize: 12, color: AppColors.textSecondary),
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                          ),
                         ),
                       ],
                     ),
@@ -430,25 +436,32 @@ class _LeverageDialogState extends State<_LeverageDialog> {
                     // Info banner
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: AppColors.primary.withOpacity(0.06),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                            color: AppColors.primary.withOpacity(0.2)),
+                          color: AppColors.primary.withOpacity(0.2),
+                        ),
                       ),
                       child: Row(
                         children: [
-                          const Icon(LucideIcons.info,
-                              size: 14, color: AppColors.primary),
+                          const Icon(
+                            LucideIcons.info,
+                            size: 14,
+                            color: AppColors.primary,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               'Select the maximum leverage allowed for each segment. '
                               '"Default" uses the platform maximum.',
                               style: TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.primary.withOpacity(0.85)),
+                                fontSize: 11,
+                                color: AppColors.primary.withOpacity(0.85),
+                              ),
                             ),
                           ),
                         ],
@@ -495,7 +508,8 @@ class _LeverageDialogState extends State<_LeverageDialog> {
                     icon: const Icon(LucideIcons.rotateCcw, size: 14),
                     label: const Text('Reset All'),
                     style: TextButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary),
+                      foregroundColor: AppColors.textSecondary,
+                    ),
                   ),
                   const Spacer(),
                   OutlinedButton(
@@ -553,8 +567,7 @@ class _SegmentRow extends StatelessWidget {
         value: null,
         child: Text(
           'Default (${formatOption(seg, seg.options.first)})',
-          style: const TextStyle(
-              fontSize: 13, color: AppColors.textSecondary),
+          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
         ),
       ),
       ...seg.options.map(
@@ -575,8 +588,7 @@ class _SegmentRow extends StatelessWidget {
           flex: 5,
           child: Text(
             seg.label,
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ),
         const SizedBox(width: 12),
@@ -601,7 +613,9 @@ class _SegmentRow extends StatelessWidget {
                 isExpanded: true,
                 icon: const Icon(LucideIcons.chevronDown, size: 14),
                 style: const TextStyle(
-                    fontSize: 13, color: AppColors.textPrimary),
+                  fontSize: 13,
+                  color: AppColors.textPrimary,
+                ),
                 items: items,
                 onChanged: onChanged,
               ),

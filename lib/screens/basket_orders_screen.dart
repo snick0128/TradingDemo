@@ -210,7 +210,8 @@ class _BasketTile extends StatelessWidget {
       AppDialog.success(
         context,
         title: 'Basket Executed',
-        message: 'All orders were submitted successfully.\nReference: ${result.orderId ?? basket.id}',
+        message:
+            'All orders were submitted successfully.\nReference: ${result.orderId ?? basket.id}',
         closeLabel: 'Done',
       );
       return;

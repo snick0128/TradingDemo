@@ -41,12 +41,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      final appScope = context
-          .dependOnInheritedWidgetOfExactType<AppScope>();
+      final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
 
       if (appScope == null) {
-        setState(() => _error =
-            'Firebase is not configured. Please run flutterfire configure.');
+        setState(
+          () => _error =
+              'Firebase is not configured. Please run flutterfire configure.',
+        );
         return;
       }
 
@@ -73,14 +74,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _signInWithGoogle() async {
-    setState(() { _loading = true; _error = ''; });
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
     if (appScope == null) {
-      setState(() { _error = 'Firebase not configured.'; _loading = false; });
+      setState(() {
+        _error = 'Firebase not configured.';
+        _loading = false;
+      });
       return;
     }
     try {
-      final profile = await appScope.authService.signInWithGoogle(expectedRole: 'user');
+      final profile = await appScope.authService.signInWithGoogle(
+        expectedRole: 'user',
+      );
       appScope.notifier!.setUser(profile);
       if (!mounted) return;
       context.go('/app/pin-setup');
@@ -93,12 +102,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   String _friendlyError(String raw) {
-    if (raw.contains('email-already-in-use')) return 'An account with this email already exists.';
-    if (raw.contains('weak-password')) return 'Password is too weak. Use at least 6 characters.';
-    if (raw.contains('invalid-email')) return 'Please enter a valid email address.';
-    if (raw.contains('operation-not-allowed')) return 'Email/password sign-up is not enabled. Enable it in Firebase Console → Authentication → Sign-in method.';
-    if (raw.contains('network-request-failed')) return 'Network error. Check your internet connection.';
-    if (raw.contains('AppScope missing')) return 'App not configured for Firebase. Please restart.';
+    if (raw.contains('email-already-in-use'))
+      return 'An account with this email already exists.';
+    if (raw.contains('weak-password'))
+      return 'Password is too weak. Use at least 6 characters.';
+    if (raw.contains('invalid-email'))
+      return 'Please enter a valid email address.';
+    if (raw.contains('operation-not-allowed'))
+      return 'Email/password sign-up is not enabled. Enable it in Firebase Console → Authentication → Sign-in method.';
+    if (raw.contains('network-request-failed'))
+      return 'Network error. Check your internet connection.';
+    if (raw.contains('AppScope missing'))
+      return 'App not configured for Firebase. Please restart.';
     return raw; // show raw error so we can debug
   }
 
@@ -214,19 +229,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
             controller: _passwordController,
             obscureText: _obscurePassword,
             style: const TextStyle(color: Colors.black),
-            decoration:
-                _inputDecoration('Min. 6 characters', LucideIcons.lock)
-                    .copyWith(
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword ? LucideIcons.eyeOff : LucideIcons.eye,
-                  size: 18,
-                  color: AppColors.textSecondary,
+            decoration: _inputDecoration('Min. 6 characters', LucideIcons.lock)
+                .copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword ? LucideIcons.eyeOff : LucideIcons.eye,
+                      size: 18,
+                      color: AppColors.textSecondary,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                  ),
                 ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
-              ),
-            ),
             validator: (v) {
               if (v == null || v.isEmpty) return 'Password is required';
               if (v.length < 6) return 'Password must be at least 6 characters';
@@ -244,13 +258,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.alertCircle,
-                      size: 14, color: AppColors.danger),
+                  const Icon(
+                    LucideIcons.alertCircle,
+                    size: 14,
+                    color: AppColors.danger,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(_error,
-                        style: const TextStyle(
-                            color: AppColors.danger, fontSize: 13)),
+                    child: Text(
+                      _error,
+                      style: const TextStyle(
+                        color: AppColors.danger,
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -274,12 +295,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       height: 20,
                       width: 20,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Text(
                       'Create Account',
                       style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
             ),
           ),
@@ -289,8 +314,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             children: [
               const Text(
                 'Already have an account? ',
-                style:
-                    TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
               GestureDetector(
                 onTap: () => context.go('/app/login'),
@@ -311,7 +335,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const Expanded(child: Divider()),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text('or', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                child: Text(
+                  'or',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
               ),
               const Expanded(child: Divider()),
             ],
@@ -325,19 +355,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 foregroundColor: Colors.black87,
                 backgroundColor: Colors.white,
                 side: const BorderSide(color: Color(0xFFDDDDDD)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Image.network(
                     'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
-                    height: 20, width: 20,
-                    errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata, size: 22, color: Colors.red),
+                    height: 20,
+                    width: 20,
+                    errorBuilder: (_, __, ___) => const Icon(
+                      Icons.g_mobiledata,
+                      size: 22,
+                      color: Colors.red,
+                    ),
                   ),
                   const SizedBox(width: 10),
-                  const Text('Continue with Google',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87)),
+                  const Text(
+                    'Continue with Google',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -348,13 +391,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _label(String text) => Text(
-        text,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: AppColors.textPrimary,
-        ),
-      );
+    text,
+    style: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      color: AppColors.textPrimary,
+    ),
+  );
 
   InputDecoration _inputDecoration(String hint, IconData icon) =>
       InputDecoration(
@@ -382,8 +425,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: AppColors.danger, width: 1.5),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
       );
 }
 
@@ -415,33 +460,41 @@ class _RegisterBrandingPanel extends StatelessWidget {
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(LucideIcons.candlestickChart,
-                        color: Colors.white, size: 24),
+                    child: const Icon(
+                      LucideIcons.candlestickChart,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Trade Kosh',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700)),
+                  const Text(
+                    'Trade Kosh',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
               const Spacer(),
               const Text(
                 'Join thousands\nof traders',
                 style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 40,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2),
+                  color: Colors.white,
+                  fontSize: 40,
+                  fontWeight: FontWeight.w800,
+                  height: 1.2,
+                ),
               ),
               const SizedBox(height: 20),
               Text(
                 'Start trading Indian equities, F&O,\nand more with zero hassle.',
                 style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
-                    fontSize: 16,
-                    height: 1.6),
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 16,
+                  height: 1.6,
+                ),
               ),
               const SizedBox(height: 48),
               _row(LucideIcons.trendingUp, 'Live market data'),
@@ -458,24 +511,27 @@ class _RegisterBrandingPanel extends StatelessWidget {
   }
 
   Widget _row(IconData icon, String text) => Row(
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: Colors.white, size: 16),
-          ),
-          const SizedBox(width: 12),
-          Text(text,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500)),
-        ],
-      );
+    children: [
+      Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: Colors.white, size: 16),
+      ),
+      const SizedBox(width: 12),
+      Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    ],
+  );
 }
 
 class _MobileRegisterHeader extends StatelessWidget {
@@ -507,27 +563,40 @@ class _MobileRegisterHeader extends StatelessWidget {
                   color: Colors.white.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(LucideIcons.candlestickChart,
-                    color: Colors.white, size: 20),
+                child: const Icon(
+                  LucideIcons.candlestickChart,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
-              const Text('Trade Kosh',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700)),
+              const Text(
+                'Trade Kosh',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 24),
-          const Text('Create Account',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800)),
+          const Text(
+            'Create Account',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           const SizedBox(height: 6),
-          Text('Start your trading journey today',
-              style: TextStyle(
-                  color: Colors.white.withOpacity(0.8), fontSize: 15)),
+          Text(
+            'Start your trading journey today',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 15,
+            ),
+          ),
         ],
       ),
     );

@@ -21,8 +21,8 @@ class ZerodhaTradingRepository implements TradingRepository {
   ZerodhaTradingRepository({
     required String apiKey,
     required String accessToken,
-  })  : _apiKey = apiKey,
-        _accessToken = accessToken;
+  }) : _apiKey = apiKey,
+       _accessToken = accessToken;
 
   // ─── Headers ──────────────────────────────────────────────────────────────
 
@@ -61,7 +61,9 @@ class ZerodhaTradingRepository implements TradingRepository {
     required DateTime to,
   }) {
     // GET /instruments/historical/{instrument_token}/{interval}
-    throw UnimplementedError('Implement: GET $_baseUrl/instruments/historical/...');
+    throw UnimplementedError(
+      'Implement: GET $_baseUrl/instruments/historical/...',
+    );
   }
 
   // ─── Orders ───────────────────────────────────────────────────────────────
@@ -85,7 +87,9 @@ class ZerodhaTradingRepository implements TradingRepository {
   @override
   Future<bool> cancelOrder(String orderId) {
     // DELETE /orders/{variety}/{order_id}
-    throw UnimplementedError('Implement: DELETE $_baseUrl/orders/regular/$orderId');
+    throw UnimplementedError(
+      'Implement: DELETE $_baseUrl/orders/regular/$orderId',
+    );
   }
 
   @override
@@ -96,7 +100,9 @@ class ZerodhaTradingRepository implements TradingRepository {
     double? triggerPrice,
   }) {
     // PUT /orders/{variety}/{order_id}
-    throw UnimplementedError('Implement: PUT $_baseUrl/orders/regular/$orderId');
+    throw UnimplementedError(
+      'Implement: PUT $_baseUrl/orders/regular/$orderId',
+    );
   }
 
   @override
@@ -146,7 +152,9 @@ class ZerodhaTradingRepository implements TradingRepository {
   @override
   Future<List<Transaction>> getTransactions() {
     // Kite doesn't have a direct ledger API — use reports or compute from orders
-    throw UnimplementedError('Implement: derive from order history or use Kite reports API');
+    throw UnimplementedError(
+      'Implement: derive from order history or use Kite reports API',
+    );
   }
 
   // ─── GTT ──────────────────────────────────────────────────────────────────

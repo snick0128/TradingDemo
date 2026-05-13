@@ -21,7 +21,9 @@ enum WatchlistSort { symbol, price, change, volume }
 // ─── Pure logic helper (also used by property test) ──────────────────────────
 
 Color priceChangeColor(double changePercentage) {
-  return changePercentage >= 0 ? const Color(0xFF00C853) : const Color(0xFFD50000);
+  return changePercentage >= 0
+      ? const Color(0xFF00C853)
+      : const Color(0xFFD50000);
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -192,7 +194,9 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           final decoded = jsonDecode(controller.text) as Map<String, dynamic>;
           final symbols = (decoded['symbols'] as List).cast<String>();
           setState(() {
-            _watchlists[tabIndex] = _watchlists[tabIndex].copyWith(symbols: symbols);
+            _watchlists[tabIndex] = _watchlists[tabIndex].copyWith(
+              symbols: symbols,
+            );
           });
         } catch (_) {
           AppToast.error(context, 'Invalid JSON format');
@@ -240,8 +244,14 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           unselectedLabelColor: const Color(0xFF757575),
           indicatorColor: const Color(0xFF1565C0),
           indicatorWeight: 2,
-          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-          unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          labelStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
           tabs: _watchlists.map((wl) => Tab(text: wl.name)).toList(),
         ),
         actions: [
@@ -253,7 +263,10 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
             itemBuilder: (_) => const [
               PopupMenuItem(value: WatchlistSort.symbol, child: Text('Symbol')),
               PopupMenuItem(value: WatchlistSort.price, child: Text('Price')),
-              PopupMenuItem(value: WatchlistSort.change, child: Text('Change %')),
+              PopupMenuItem(
+                value: WatchlistSort.change,
+                child: Text('Change %'),
+              ),
               PopupMenuItem(value: WatchlistSort.volume, child: Text('Volume')),
             ],
           ),
@@ -364,9 +377,11 @@ class _AddStockSheetState extends State<_AddStockSheet> {
     if (_query.isEmpty) return widget.allStocks;
     final q = _query.toLowerCase();
     return widget.allStocks
-        .where((s) =>
-            s.symbol.toLowerCase().contains(q) ||
-            s.name.toLowerCase().contains(q))
+        .where(
+          (s) =>
+              s.symbol.toLowerCase().contains(q) ||
+              s.name.toLowerCase().contains(q),
+        )
         .toList();
   }
 
@@ -402,8 +417,10 @@ class _AddStockSheetState extends State<_AddStockSheet> {
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
               child: Row(
                 children: [
-                  const Text('Add to Watchlist',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                  const Text(
+                    'Add to Watchlist',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
                   const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.close, size: 20),
@@ -420,8 +437,15 @@ class _AddStockSheetState extends State<_AddStockSheet> {
                 onChanged: (v) => setState(() => _query = v),
                 decoration: InputDecoration(
                   hintText: 'Search stocks, eg. INFY, RELIANCE',
-                  hintStyle: const TextStyle(fontSize: 14, color: Color(0xFF9E9E9E)),
-                  prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF757575)),
+                  hintStyle: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF9E9E9E),
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search,
+                    size: 20,
+                    color: Color(0xFF757575),
+                  ),
                   suffixIcon: _query.isNotEmpty
                       ? IconButton(
                           icon: const Icon(Icons.close, size: 16),
@@ -437,7 +461,10 @@ class _AddStockSheetState extends State<_AddStockSheet> {
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
               ),
             ),
@@ -446,7 +473,9 @@ class _AddStockSheetState extends State<_AddStockSheet> {
               child: _filtered.isEmpty
                   ? Center(
                       child: Text(
-                        _query.isEmpty ? 'No stocks available' : 'No results for "$_query"',
+                        _query.isEmpty
+                            ? 'No stocks available'
+                            : 'No results for "$_query"',
                         style: const TextStyle(color: Color(0xFF757575)),
                       ),
                     )
@@ -455,37 +484,76 @@ class _AddStockSheetState extends State<_AddStockSheet> {
                       itemCount: _filtered.length,
                       itemBuilder: (_, i) {
                         final stock = _filtered[i];
-                        final alreadyAdded = widget.currentSymbols.contains(stock.symbol);
+                        final alreadyAdded = widget.currentSymbols.contains(
+                          stock.symbol,
+                        );
                         return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          title: Text(stock.symbol,
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF0D0D0D))),
-                          subtitle: Text(stock.name,
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF757575))),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 4,
+                          ),
+                          title: Text(
+                            stock.symbol,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF0D0D0D),
+                            ),
+                          ),
+                          subtitle: Text(
+                            stock.name,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF757575),
+                            ),
+                          ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFE3F2FD),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
-                                child: Text(stock.exchange,
-                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1565C0))),
+                                child: Text(
+                                  stock.exchange,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1565C0),
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 8),
                               alreadyAdded
-                                  ? const Icon(Icons.check_circle, size: 20, color: Color(0xFF00C853))
-                                  : const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF1565C0)),
+                                  ? const Icon(
+                                      Icons.check_circle,
+                                      size: 20,
+                                      color: Color(0xFF00C853),
+                                    )
+                                  : const Icon(
+                                      Icons.add_circle_outline,
+                                      size: 20,
+                                      color: Color(0xFF1565C0),
+                                    ),
                             ],
                           ),
                           onTap: alreadyAdded
-                              ? () => AppToast.info(context, '${stock.symbol} already in watchlist')
+                              ? () => AppToast.info(
+                                  context,
+                                  '${stock.symbol} already in watchlist',
+                                )
                               : () {
                                   widget.onAdd(stock.symbol);
                                   Navigator.pop(ctx);
-                                  AppToast.success(context, '${stock.symbol} added to watchlist');
+                                  AppToast.success(
+                                    context,
+                                    '${stock.symbol} added to watchlist',
+                                  );
                                 },
                         );
                       },
@@ -537,10 +605,12 @@ class _WatchlistTabState extends State<_WatchlistTab> {
     final filtered = _query.isEmpty
         ? widget.stocks
         : widget.stocks
-            .where((s) =>
-                s.symbol.toLowerCase().contains(_query.toLowerCase()) ||
-                s.name.toLowerCase().contains(_query.toLowerCase()))
-            .toList();
+              .where(
+                (s) =>
+                    s.symbol.toLowerCase().contains(_query.toLowerCase()) ||
+                    s.name.toLowerCase().contains(_query.toLowerCase()),
+              )
+              .toList();
 
     return Column(
       children: [
@@ -551,11 +621,22 @@ class _WatchlistTabState extends State<_WatchlistTab> {
             onChanged: (v) => setState(() => _query = v),
             decoration: InputDecoration(
               hintText: 'Search in watchlist...',
-              hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9E9E9E)),
-              prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF757575)),
+              hintStyle: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF9E9E9E),
+              ),
+              prefixIcon: const Icon(
+                Icons.search,
+                size: 18,
+                color: Color(0xFF757575),
+              ),
               suffixIcon: _query.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.close, size: 16, color: Color(0xFF757575)),
+                      icon: const Icon(
+                        Icons.close,
+                        size: 16,
+                        color: Color(0xFF757575),
+                      ),
                       onPressed: () {
                         _searchController.clear();
                         setState(() => _query = '');
@@ -568,7 +649,10 @@ class _WatchlistTabState extends State<_WatchlistTab> {
                 borderRadius: BorderRadius.circular(10),
                 borderSide: BorderSide.none,
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
               isDense: true,
             ),
           ),
@@ -579,14 +663,21 @@ class _WatchlistTabState extends State<_WatchlistTab> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.playlist_add, size: 48, color: Color(0xFFE0E0E0)),
+                      const Icon(
+                        Icons.playlist_add,
+                        size: 48,
+                        color: Color(0xFFE0E0E0),
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         _query.isEmpty
                             ? 'No stocks in this watchlist.\nTap + to add stocks.'
                             : 'No results for "$_query"',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Color(0xFF757575), fontSize: 14),
+                        style: const TextStyle(
+                          color: Color(0xFF757575),
+                          fontSize: 14,
+                        ),
                       ),
                     ],
                   ),
@@ -658,41 +749,92 @@ class _StockRow extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
               child: Row(
                 children: [
-                  Text(stock.symbol,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  Text(
+                    stock.symbol,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  Text('₹${stock.currentPrice.toStringAsFixed(2)}',
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF757575))),
+                  Text(
+                    '₹${stock.currentPrice.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF757575),
+                    ),
+                  ),
                 ],
               ),
             ),
             const Divider(height: 1),
             ListTile(
-              leading: const Icon(Icons.trending_up, color: Color(0xFF00C853), size: 22),
-              title: const Text('Buy',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFF00C853))),
-              onTap: () { Navigator.pop(context); onBuy(); },
+              leading: const Icon(
+                Icons.trending_up,
+                color: Color(0xFF00C853),
+                size: 22,
+              ),
+              title: const Text(
+                'Buy',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF00C853),
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                onBuy();
+              },
             ),
             const Divider(height: 1, indent: 16, endIndent: 16),
             ListTile(
-              leading: const Icon(Icons.trending_down, color: Color(0xFFD50000), size: 22),
-              title: const Text('Sell',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFFD50000))),
-              onTap: () { Navigator.pop(context); onSell(); },
+              leading: const Icon(
+                Icons.trending_down,
+                color: Color(0xFFD50000),
+                size: 22,
+              ),
+              title: const Text(
+                'Sell',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFFD50000),
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                onSell();
+              },
             ),
             const Divider(height: 1, indent: 16, endIndent: 16),
             ListTile(
-              leading: const Icon(Icons.notifications_outlined, color: Color(0xFF757575), size: 22),
-              title: const Text('Set Alert',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              leading: const Icon(
+                Icons.notifications_outlined,
+                color: Color(0xFF757575),
+                size: 22,
+              ),
+              title: const Text(
+                'Set Alert',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
               onTap: () => Navigator.pop(context),
             ),
             const Divider(height: 1, indent: 16, endIndent: 16),
             ListTile(
-              leading: const Icon(Icons.delete_outline, color: Color(0xFF757575), size: 22),
-              title: const Text('Remove from watchlist',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-              onTap: () { Navigator.pop(context); onRemove(); },
+              leading: const Icon(
+                Icons.delete_outline,
+                color: Color(0xFF757575),
+                size: 22,
+              ),
+              title: const Text(
+                'Remove from watchlist',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                onRemove();
+              },
             ),
             const SizedBox(height: 8),
           ],
@@ -704,7 +846,9 @@ class _StockRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isPos = stock.changePercentage >= 0;
-    final changeColor = isPos ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
+    final changeColor = isPos
+        ? const Color(0xFF2E7D32)
+        : const Color(0xFFC62828);
     final changeBg = isPos ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
     final arrow = isPos ? '▲' : '▼';
     final sign = isPos ? '+' : '';
@@ -718,7 +862,9 @@ class _StockRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: const BoxDecoration(
             color: Colors.white,
-            border: Border(bottom: BorderSide(color: Color(0xFFF5F5F5), width: 1)),
+            border: Border(
+              bottom: BorderSide(color: Color(0xFFF5F5F5), width: 1),
+            ),
           ),
           child: Row(
             children: [
@@ -726,7 +872,11 @@ class _StockRow extends StatelessWidget {
                 index: index,
                 child: const Padding(
                   padding: EdgeInsets.only(right: 12),
-                  child: Icon(Icons.drag_handle, size: 20, color: Color(0xFFBDBDBD)),
+                  child: Icon(
+                    Icons.drag_handle,
+                    size: 20,
+                    color: Color(0xFFBDBDBD),
+                  ),
                 ),
               ),
               Expanded(
@@ -734,16 +884,27 @@ class _StockRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(stock.symbol,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFF0D0D0D))),
+                    Text(
+                      stock.symbol,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF0D0D0D),
+                      ),
+                    ),
                     const SizedBox(height: 2),
                     // For MCX futures: show expiry date instead of just name
                     if (stock.isFutures && stock.expiry != null)
                       _ExpirySubtitle(stock: stock)
                     else
-                      Text(stock.name,
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
-                          overflow: TextOverflow.ellipsis),
+                      Text(
+                        stock.name,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF757575),
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                   ],
                 ),
               ),
@@ -765,14 +926,21 @@ class _StockRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: changeBg,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       '$arrow $sign${stock.changePercentage.toStringAsFixed(2)}%',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: changeColor),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: changeColor,
+                      ),
                     ),
                   ),
                 ],
@@ -794,9 +962,21 @@ class _ExpirySubtitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expiry = stock.expiry!;
-    final days   = stock.daysToExpiry!;
-    final months = const ['Jan','Feb','Mar','Apr','May','Jun',
-                          'Jul','Aug','Sep','Oct','Nov','Dec'];
+    final days = stock.daysToExpiry!;
+    final months = const [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     final dateStr =
         '${expiry.day.toString().padLeft(2, '0')} ${months[expiry.month - 1]} ${expiry.year}';
 

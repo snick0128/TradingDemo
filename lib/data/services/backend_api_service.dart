@@ -12,8 +12,7 @@ import '../../config/backend_config.dart';
 ///
 /// All methods return parsed Maps/Lists — callers convert to domain models.
 class BackendApiService {
-  BackendApiService({String? baseUrl})
-      : baseUrl = baseUrl ?? _defaultBaseUrl;
+  BackendApiService({String? baseUrl}) : baseUrl = baseUrl ?? _defaultBaseUrl;
 
   /// Default base URL — reads from BackendConfig so it always matches the
   /// configured environment (local or production).
@@ -21,40 +20,90 @@ class BackendApiService {
 
   final String baseUrl;
 
+  // ── In-memory cache ─────────────────────────────────────────────────────────
+
+  static final Map<String, _CacheEntry> _cache = {};
+  static final Map<String, Future<Map<String, dynamic>>> _inFlightGets = {};
+
+  static const _shortTtl = Duration(seconds: 30);
+  static const _mediumTtl = Duration(minutes: 2);
+  static const _longTtl = Duration(minutes: 5);
+
+  /// Remove all cached responses (e.g. after placing an order).
+  static void clearCache() => _cache.clear();
+
+  /// Invalidate all cached paths that start with [prefix].
+  static void invalidate(String prefix) =>
+      _cache.removeWhere((k, _) => k.startsWith(prefix));
+
   // ── HTTP helpers ────────────────────────────────────────────────────────────
 
   Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
 
-  Future<Map<String, dynamic>> _get(String path) async {
+  Future<Map<String, dynamic>> _get(String path, {Duration? ttl}) async {
+    final effectiveTtl = ttl ?? _shortTtl;
+    final now = DateTime.now();
+    final cached = _cache[path];
+    if (cached != null && now.isBefore(cached.expiry)) {
+      return cached.data;
+    }
+
     final uri = Uri.parse('$baseUrl$path');
+    final pending = _inFlightGets[path];
+    if (pending != null) return pending;
+
     print('[BackendAPI] GET: $uri');
-    try {
-      final response = await http.get(uri, headers: _headers)
+    final request = () async {
+      final response = await http
+          .get(uri, headers: _headers)
           .timeout(const Duration(seconds: 10));
       print('[BackendAPI] Response: ${response.statusCode} for $path');
-      return _parse(response);
+      final result = _parse(response);
+      _cache[path] = _CacheEntry(data: result, expiry: now.add(effectiveTtl));
+      return result;
+    }();
+
+    _inFlightGets[path] = request;
+    try {
+      return await request;
     } on TimeoutException {
-      throw BackendException('The request took too long. Please check your connection and try again.');
+      if (cached != null) return cached.data; // serve stale on timeout
+      throw BackendException(
+        'The request took too long. Please check your connection and try again.',
+      );
     } catch (e) {
-      throw BackendException('Could not reach the server. Please check your connection and try again.');
+      if (cached != null) return cached.data; // serve stale on network error
+      throw BackendException(
+        'Could not reach the server. Please check your connection and try again.',
+      );
+    } finally {
+      _inFlightGets.remove(path);
     }
   }
 
   Future<Map<String, dynamic>> _post(
-      String path, Map<String, dynamic> body) async {
+    String path,
+    Map<String, dynamic> body,
+  ) async {
     final uri = Uri.parse('$baseUrl$path');
     try {
       final response = await http
           .post(uri, headers: _headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 30)); // increased from 15s — Render cold starts + Firestore reads
+          .timeout(
+            const Duration(seconds: 30),
+          ); // increased from 15s — Render cold starts + Firestore reads
       return _parse(response);
     } on TimeoutException {
-      throw BackendException('The request took too long. Please check your connection and try again.');
+      throw BackendException(
+        'The request took too long. Please check your connection and try again.',
+      );
     } catch (e) {
-      throw BackendException('Could not reach the server. Please check your connection and try again.');
+      throw BackendException(
+        'Could not reach the server. Please check your connection and try again.',
+      );
     }
   }
 
@@ -71,7 +120,9 @@ class BackendApiService {
 
   // ── Health ──────────────────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>> getHealth() => _get('/health');
+  // Cache the health ping for 60s — it's purely a warmup call, not live data.
+  Future<Map<String, dynamic>> getHealth() =>
+      _get('/health', ttl: const Duration(seconds: 60));
 
   // ── Market data ─────────────────────────────────────────────────────────────
 
@@ -115,7 +166,8 @@ class BackendApiService {
     if (token != null && token.isNotEmpty) {
       path += '&token=${Uri.encodeComponent(token)}';
     }
-    final res = await _get(path);
+    // Historical candles change infrequently — cache for 5 minutes
+    final res = await _get(path, ttl: _longTtl);
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 
@@ -135,18 +187,25 @@ class BackendApiService {
     required String userId,
     required String symbol,
     required int qty,
-    required String type,       // 'BUY' or 'SELL'
+    required String type, // 'BUY' or 'SELL'
     String productType = 'MIS', // 'MIS' | 'CNC' | 'NRML'
-    String exchange = 'NSE',    // 'NSE' | 'MCX' | 'BSE' etc.
+    String exchange = 'NSE', // 'NSE' | 'MCX' | 'BSE' etc.
+    String? clientRequestId,
   }) async {
-    return _post('/orders', {
-      'userId':      userId,
-      'symbol':      symbol,
-      'qty':         qty,
-      'type':        type,
+    final result = await _post('/orders', {
+      'userId': userId,
+      'symbol': symbol,
+      'qty': qty,
+      'type': type,
       'productType': productType,
-      'exchange':    exchange,
+      'exchange': exchange,
+      if (clientRequestId != null) 'clientRequestId': clientRequestId,
     });
+    // Invalidate stale portfolio/order caches after a successful order
+    invalidate('/orders');
+    invalidate('/positions');
+    invalidate('/market/stock');
+    return result;
   }
 
   /// Get order history for a user.
@@ -222,6 +281,7 @@ class BackendApiService {
     final encoded = Uri.encodeComponent(query);
     final res = await _get(
       '/derivatives/search?q=$encoded&exchange=$exchange',
+      ttl: _mediumTtl,
     );
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
@@ -232,13 +292,14 @@ class BackendApiService {
     String query, {
     String? exchange,
     int limit = 40,
+    int offset = 0,
   }) async {
     final encoded = Uri.encodeComponent(query);
-    var path = '/search?q=$encoded&limit=$limit';
+    var path = '/search?q=$encoded&limit=$limit&offset=$offset';
     if (exchange != null && exchange != 'ALL') {
       path += '&exchange=${Uri.encodeComponent(exchange)}';
     }
-    final res = await _get(path);
+    final res = await _get(path, ttl: _mediumTtl);
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 
@@ -267,6 +328,14 @@ class BackendApiService {
     final res = await _get('/ipos/$id');
     return res['data'] as Map<String, dynamic>;
   }
+}
+
+// ── Cache entry ───────────────────────────────────────────────────────────────
+
+class _CacheEntry {
+  final Map<String, dynamic> data;
+  final DateTime expiry;
+  const _CacheEntry({required this.data, required this.expiry});
 }
 
 // ── Exception ─────────────────────────────────────────────────────────────────

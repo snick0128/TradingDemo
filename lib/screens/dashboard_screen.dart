@@ -25,11 +25,12 @@ import 'market_watch_screen.dart';
 import 'orders_screen.dart';
 import 'portfolio_screen.dart';
 import 'stock_detail_screen.dart';
+import 'stock_guide_screen.dart';
 
 // ─── Design tokens (spec-compliant) ──────────────────────────────────────────
 const _kProfit = Color(0xFF00C853);
-const _kLoss   = Color(0xFFD50000);
-const _kCta    = Color(0xFF1565C0);
+const _kLoss = Color(0xFFD50000);
+const _kCta = Color(0xFF1565C0);
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -266,7 +267,7 @@ class _NetWorthCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Net Worth',
+            'Available Balance',
             style: TextStyle(
               color: Colors.white70,
               fontSize: 13,
@@ -275,7 +276,7 @@ class _NetWorthCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '₹${_fmt(netWorth)}',
+            '₹${balance.toStringAsFixed(2)}',
             style: GoogleFonts.inter(
               color: Colors.white,
               fontSize: 26,
@@ -302,21 +303,17 @@ class _NetWorthCard extends StatelessWidget {
           Row(
             children: [
               const Text(
-                'Available Cash  ',
+                'Net Worth  ',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
               Text(
-                '₹${balance.toStringAsFixed(2)}',
+                '₹${_fmt(netWorth)}',
                 style: GoogleFonts.inter(
                   color: Colors.white,
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
-              ),
-              const Text(
-                '  (cash only)',
-                style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
             ],
           ),
@@ -340,7 +337,7 @@ class _QuickActionsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = [
       (LucideIcons.barChart2, 'Markets', AppColors.primary),
-      (LucideIcons.listTodo, 'Orders', const Color(0xFF1565C0)),
+      (LucideIcons.bookOpen, 'Courses', const Color(0xFF6A1B9A)), // Purple for learning
       (LucideIcons.fileText, 'IPO', AppColors.warning),
       (LucideIcons.moreHorizontal, 'More', AppColors.textSecondary),
     ];
@@ -358,10 +355,10 @@ class _QuickActionsRow extends StatelessWidget {
                 context,
                 MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
               );
-            } else if (a.$2 == 'Orders') {
+            } else if (a.$2 == 'Courses') {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                MaterialPageRoute(builder: (_) => const StockGuideScreen()),
               );
             } else if (a.$2 == 'IPO') {
               Navigator.push(
@@ -438,6 +435,12 @@ class _QuickActionsRow extends StatelessWidget {
               'Universal Search',
               const UniversalSearchScreen(),
               icon: LucideIcons.search,
+            ),
+            _sheetItem(
+              ctx,
+              'Stock Guide',
+              const StockGuideScreen(),
+              icon: LucideIcons.bookOpen,
             ),
           ],
         ),
@@ -652,7 +655,8 @@ class _PositionRow extends StatelessWidget {
     final isPos = p.unrealizedPnl >= 0;
     final productLabel = p.product == ProductType.mis ? 'MIS' : 'CNC';
     // Never show N/A — use symbol as fallback for name
-    final displayName = (p.name.isNotEmpty && p.name != 'N/A' && p.name != p.symbol)
+    final displayName =
+        (p.name.isNotEmpty && p.name != 'N/A' && p.name != p.symbol)
         ? p.name
         : p.symbol;
 
@@ -744,9 +748,13 @@ class _IndicesRow extends StatelessWidget {
     final indices = <_IndexData>[];
     const indexSymbols = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTYBANK'];
     for (final sym in indexSymbols) {
-      final match = stocks.where((s) => s.symbol.toUpperCase().contains(sym)).firstOrNull;
+      final match = stocks
+          .where((s) => s.symbol.toUpperCase().contains(sym))
+          .firstOrNull;
       if (match != null) {
-        indices.add(_IndexData(match.symbol, match.currentPrice, match.changePercentage));
+        indices.add(
+          _IndexData(match.symbol, match.currentPrice, match.changePercentage),
+        );
       }
     }
     // If no index symbols found, use first 3 stocks as proxy
@@ -865,7 +873,9 @@ class _MoverCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppColors.cardRadius),
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
+        MaterialPageRoute(
+          builder: (_) => StockDetailScreen(symbol: stock.symbol),
+        ),
       ),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -969,7 +979,9 @@ class _WatchlistPreviewRow extends StatelessWidget {
     return InkWell(
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
+        MaterialPageRoute(
+          builder: (_) => StockDetailScreen(symbol: stock.symbol),
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1111,8 +1123,11 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
             child: Row(
               children: [
-                const Icon(LucideIcons.shieldCheck,
-                    size: 15, color: AppColors.primary),
+                const Icon(
+                  LucideIcons.shieldCheck,
+                  size: 15,
+                  color: AppColors.primary,
+                ),
                 const SizedBox(width: 8),
                 const Text(
                   'Margin & Leverage Limits',
@@ -1124,8 +1139,10 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
                 ),
                 const Spacer(),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(6),
@@ -1147,10 +1164,7 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Text(
               'These limits are set by the platform admin and cannot be changed.',
-              style: TextStyle(
-                fontSize: 11,
-                color: AppColors.textSecondary,
-              ),
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
             ),
           ),
           const Divider(height: 1),
@@ -1191,7 +1205,9 @@ class _CategoryLimitRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEnabled = settings.enabled;
-    final statusColor = isEnabled ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final statusColor = isEnabled
+        ? const Color(0xFF00C853)
+        : const Color(0xFFD50000);
     final statusLabel = isEnabled ? 'Open' : 'Closed';
 
     return Padding(

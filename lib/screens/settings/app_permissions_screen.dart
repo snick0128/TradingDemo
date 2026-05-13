@@ -71,19 +71,23 @@ class AppPermissionsScreen extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.warning.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: AppColors.warning.withOpacity(0.3)),
+                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
               ),
               child: const Row(
                 children: [
-                  Icon(LucideIcons.shieldAlert,
-                      size: 16, color: AppColors.warning),
+                  Icon(
+                    LucideIcons.shieldAlert,
+                    size: 16,
+                    color: AppColors.warning,
+                  ),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       'Manage permissions from your device settings. Some features may not work without required permissions.',
                       style: TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary),
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
@@ -102,23 +106,32 @@ class AppPermissionsScreen extends StatelessWidget {
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: (perm.isGranted
-                                    ? AppColors.success
-                                    : AppColors.danger)
-                                .withOpacity(0.1),
+                            color:
+                                (perm.isGranted
+                                        ? AppColors.success
+                                        : AppColors.danger)
+                                    .withOpacity(0.1),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: Icon(perm.icon,
-                              size: 18,
-                              color: perm.isGranted
-                                  ? AppColors.success
-                                  : AppColors.danger),
+                          child: Icon(
+                            perm.icon,
+                            size: 18,
+                            color: perm.isGranted
+                                ? AppColors.success
+                                : AppColors.danger,
+                          ),
                         ),
-                        title: Text(perm.name,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text(perm.description,
-                            style: const TextStyle(fontSize: 12)),
+                        title: Text(
+                          perm.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        subtitle: Text(
+                          perm.description,
+                          style: const TextStyle(fontSize: 12),
+                        ),
                         trailing: StatusBadge(
                           label: perm.isGranted ? 'Granted' : 'Denied',
                           color: perm.isGranted

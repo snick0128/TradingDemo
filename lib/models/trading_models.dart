@@ -54,6 +54,79 @@ enum TransactionType {
   exchangeCharges,
 }
 
+// ─── InstrumentType ───────────────────────────────────────────────────────────
+
+/// Classifies what kind of financial instrument a [Stock] represents.
+/// Set via [TradingStore.registerSearchResult] using the Angel One
+/// `instrumentType` field returned by the search API.
+enum InstrumentType {
+  equity,        // NSE/BSE cash equity — RELIANCE, TCS, SBIN
+  marketIndex,   // Market index — NIFTY, BANKNIFTY, SENSEX
+  etf,           // Exchange-traded fund — GOLDBEES, NIFTYBEES
+  futuresStkIdx, // NSE stock/index futures — RELIANCE25JUNFUT, NIFTY25JUNFUT
+  futuresCom,    // MCX commodity futures — GOLD, SILVER, CRUDEOIL
+  optionCE,      // Call option — NIFTY25JUN24000CE
+  optionPE,      // Put option — NIFTY25JUN24000PE
+  currency,      // CDS currency pair — USDINR
+  unknown,       // Fallback — exchange-based heuristics apply
+}
+
+extension InstrumentTypeX on InstrumentType {
+  /// Parse an Angel One `instrumentType` string into an [InstrumentType].
+  /// Handles both the `/search` endpoint (`type`) and the
+  /// `/derivatives/search` endpoint (`instrumentType`).
+  static InstrumentType fromAngelOne(String raw, {String symbol = ''}) {
+    switch (raw.toUpperCase()) {
+      case 'EQ':
+        return InstrumentType.equity;
+      case 'ETF':
+      case 'ETFS':
+        return InstrumentType.etf;
+      case 'INDEX':
+      case 'UNDIND':
+        return InstrumentType.marketIndex;
+      case 'FUTSTK':
+      case 'FUTIDX':
+        return InstrumentType.futuresStkIdx;
+      case 'FUTCOM':
+        return InstrumentType.futuresCom;
+      case 'FUTCUR':
+        return InstrumentType.currency;
+      case 'OPTSTK':
+      case 'OPTIDX':
+        final upper = symbol.toUpperCase();
+        if (upper.endsWith('CE')) return InstrumentType.optionCE;
+        if (upper.endsWith('PE')) return InstrumentType.optionPE;
+        return InstrumentType.optionCE; // safe default
+      case 'OPTCUR':
+        final upper = symbol.toUpperCase();
+        if (upper.endsWith('PE')) return InstrumentType.optionPE;
+        return InstrumentType.optionCE;
+      default:
+        return InstrumentType.unknown;
+    }
+  }
+
+  bool get isDerivative =>
+      this == InstrumentType.futuresStkIdx ||
+      this == InstrumentType.futuresCom ||
+      this == InstrumentType.optionCE ||
+      this == InstrumentType.optionPE;
+
+  /// True for instruments that can have an option chain (index + large-cap equity).
+  bool get hasFnoChain =>
+      this == InstrumentType.equity ||
+      this == InstrumentType.marketIndex ||
+      this == InstrumentType.unknown;
+
+  bool get isOption =>
+      this == InstrumentType.optionCE || this == InstrumentType.optionPE;
+
+  bool get isFuturesContract =>
+      this == InstrumentType.futuresStkIdx ||
+      this == InstrumentType.futuresCom;
+}
+
 // ─── Stock ────────────────────────────────────────────────────────────────────
 
 class Stock {
@@ -63,6 +136,7 @@ class Stock {
   final double changePercentage;
   final String sector;
   final String exchange;
+
   /// Angel One instrument token — required for MCX/NFO/CDS historical data
   /// and quote lookups. Empty string for watchlist stocks seeded from REST.
   final String token;
@@ -76,10 +150,19 @@ class Stock {
   final double? lowerCircuit;
   final double? volume;
   final double? marketCap;
+
   /// True when the price data is stale (market closed or no recent tick).
   final bool isStale;
-  /// Expiry date for futures contracts (MCX/NFO). Null for equities.
+
+  /// Expiry date for futures/options contracts. Null for equities.
   final DateTime? expiry;
+
+  /// What kind of instrument this is. Defaults to [InstrumentType.unknown]
+  /// for backward-compat with stocks seeded before the type system existed.
+  final InstrumentType instrumentType;
+
+  /// Strike price — populated for options contracts only.
+  final double? strikePrice;
 
   Stock({
     required this.symbol,
@@ -101,12 +184,21 @@ class Stock {
     this.marketCap,
     this.isStale = false,
     this.expiry,
+    this.instrumentType = InstrumentType.unknown,
+    this.strikePrice,
   });
 
   bool get isPositive => changePercentage >= 0;
 
-  /// True if this is a futures/commodity contract with a known expiry.
-  bool get isFutures => expiry != null;
+  /// True if this instrument IS a futures contract (not an equity with futures).
+  bool get isFutures =>
+      instrumentType.isFuturesContract || expiry != null;
+
+  /// True if this instrument IS an option (CE or PE).
+  bool get isOption => instrumentType.isOption;
+
+  /// True if an option chain should be available for this instrument.
+  bool get hasFnoChain => instrumentType.hasFnoChain;
 
   /// Days until expiry. Null for equities or if expiry is unknown.
   int? get daysToExpiry {
@@ -143,6 +235,7 @@ class Order {
   final double? stopLossPrice;
   final bool isBracketOrder;
   final bool isCoverOrder;
+  final double? chargesApplied;
 
   Order({
     required this.id,
@@ -168,6 +261,7 @@ class Order {
     this.stopLossPrice,
     this.isBracketOrder = false,
     this.isCoverOrder = false,
+    this.chargesApplied,
   });
 
   Order copyWith({
@@ -194,6 +288,7 @@ class Order {
     double? stopLossPrice,
     bool? isBracketOrder,
     bool? isCoverOrder,
+    double? chargesApplied,
   }) {
     return Order(
       id: id ?? this.id,
@@ -219,6 +314,7 @@ class Order {
       stopLossPrice: stopLossPrice ?? this.stopLossPrice,
       isBracketOrder: isBracketOrder ?? this.isBracketOrder,
       isCoverOrder: isCoverOrder ?? this.isCoverOrder,
+      chargesApplied: chargesApplied ?? this.chargesApplied,
     );
   }
 }

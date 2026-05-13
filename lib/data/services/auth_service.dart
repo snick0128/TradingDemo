@@ -7,11 +7,9 @@ import '../../domain/auth/app_user_profile.dart';
 import 'firestore_service.dart';
 
 class AuthService {
-  AuthService({
-    required FirebaseAuth auth,
-    required FirestoreService firestore,
-  }) : _auth = auth,
-       _firestore = firestore;
+  AuthService({required FirebaseAuth auth, required FirestoreService firestore})
+    : _auth = auth,
+      _firestore = firestore;
 
   final FirebaseAuth _auth;
   final FirestoreService _firestore;
@@ -32,8 +30,18 @@ class AuthService {
 
   Future<void> logout() => _auth.signOut();
 
+  Future<void> sendPasswordResetEmail(String email) async {
+    await _auth.sendPasswordResetEmail(email: email.trim().toLowerCase());
+  }
+
+  Future<void> invalidateCurrentSession() async {
+    await _auth.signOut();
+  }
+
   /// Sign in with Google. Creates a Firestore user doc on first sign-in.
-  Future<AppUserProfile> signInWithGoogle({String expectedRole = 'user'}) async {
+  Future<AppUserProfile> signInWithGoogle({
+    String expectedRole = 'user',
+  }) async {
     final googleUser = await GoogleSignIn(
       clientId: '421918726497-web.apps.googleusercontent.com',
     ).signIn();
@@ -73,7 +81,9 @@ class AuthService {
     final profile = await _loadProfile(firebaseUser);
     if (profile.role != expectedRole) {
       await _auth.signOut();
-      throw Exception('This Google account is not registered as a $expectedRole.');
+      throw Exception(
+        'This Google account is not registered as a $expectedRole.',
+      );
     }
     return profile;
   }
@@ -160,18 +170,24 @@ class AuthService {
     // Write the Firestore doc — isOwner(userId) will pass because
     // request.auth.uid == firebaseUser.uid.
     try {
-      await _firestore.raw.doc('users/${firebaseUser.uid}').set({
-        'uid': firebaseUser.uid,
-        'name': name,
-        'email': normalizedEmail,
-        'role': 'user',
-        'balance': 0.0,
-        'available_balance': 0.0,
-        'tradingEnabled': true,
-        'createdAt': Timestamp.now(),
-      }).timeout(const Duration(seconds: 10), onTimeout: () {
-        throw Exception('Firestore write timed out.');
-      });
+      await _firestore.raw
+          .doc('users/${firebaseUser.uid}')
+          .set({
+            'uid': firebaseUser.uid,
+            'name': name,
+            'email': normalizedEmail,
+            'role': 'user',
+            'balance': 0.0,
+            'available_balance': 0.0,
+            'tradingEnabled': true,
+            'createdAt': Timestamp.now(),
+          })
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw Exception('Firestore write timed out.');
+            },
+          );
     } catch (e) {
       // Firestore write failed — roll back the Auth account so the user
       // can try again cleanly with the same email.
@@ -278,9 +294,12 @@ class AuthService {
     final doc = await _firestore.raw
         .doc('users/${firebaseUser.uid}')
         .get()
-        .timeout(const Duration(seconds: 8), onTimeout: () {
-      throw Exception('Profile fetch timed out. Check your connection.');
-    });
+        .timeout(
+          const Duration(seconds: 8),
+          onTimeout: () {
+            throw Exception('Profile fetch timed out. Check your connection.');
+          },
+        );
 
     Map<String, dynamic> data;
 
@@ -288,7 +307,8 @@ class AuthService {
       // Auto-create profile if missing (e.g. account created via Firebase Console)
       data = {
         'uid': firebaseUser.uid,
-        'name': firebaseUser.displayName ??
+        'name':
+            firebaseUser.displayName ??
             firebaseUser.email?.split('@').first ??
             'User',
         'email': firebaseUser.email ?? '',

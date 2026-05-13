@@ -28,12 +28,17 @@ class FundsScreen extends StatelessWidget {
     bool isSameDay(DateTime d) =>
         d.year == now.year && d.month == now.month && d.day == now.day;
 
-    final unrealizedPnl = store.positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
+    final unrealizedPnl = store.positions.fold(
+      0.0,
+      (s, p) => s + p.unrealizedPnl,
+    );
     final realizedPnl = store.orders
-        .where((o) =>
-            o.status == OrderStatus.executed &&
-            o.type == OrderType.sell &&
-            isSameDay(o.executedAt ?? o.dateTime))
+        .where(
+          (o) =>
+              o.status == OrderStatus.executed &&
+              o.type == OrderType.sell &&
+              isSameDay(o.executedAt ?? o.dateTime),
+        )
         .fold(0.0, (sum, o) => sum + (o.pnl ?? 0.0));
     final todayPnl = unrealizedPnl + realizedPnl;
 
@@ -128,7 +133,9 @@ class FundsScreen extends StatelessWidget {
                     label: 'Withdraw',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const WithdrawFundsScreen()),
+                      MaterialPageRoute(
+                        builder: (_) => const WithdrawFundsScreen(),
+                      ),
                     ),
                   ),
                 ],
@@ -205,8 +212,11 @@ class FundsScreen extends StatelessWidget {
     );
   }
 
-  Widget _actionButton(BuildContext context,
-      {required String label, required VoidCallback onTap}) {
+  Widget _actionButton(
+    BuildContext context, {
+    required String label,
+    required VoidCallback onTap,
+  }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
@@ -255,13 +265,19 @@ class FundsScreen extends StatelessWidget {
           ),
           child: Column(
             children: [
-              _breakdownRow('Available Cash', mb.availableCash,
-                  valueColor: const Color(0xFF00C853)),
+              _breakdownRow(
+                'Available Cash',
+                mb.availableCash,
+                valueColor: const Color(0xFF00C853),
+              ),
               _separator(),
-              _breakdownRow('Margin Used', mb.marginUsed,
-                  valueColor: mb.marginUsed > 0
-                      ? const Color(0xFFD50000)
-                      : const Color(0xFF9E9E9E)),
+              _breakdownRow(
+                'Margin Used',
+                mb.marginUsed,
+                valueColor: mb.marginUsed > 0
+                    ? const Color(0xFFD50000)
+                    : const Color(0xFF9E9E9E),
+              ),
               _separator(),
               _breakdownRow('Margin Available', mb.marginAvailable),
               _separator(),
@@ -271,10 +287,8 @@ class FundsScreen extends StatelessWidget {
               _separator(),
               _breakdownRow('Exposure Margin', mb.exposureMargin),
               _separator(),
-              _breakdownRow('Peak Margin', mb.peakMargin),              Container(
-                height: 1,
-                color: const Color(0xFFE0E0E0),
-              ),
+              _breakdownRow('Peak Margin', mb.peakMargin),
+              Container(height: 1, color: const Color(0xFFE0E0E0)),
               Container(
                 height: 56,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -350,45 +364,29 @@ class FundsScreen extends StatelessWidget {
   }
 
   Widget _separator() {
-    return Container(
-      height: 1,
-      color: const Color(0xFFF5F5F5),
-    );
+    return Container(height: 1, color: const Color(0xFFF5F5F5));
   }
 
   Widget _buildQuickStatsRow(
-      BuildContext context, double todayPnl, double realized, double unrealized) {
+    BuildContext context,
+    double todayPnl,
+    double realized,
+    double unrealized,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           Expanded(
-            child: _statColumn(
-              label: "Today's P&L",
-              value: todayPnl,
-            ),
+            child: _statColumn(label: "Today's P&L", value: todayPnl),
           ),
-          Container(
-            width: 1,
-            height: 32,
-            color: const Color(0xFFE0E0E0),
-          ),
+          Container(width: 1, height: 32, color: const Color(0xFFE0E0E0)),
           Expanded(
-            child: _statColumn(
-              label: 'Realized',
-              value: realized,
-            ),
+            child: _statColumn(label: 'Realized', value: realized),
           ),
-          Container(
-            width: 1,
-            height: 32,
-            color: const Color(0xFFE0E0E0),
-          ),
+          Container(width: 1, height: 32, color: const Color(0xFFE0E0E0)),
           Expanded(
-            child: _statColumn(
-              label: 'Unrealized',
-              value: unrealized,
-            ),
+            child: _statColumn(label: 'Unrealized', value: unrealized),
           ),
         ],
       ),
@@ -405,7 +403,11 @@ class FundsScreen extends StatelessWidget {
     return Column(
       children: [
         Text(
-          '${isPositive ? '+' : isZero ? '' : '-'}${_formatCurrency(value.abs())}',
+          '${isPositive
+              ? '+'
+              : isZero
+              ? ''
+              : '-'}${_formatCurrency(value.abs())}',
           style: GoogleFonts.inter(
             fontSize: 16,
             fontWeight: FontWeight.w600,
@@ -424,5 +426,4 @@ class FundsScreen extends StatelessWidget {
       ],
     );
   }
-
 }

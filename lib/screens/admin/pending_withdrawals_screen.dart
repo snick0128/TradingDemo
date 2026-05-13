@@ -56,8 +56,11 @@ class PendingWithdrawalsScreen extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(LucideIcons.inbox,
-                            size: 48, color: AppColors.textSecondary),
+                        Icon(
+                          LucideIcons.inbox,
+                          size: 48,
+                          color: AppColors.textSecondary,
+                        ),
                         SizedBox(height: 12),
                         Text(
                           'No withdrawal requests',
@@ -129,8 +132,7 @@ class _WithdrawalRow extends StatelessWidget {
     final isPending = _status.toUpperCase() == 'PENDING';
 
     return ListTile(
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: Container(
         width: 40,
         height: 40,
@@ -138,8 +140,11 @@ class _WithdrawalRow extends StatelessWidget {
           color: AppColors.primary.withOpacity(0.08),
           shape: BoxShape.circle,
         ),
-        child: const Icon(LucideIcons.arrowDownLeft,
-            size: 18, color: AppColors.primary),
+        child: const Icon(
+          LucideIcons.arrowDownLeft,
+          size: 18,
+          color: AppColors.primary,
+        ),
       ),
       title: Text(
         '₹${_amount.toStringAsFixed(2)}',
@@ -174,8 +179,7 @@ class _WithdrawalRow extends StatelessWidget {
               ],
             )
           : Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
                 color: _statusColor.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(6),
@@ -230,8 +234,9 @@ class _WithdrawalRow extends StatelessWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Withdrawal $newStatus successfully.'),
-            backgroundColor:
-                newStatus == 'APPROVED' ? AppColors.success : AppColors.danger,
+            backgroundColor: newStatus == 'APPROVED'
+                ? AppColors.success
+                : AppColors.danger,
           ),
         );
       }

@@ -72,36 +72,52 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
           child: const Row(
             children: [
               Expanded(
-                  flex: 2,
-                  child: Text('Time',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary))),
+                flex: 2,
+                child: Text(
+                  'Time',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
               Expanded(
-                  flex: 2,
-                  child: Text('Price',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary))),
+                flex: 2,
+                child: Text(
+                  'Price',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
               Expanded(
-                  flex: 2,
-                  child: Text('Qty',
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary))),
+                flex: 2,
+                child: Text(
+                  'Qty',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
               Expanded(
-                  flex: 1,
-                  child: Text('Dir',
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary))),
+                flex: 1,
+                child: Text(
+                  'Dir',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -128,7 +144,9 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                           ? color.withOpacity(0.05)
                           : Colors.transparent,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       child: Row(
                         children: [
                           Expanded(
@@ -136,8 +154,9 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                             child: Text(
                               timeFmt.format(trade.time),
                               style: GoogleFonts.jetBrainsMono(
-                                  fontSize: 12,
-                                  color: AppColors.textSecondary),
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
+                              ),
                             ),
                           ),
                           Expanded(
@@ -158,8 +177,9 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                               '${trade.quantity}',
                               textAlign: TextAlign.right,
                               style: GoogleFonts.jetBrainsMono(
-                                  fontSize: 12,
-                                  color: AppColors.textPrimary),
+                                fontSize: 12,
+                                color: AppColors.textPrimary,
+                              ),
                             ),
                           ),
                           Expanded(
@@ -201,11 +221,14 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
-                const Text('Live',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.success,
-                        fontWeight: FontWeight.w600)),
+                const Text(
+                  'Live',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.success,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
           ),

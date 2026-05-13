@@ -4,11 +4,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../app/app_scope.dart';
+import '../../models/trading_models.dart';
 import '../../theme.dart';
 import '../../state/security_scope.dart';
 import 'admin_stats_screen.dart';
 import 'admin_orders_screen.dart';
 import 'admin_users_screen.dart';
+import 'admin_analytics_screen.dart';
 import 'leverage_control_screen.dart';
 import 'market_settings_screen.dart';
 import 'admin_ipo_orders_screen.dart';
@@ -19,11 +21,12 @@ const _kWebBreakpoint = 768.0;
 // ── Nav destinations ──────────────────────────────────────────────────────────
 const _kDestinations = [
   (LucideIcons.layoutDashboard, 'Dashboard'),
-  (LucideIcons.users,           'Users'),
-  (LucideIcons.activity,        'Orders'),
-  (LucideIcons.zap,             'Leverage'),
-  (LucideIcons.receipt,         'IPO Orders'),
-  (LucideIcons.clock,           'Market'),
+  (LucideIcons.barChart2, 'Analytics'),
+  (LucideIcons.users, 'Users'),
+  (LucideIcons.activity, 'Orders'),
+  (LucideIcons.zap, 'Leverage'),
+  (LucideIcons.receipt, 'IPO'),
+  (LucideIcons.clock, 'Market'),
 ];
 
 class AdminShell extends StatefulWidget {
@@ -37,6 +40,7 @@ class _AdminShellState extends State<AdminShell> {
 
   static const _screens = [
     AdminStatsScreen(),
+    AdminAnalyticsScreen(),
     AdminUsersScreen(),
     AdminOrdersScreen(),
     LeverageControlScreen(),
@@ -46,45 +50,62 @@ class _AdminShellState extends State<AdminShell> {
 
   @override
   Widget build(BuildContext context) {
-    final security   = SecurityScope.of(context);
-    final appScope   = context.dependOnInheritedWidgetOfExactType<AppScope>();
-    final isAdmin    = (security.currentUser?.isAdmin ?? false) ||
-                       (appScope?.notifier?.isAdmin ?? false);
-    final isWeb      = MediaQuery.of(context).size.width >= _kWebBreakpoint;
+    final security = SecurityScope.of(context);
+    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    final isAdmin =
+        (security.currentUser?.isAdmin ?? false) ||
+        (appScope?.notifier?.isAdmin ?? false);
+    final isWeb = MediaQuery.of(context).size.width >= _kWebBreakpoint;
 
     // ── Unauthorized guard ────────────────────────────────────────────────────
     if (!isAdmin) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Admin Console'), leading: const BackButton()),
+        appBar: AppBar(
+          title: const Text('Admin Console'),
+          leading: const BackButton(),
+        ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(LucideIcons.shieldOff, size: 64, color: AppColors.danger),
+              const Icon(
+                LucideIcons.shieldOff,
+                size: 64,
+                color: AppColors.danger,
+              ),
               const SizedBox(height: 16),
-              Text('Unauthorized',
-                  style: GoogleFonts.inter(
-                      fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.danger)),
+              Text(
+                'Unauthorized',
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.danger,
+                ),
+              ),
               const SizedBox(height: 8),
-              Text('You do not have admin access.',
-                  style: GoogleFonts.inter(color: AppColors.textSecondary)),
+              Text(
+                'You do not have admin access.',
+                style: GoogleFonts.inter(color: AppColors.textSecondary),
+              ),
             ],
           ),
         ),
       );
     }
 
-    return isWeb ? _WebLayout(
-      selectedIndex: _selectedIndex,
-      onSelect: (i) => setState(() => _selectedIndex = i),
-      screens: _screens,
-      onLogout: () => _logout(context, appScope),
-    ) : _MobileLayout(
-      selectedIndex: _selectedIndex,
-      onSelect: (i) => setState(() => _selectedIndex = i),
-      screens: _screens,
-      onLogout: () => _logout(context, appScope),
-    );
+    return isWeb
+        ? _WebLayout(
+            selectedIndex: _selectedIndex,
+            onSelect: (i) => setState(() => _selectedIndex = i),
+            screens: _screens,
+            onLogout: () => _logout(context, appScope),
+          )
+        : _MobileLayout(
+            selectedIndex: _selectedIndex,
+            onSelect: (i) => setState(() => _selectedIndex = i),
+            screens: _screens,
+            onLogout: () => _logout(context, appScope),
+          );
   }
 
   Future<void> _logout(BuildContext context, AppScope? appScope) async {
@@ -115,6 +136,7 @@ class _WebLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFA),
+      resizeToAvoidBottomInset: true,
       body: Row(
         children: [
           // ── Sidebar ────────────────────────────────────────────────────────
@@ -135,8 +157,11 @@ class _WebLayout extends StatelessWidget {
                     color: const Color(0xFF1565C0).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(LucideIcons.shield,
-                      size: 20, color: Color(0xFF1565C0)),
+                  child: const Icon(
+                    LucideIcons.shield,
+                    size: 20,
+                    color: Color(0xFF1565C0),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 // Nav icons
@@ -188,8 +213,11 @@ class _WebLayout extends StatelessWidget {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Icon(LucideIcons.logOut,
-                            size: 20, color: Color(0xFF757575)),
+                        child: const Icon(
+                          LucideIcons.logOut,
+                          size: 20,
+                          color: Color(0xFF757575),
+                        ),
                       ),
                     ),
                   ),
@@ -199,10 +227,7 @@ class _WebLayout extends StatelessWidget {
           ),
           // ── Content ────────────────────────────────────────────────────────
           Expanded(
-            child: IndexedStack(
-              index: selectedIndex,
-              children: screens,
-            ),
+            child: IndexedStack(index: selectedIndex, children: screens),
           ),
         ],
       ),
@@ -235,9 +260,10 @@ class _MobileLayout extends StatelessWidget {
         title: Text(
           _kDestinations[selectedIndex].$2,
           style: GoogleFonts.inter(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF0D0D0D)),
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF0D0D0D),
+          ),
         ),
         actions: [
           IconButton(
@@ -246,48 +272,53 @@ class _MobileLayout extends StatelessWidget {
             onPressed: onLogout,
           ),
         ],
-        shape: const Border(
-            bottom: BorderSide(color: Color(0xFFE0E0E0))),
+        shape: const Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
       ),
-      body: IndexedStack(
-        index: selectedIndex,
-        children: screens,
+      body: SafeArea(
+        top: false,
+        child: IndexedStack(index: selectedIndex, children: screens),
       ),
-      bottomNavigationBar: Container(
-        height: 60,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFE0E0E0))),
-        ),
-        child: Row(
-          children: List.generate(_kDestinations.length, (i) {
-            final selected = selectedIndex == i;
-            final color = selected
-                ? const Color(0xFF1565C0)
-                : const Color(0xFF9E9E9E);
-            return Expanded(
-              child: InkWell(
-                onTap: () => onSelect(i),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(_kDestinations[i].$1, size: 22, color: color),
-                    const SizedBox(height: 3),
-                    Text(
-                      _kDestinations[i].$2,
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        color: color,
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          height: 58,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Color(0xFFE0E0E0))),
+          ),
+          child: Row(
+            children: List.generate(_kDestinations.length, (i) {
+              final selected = selectedIndex == i;
+              final color = selected
+                  ? const Color(0xFF1565C0)
+                  : const Color(0xFF9E9E9E);
+              // Compact icon+label for 7-item mobile nav
+              const iconSize = 19.0;
+              const labelSize = 9.0;
+              return Expanded(
+                child: InkWell(
+                  onTap: () => onSelect(i),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(_kDestinations[i].$1, size: iconSize, color: color),
+                      const SizedBox(height: 2),
+                      Text(
+                        _kDestinations[i].$2,
+                        style: GoogleFonts.inter(
+                          fontSize: labelSize,
+                          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                          color: color,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
+          ),
         ),
       ),
     );

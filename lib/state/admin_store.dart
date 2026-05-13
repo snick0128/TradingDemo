@@ -85,7 +85,7 @@ class AdminStore extends ChangeNotifier {
        _users = <User>[],
        _masterOrderBook = <AdminOrderRecord>[],
        _auditLog = [],
-       _stockEnabled = {},   // populated from Firestore stocks collection
+       _stockEnabled = {}, // populated from Firestore stocks collection
        _broadcasts = [];
 
   final TradingService? _tradingService;
@@ -145,6 +145,34 @@ class AdminStore extends ChangeNotifier {
   );
   double get platformPnl => totalVolume * 0.0008;
   double get revenue => totalVolume * 0.00025;
+  double get liveExposure => _masterOrderBook
+      .where(
+        (o) =>
+            o.status == OrderStatus.executed ||
+            o.status == OrderStatus.approved,
+      )
+      .fold(0.0, (sum, o) => sum + (o.quantity * o.price));
+  double get operatorRiskLossEstimate => liveExposure * 0.0012;
+
+  List<AdminOrderRecord> get highestRiskOrders {
+    final sorted = List<AdminOrderRecord>.from(_masterOrderBook);
+    sorted.sort(
+      (a, b) => (b.quantity * b.price).compareTo(a.quantity * a.price),
+    );
+    return sorted.take(10).toList(growable: false);
+  }
+
+  Map<String, double> get livePnlByUser {
+    final out = <String, double>{};
+    for (final o in _masterOrderBook) {
+      if (o.status != OrderStatus.executed && o.status != OrderStatus.approved)
+        continue;
+      final signed = o.type == OrderType.buy ? -1.0 : 1.0;
+      out[o.userId] =
+          (out[o.userId] ?? 0) + (o.quantity * o.price * signed * 0.002);
+    }
+    return out;
+  }
 
   PlatformStats get stats => PlatformStats(
     dailyVolume: totalVolume,
@@ -256,7 +284,8 @@ class AdminStore extends ChangeNotifier {
           'tradable': true,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Could not enable this stock. Please try again.'),
+        onError: (e) =>
+            _notifyError('Could not enable this stock. Please try again.'),
       );
     }
   }
@@ -273,7 +302,8 @@ class AdminStore extends ChangeNotifier {
           'tradable': false,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Could not disable this stock. Please try again.'),
+        onError: (e) =>
+            _notifyError('Could not disable this stock. Please try again.'),
       );
     }
   }
@@ -305,7 +335,11 @@ class AdminStore extends ChangeNotifier {
       );
       notifyListeners();
     }
-    _logAction('SYSTEM', 'Reject Order (local only)', '$orderId ${reason ?? ''}'.trim());
+    _logAction(
+      'SYSTEM',
+      'Reject Order (local only)',
+      '$orderId ${reason ?? ''}'.trim(),
+    );
   }
 
   void broadcastNotification({
@@ -350,7 +384,9 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Could not update maintenance mode. Please try again.'),
+        onError: (e) => _notifyError(
+          'Could not update maintenance mode. Please try again.',
+        ),
       );
     }
   }
@@ -368,7 +404,8 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Could not save risk limit. Please try again.'),
+        onError: (e) =>
+            _notifyError('Could not save risk limit. Please try again.'),
       );
     }
   }
@@ -383,7 +420,8 @@ class AdminStore extends ChangeNotifier {
   final Map<String, double> _stockLeverage = {};
 
   /// Get the platform leverage for a symbol (null = use platform default/max).
-  double? getStockLeverage(String symbol) => _stockLeverage[symbol.toUpperCase()];
+  double? getStockLeverage(String symbol) =>
+      _stockLeverage[symbol.toUpperCase()];
 
   /// Set leverage for multiple symbols at once.
   /// [leverages] map: symbol → leverage multiplier (e.g. 'GOLD' → 100.0)
@@ -392,8 +430,7 @@ class AdminStore extends ChangeNotifier {
     // Update in-memory
     _stockLeverage.clear();
     _stockLeverage.addAll({
-      for (final e in leverages.entries)
-        e.key.toUpperCase(): e.value,
+      for (final e in leverages.entries) e.key.toUpperCase(): e.value,
     });
     _logAction(
       _currentAdminId,
@@ -413,7 +450,9 @@ class AdminStore extends ChangeNotifier {
             'updatedBy': _currentAdminId,
             'updatedAt': Timestamp.now(),
           }),
-          onError: (e) => _notifyError('Could not save leverage for $symbol. Please try again.'),
+          onError: (e) => _notifyError(
+            'Could not save leverage for $symbol. Please try again.',
+          ),
         );
       }
     }
@@ -422,13 +461,19 @@ class AdminStore extends ChangeNotifier {
   /// Set per-segment leverage for a user.
   /// [segmentLeverages] is a map of segment key → leverage value,
   /// e.g. { 'mcxFutures': 500.0, 'nseFutures': 500.0, ... }
-  void setUserSegmentLeverages(String userId, Map<String, double> segmentLeverages) {
+  void setUserSegmentLeverages(
+    String userId,
+    Map<String, double> segmentLeverages,
+  ) {
     _riskLimits[userId] ??= {};
     for (final entry in segmentLeverages.entries) {
       _riskLimits[userId]!['lev_${entry.key}'] = entry.value;
     }
-    _logAction(_currentAdminId, 'SET_LEVERAGE',
-        '$userId: ${segmentLeverages.entries.map((e) => '${e.key}=${e.value}x').join(', ')}');
+    _logAction(
+      _currentAdminId,
+      'SET_LEVERAGE',
+      '$userId: ${segmentLeverages.entries.map((e) => '${e.key}=${e.value}x').join(', ')}',
+    );
     notifyListeners();
 
     if (_isFirebaseMode) {
@@ -439,7 +484,8 @@ class AdminStore extends ChangeNotifier {
       };
       _fireAndForget(
         () => _firestoreService!.setDocument('risk_limits/$userId', data),
-        onError: (e) => _notifyError('Could not save leverage settings. Please try again.'),
+        onError: (e) =>
+            _notifyError('Could not save leverage settings. Please try again.'),
       );
     }
   }
@@ -453,8 +499,7 @@ class AdminStore extends ChangeNotifier {
     final limits = _riskLimits[userId] ?? {};
     return {
       for (final entry in limits.entries)
-        if (entry.key.startsWith('lev_'))
-          entry.key.substring(4): entry.value,
+        if (entry.key.startsWith('lev_')) entry.key.substring(4): entry.value,
     };
   }
 
@@ -470,7 +515,9 @@ class AdminStore extends ChangeNotifier {
           'updatedBy': _currentAdminId,
           'updatedAt': Timestamp.now(),
         }),
-        onError: (e) => _notifyError('Could not update trading halt status. Please try again.'),
+        onError: (e) => _notifyError(
+          'Could not update trading halt status. Please try again.',
+        ),
       );
     }
   }
@@ -478,7 +525,11 @@ class AdminStore extends ChangeNotifier {
   // RMS FIX Bug #10: forceClosePosition was a no-op (only logged).
   // Now writes a force-close marker to Firestore so the backend can process it.
   void forceClosePosition(String userId, String positionId) {
-    _logAction(_currentAdminId, 'Force Close Position', '$userId / $positionId');
+    _logAction(
+      _currentAdminId,
+      'Force Close Position',
+      '$userId / $positionId',
+    );
     notifyListeners();
 
     if (_isFirebaseMode) {
@@ -490,12 +541,13 @@ class AdminStore extends ChangeNotifier {
               .collection('holdings')
               .doc(positionId.toUpperCase())
               .set({
-            'forceClose':   true,
-            'forceCloseBy': _currentAdminId,
-            'forceCloseAt': Timestamp.now(),
-          }, SetOptions(merge: true));
+                'forceClose': true,
+                'forceCloseBy': _currentAdminId,
+                'forceCloseAt': Timestamp.now(),
+              }, SetOptions(merge: true));
         },
-        onError: (e) => _notifyError('Could not force close position. Please try again.'),
+        onError: (e) =>
+            _notifyError('Could not force close position. Please try again.'),
       );
     }
   }
@@ -519,14 +571,16 @@ class AdminStore extends ChangeNotifier {
           final batch = db.batch();
           for (final doc in holdingsSnap.docs) {
             batch.set(doc.reference, {
-              'forceClose':   true,
+              'forceClose': true,
               'forceCloseBy': _currentAdminId,
               'forceCloseAt': Timestamp.now(),
             }, SetOptions(merge: true));
           }
           await batch.commit();
         },
-        onError: (e) => _notifyError('Could not force close all positions. Please try again.'),
+        onError: (e) => _notifyError(
+          'Could not force close all positions. Please try again.',
+        ),
       );
     }
   }
@@ -552,92 +606,131 @@ class AdminStore extends ChangeNotifier {
     _streamsBound = true;
 
     // Paginated — limit prevents full-collection downloads as platform grows
-    _usersSub = tradingService.usersStream().listen((snapshot) {
-      _users = snapshot.docs.map(_mapUserDoc).toList()
-        ..sort((a, b) => b.registeredAt.compareTo(a.registeredAt));
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load users. Check your connection and try again.'));
+    _usersSub = tradingService.usersStream().listen(
+      (snapshot) {
+        _users = snapshot.docs.map(_mapUserDoc).toList()
+          ..sort((a, b) => b.registeredAt.compareTo(a.registeredAt));
+        notifyListeners();
+      },
+      onError: (e, _) => _notifyError(
+        'Unable to load users. Check your connection and try again.',
+      ),
+    );
 
-    _ordersSub = tradingService.ordersStream().listen((snapshot) {
-      _masterOrderBook = snapshot.docs.map(_mapOrderDoc).toList()
-        ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load orders. Check your connection and try again.'));
+    _ordersSub = tradingService.ordersStream().listen(
+      (snapshot) {
+        _masterOrderBook = snapshot.docs.map(_mapOrderDoc).toList()
+          ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+        notifyListeners();
+      },
+      onError: (e, _) => _notifyError(
+        'Unable to load orders. Check your connection and try again.',
+      ),
+    );
 
     _auditSub = firestoreService.raw
         .collection('audit_logs')
         .orderBy('timestamp', descending: true)
         .limit(100)
         .snapshots()
-        .listen((snapshot) {
-      _auditLog = snapshot.docs.map(_mapAuditDoc).toList();
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load audit logs. Check your connection and try again.'));
+        .listen(
+          (snapshot) {
+            _auditLog = snapshot.docs.map(_mapAuditDoc).toList();
+            notifyListeners();
+          },
+          onError: (e, _) => _notifyError(
+            'Unable to load audit logs. Check your connection and try again.',
+          ),
+        );
 
     _broadcastSub = firestoreService.raw
         .collection('notifications')
         .orderBy('createdAt', descending: true)
         .limit(50)
         .snapshots()
-        .listen((snapshot) {
-      _broadcasts = snapshot.docs.map(_mapNotificationDoc).toList();
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load notifications. Check your connection and try again.'));
+        .listen(
+          (snapshot) {
+            _broadcasts = snapshot.docs.map(_mapNotificationDoc).toList();
+            notifyListeners();
+          },
+          onError: (e, _) => _notifyError(
+            'Unable to load notifications. Check your connection and try again.',
+          ),
+        );
 
-    _stocksSub = firestoreService.getCollectionStream('stocks').listen((snapshot) {
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final symbol = (data['symbol'] as String?) ?? doc.id;
-        final tradable = (data['tradable'] as bool?) ?? true;
-        _stockEnabled[symbol] = tradable;
-      }
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load stock settings. Check your connection and try again.'));
+    _stocksSub = firestoreService.getCollectionStream('stocks').listen(
+      (snapshot) {
+        for (final doc in snapshot.docs) {
+          final data = doc.data();
+          final symbol = (data['symbol'] as String?) ?? doc.id;
+          final tradable = (data['tradable'] as bool?) ?? true;
+          _stockEnabled[symbol] = tradable;
+        }
+        notifyListeners();
+      },
+      onError: (e, _) => _notifyError(
+        'Unable to load stock settings. Check your connection and try again.',
+      ),
+    );
 
-    _riskLimitsSub = firestoreService
-        .getCollectionStream('risk_limits')
-        .listen((snapshot) {
-      _riskLimits
-        ..clear()
-        ..addAll({
-          for (final doc in snapshot.docs)
-            doc.id: {
-              for (final entry in doc.data().entries)
-                if (entry.value is num &&
-                    entry.key != 'updatedAt' &&
-                    entry.key != 'updatedBy')
-                  entry.key: (entry.value as num).toDouble(),
-            },
-        });
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load risk limits. Check your connection and try again.'));
+    _riskLimitsSub = firestoreService.getCollectionStream('risk_limits').listen(
+      (snapshot) {
+        _riskLimits
+          ..clear()
+          ..addAll({
+            for (final doc in snapshot.docs)
+              doc.id: {
+                for (final entry in doc.data().entries)
+                  if (entry.value is num &&
+                      entry.key != 'updatedAt' &&
+                      entry.key != 'updatedBy')
+                    entry.key: (entry.value as num).toDouble(),
+              },
+          });
+        notifyListeners();
+      },
+      onError: (e, _) => _notifyError(
+        'Unable to load risk limits. Check your connection and try again.',
+      ),
+    );
 
     // Per-stock leverage stream
     _stockLeverageSub = firestoreService
         .getCollectionStream('stock_leverage')
-        .listen((snapshot) {
-      _stockLeverage.clear();
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final symbol = ((data['symbol'] as String?) ?? doc.id).toUpperCase();
-        final lev = (data['leverage'] as num?)?.toDouble();
-        if (lev != null && lev > 0) _stockLeverage[symbol] = lev;
-      }
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load leverage settings. Check your connection and try again.'));
+        .listen(
+          (snapshot) {
+            _stockLeverage.clear();
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              final symbol = ((data['symbol'] as String?) ?? doc.id)
+                  .toUpperCase();
+              final lev = (data['leverage'] as num?)?.toDouble();
+              if (lev != null && lev > 0) _stockLeverage[symbol] = lev;
+            }
+            notifyListeners();
+          },
+          onError: (e, _) => _notifyError(
+            'Unable to load leverage settings. Check your connection and try again.',
+          ),
+        );
 
-    _configSub = firestoreService
-        .raw
+    _configSub = firestoreService.raw
         .doc('admin_config/platform')
         .snapshots()
-        .listen((snapshot) {
-      final data = snapshot.data();
-      if (data == null) return;
-      _maintenanceMode = (data['maintenanceMode'] as bool?) ?? _maintenanceMode;
-      _globalTradingHalt =
-          (data['globalTradingHalt'] as bool?) ?? _globalTradingHalt;
-      notifyListeners();
-    }, onError: (e, _) => _notifyError('Unable to load platform config. Check your connection and try again.'));
+        .listen(
+          (snapshot) {
+            final data = snapshot.data();
+            if (data == null) return;
+            _maintenanceMode =
+                (data['maintenanceMode'] as bool?) ?? _maintenanceMode;
+            _globalTradingHalt =
+                (data['globalTradingHalt'] as bool?) ?? _globalTradingHalt;
+            notifyListeners();
+          },
+          onError: (e, _) => _notifyError(
+            'Unable to load platform config. Check your connection and try again.',
+          ),
+        );
   }
 
   void _unbindFirebaseStreams() {
@@ -665,11 +758,15 @@ class AdminStore extends ChangeNotifier {
     final data = doc.data() ?? <String, dynamic>{};
     final email = (data['email'] as String?) ?? '';
     final emailPrefix = email.split('@').first.trim();
-    final uidPrefix = doc.id.substring(0, doc.id.length > 8 ? 8 : doc.id.length);
+    final uidPrefix = doc.id.substring(
+      0,
+      doc.id.length > 8 ? 8 : doc.id.length,
+    );
 
     return User(
       id: doc.id,
-      clientId: (data['clientId'] as String?) ??
+      clientId:
+          (data['clientId'] as String?) ??
           (emailPrefix.isNotEmpty ? emailPrefix : uidPrefix),
       name: (data['name'] as String?) ?? 'User',
       email: email,
@@ -686,12 +783,16 @@ class AdminStore extends ChangeNotifier {
   AdminOrderRecord _mapOrderDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? <String, dynamic>{};
     final userId = (data['userId'] as String?) ?? 'unknown';
-    final fallbackClientId = userId.substring(0, userId.length > 8 ? 8 : userId.length);
+    final fallbackClientId = userId.substring(
+      0,
+      userId.length > 8 ? 8 : userId.length,
+    );
 
-    final userClientId = _users.cast<User?>().firstWhere(
-          (u) => u?.id == userId,
-          orElse: () => null,
-        )?.clientId ??
+    final userClientId =
+        _users
+            .cast<User?>()
+            .firstWhere((u) => u?.id == userId, orElse: () => null)
+            ?.clientId ??
         fallbackClientId;
 
     return AdminOrderRecord(

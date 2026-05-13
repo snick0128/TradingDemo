@@ -158,12 +158,14 @@ class _ToastWidgetState extends State<_ToastWidget>
       duration: const Duration(milliseconds: 300),
     );
 
-    _slideAnim = Tween<double>(begin: 40, end: 0).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
-    );
-    _fadeAnim = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeOut),
-    );
+    _slideAnim = Tween<double>(
+      begin: 40,
+      end: 0,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _fadeAnim = Tween<double>(
+      begin: 0,
+      end: 1,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
 
     // Slide in
     _ctrl.forward();
@@ -194,9 +196,9 @@ class _ToastWidgetState extends State<_ToastWidget>
 
     final (bgColor, icon) = switch (widget.entry.type) {
       _ToastType.success => (const Color(0xFF1B5E20), LucideIcons.checkCircle),
-      _ToastType.error   => (const Color(0xFFB71C1C), LucideIcons.xCircle),
+      _ToastType.error => (const Color(0xFFB71C1C), LucideIcons.xCircle),
       _ToastType.warning => (const Color(0xFFE65100), LucideIcons.alertCircle),
-      _ToastType.info    => (const Color(0xFF0D47A1), LucideIcons.info),
+      _ToastType.info => (const Color(0xFF0D47A1), LucideIcons.info),
     };
 
     return Positioned(

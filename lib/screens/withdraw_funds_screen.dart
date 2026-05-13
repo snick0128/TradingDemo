@@ -73,10 +73,7 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
 
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.danger,
-      ),
+      SnackBar(content: Text(message), backgroundColor: AppColors.danger),
     );
   }
 
@@ -193,8 +190,11 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(LucideIcons.info,
-                          size: 14, color: AppColors.primary),
+                      const Icon(
+                        LucideIcons.info,
+                        size: 14,
+                        color: AppColors.primary,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(

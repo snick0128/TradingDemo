@@ -11,15 +11,16 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 
 // ─── Chart color constants ────────────────────────────────────────────────────
-const _kBullColor  = Color(0xFF00C853); // green
-const _kBearColor  = Color(0xFFD50000); // red
-const _kChartBg    = Color(0xFF0D1117); // near-black chart canvas
-const _kGridColor  = Color(0xFF1E2530); // subtle grid lines
-const _kAxisColor  = Color(0xFF4A5568); // axis labels
+const _kBullColor = Color(0xFF00C853);
+const _kBearColor = Color(0xFFD50000);
+const _kChartBg = Colors.white;
+const _kGridColor = Color(0xFFEEEEEE);
+const _kAxisColor = Color(0xFF757575);
 
 class AdvancedChartScreen extends StatefulWidget {
   final String symbol;
-  const AdvancedChartScreen({super.key, required this.symbol});
+  final TradingChartSeries? initialSeries;
+  const AdvancedChartScreen({super.key, required this.symbol, this.initialSeries});
 
   @override
   State<AdvancedChartScreen> createState() => _AdvancedChartScreenState();
@@ -27,6 +28,7 @@ class AdvancedChartScreen extends StatefulWidget {
 
 class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     with SingleTickerProviderStateMixin {
+  static final Map<String, ChartTimeframe> _savedTimeframe = {};
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   ChartType _chartType = ChartType.candles;
   ChartTimeframe _timeframe = ChartTimeframe.d1;
@@ -60,12 +62,20 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   @override
   void initState() {
     super.initState();
+    _timeframe = _savedTimeframe[widget.symbol] ?? ChartTimeframe.d1;
     _fadeCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
     );
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-    _loadSeries();
+
+    if (widget.initialSeries != null) {
+      _series = widget.initialSeries;
+      _loading = false;
+      _fadeCtrl.forward();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeries());
+    }
   }
 
   @override
@@ -85,20 +95,27 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     try {
       final store = TradingScope.of(context);
       final stock = store.stockBySymbol(widget.symbol);
+      final interval = _apiInterval(_timeframe);
+      final now = DateTime.now().toUtc();
+      final from = _fromForRange(now, _dateRange);
       final mainRows = await _api.getHistoricalData(
         stock.symbol,
-        interval: _apiInterval(_timeframe),
-        from: _fmtApiDate(_fromForRange(DateTime.now().toUtc(), _dateRange)),
-        to: _fmtApiDate(DateTime.now().toUtc()),
+        interval: interval,
+        from: _fmtApiDate(from, interval: interval),
+        to: _fmtApiDate(now, interval: interval),
+        exchange: stock.exchange.isNotEmpty ? stock.exchange : null,
+        token: stock.token.isNotEmpty ? stock.token : null,
       );
       TradingChartSeries? compare;
       if (_compareSymbol != null) {
         final cmpStock = store.stockBySymbol(_compareSymbol!);
         final cmpRows = await _api.getHistoricalData(
           cmpStock.symbol,
-          interval: _apiInterval(_timeframe),
-          from: _fmtApiDate(_fromForRange(DateTime.now().toUtc(), _dateRange)),
-          to: _fmtApiDate(DateTime.now().toUtc()),
+          interval: interval,
+          from: _fmtApiDate(from, interval: interval),
+          to: _fmtApiDate(now, interval: interval),
+          exchange: cmpStock.exchange.isNotEmpty ? cmpStock.exchange : null,
+          token: cmpStock.token.isNotEmpty ? cmpStock.token : null,
         );
         compare = TradingChartService.fromRawCandles(
           cmpRows,
@@ -174,12 +191,34 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     }
   }
 
-  String _fmtApiDate(DateTime utc) {
+  String _fmtApiDate(DateTime utc, {String interval = '1d'}) {
     final d = utc.toLocal();
+    final int roundedMin;
+    final int roundedHour;
+    switch (interval) {
+      case '1m':
+        roundedMin = d.minute;
+        roundedHour = d.hour;
+      case '5m':
+        roundedMin = (d.minute ~/ 5) * 5;
+        roundedHour = d.hour;
+      case '15m':
+        roundedMin = (d.minute ~/ 15) * 15;
+        roundedHour = d.hour;
+      case '30m':
+        roundedMin = (d.minute ~/ 30) * 30;
+        roundedHour = d.hour;
+      case '1h':
+        roundedMin = 0;
+        roundedHour = d.hour;
+      default:
+        roundedMin = 0;
+        roundedHour = 0;
+    }
     final m = d.month.toString().padLeft(2, '0');
     final day = d.day.toString().padLeft(2, '0');
-    final h = d.hour.toString().padLeft(2, '0');
-    final min = d.minute.toString().padLeft(2, '0');
+    final h = roundedHour.toString().padLeft(2, '0');
+    final min = roundedMin.toString().padLeft(2, '0');
     return '${d.year}-$m-$day $h:$min';
   }
 
@@ -187,237 +226,354 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
     final stock = store.stockBySymbol(widget.symbol);
-    final series =
-        _series ??
-        TradingChartService.fromRawCandles(
-          const [],
-          fallbackPrice: stock.currentPrice,
-        );
-    final compareSeries = _compareSeries;
+
+    return Scaffold(
+      backgroundColor: _kChartBg,
+      appBar: _buildAppBar(),
+      body: Column(
+        children: [
+          Expanded(
+            child: _buildMainView(stock),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _buildBottomStatusBar(stock),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.white,
+      elevation: 0,
+      centerTitle: false,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.black, size: 20),
+        onPressed: () => Navigator.pop(context),
+      ),
+      titleSpacing: 0,
+      title: Row(
+        children: [
+          // Interval pill
+          GestureDetector(
+            onTap: () => _showTimeframeSheet(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFFE0E0E0)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                _timeframe.name.toUpperCase().replaceFirst('M', 'm').replaceFirst('H', 'h'),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Chart type icon
+          IconButton(
+            icon: Icon(
+              _chartType == ChartType.line ? Icons.show_chart : Icons.candlestick_chart_outlined,
+              color: const Color(0xFF555555),
+              size: 20,
+            ),
+            onPressed: () => _showChartTypeSheet(),
+          ),
+          // Indicators
+          IconButton(
+            icon: const Icon(Icons.functions, color: Color(0xFF555555), size: 20),
+            onPressed: () => _showIndicatorPanel(context),
+          ),
+          const Spacer(),
+          // Undo/Redo
+          IconButton(
+            icon: const Icon(Icons.undo, color: Color(0xFFBDBDBD), size: 18),
+            onPressed: null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.redo, color: Color(0xFFBDBDBD), size: 18),
+            onPressed: null,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.settings_outlined, color: Color(0xFF555555), size: 20),
+          onPressed: () {},
+        ),
+        IconButton(
+          icon: const Icon(Icons.open_in_full, color: Color(0xFF555555), size: 18),
+          onPressed: () {},
+        ),
+        const SizedBox(width: 8),
+      ],
+    );
+  }
+
+  Widget _buildMainView(Stock stock) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(LucideIcons.alertTriangle, size: 48, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(
+                _cleanError(_error!),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF757575)),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _loadSeries,
+                child: const Text('Try Again'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final series = _series;
+    if (series == null) return const SizedBox();
 
     final chartData = _chartType == ChartType.heikinAshi
         ? TradingChartService.toHeikinAshi(series.data)
         : series.data;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Text('${stock.symbol} — Advanced Chart'),
-        actions: [
-          IconButton(
-            tooltip: 'Indicators',
-            icon: const Icon(LucideIcons.barChart2, size: 20),
-            onPressed: () => _showIndicatorPanel(context),
-          ),
-          IconButton(
-            tooltip: 'Compare',
-            icon: const Icon(LucideIcons.gitCompare, size: 20),
-            onPressed: () => _showCompareDialog(context, store),
-          ),
-          IconButton(
-            tooltip: 'Drawing Tools',
-            icon: const Icon(LucideIcons.edit, size: 20),
-            onPressed: () => _showDrawingToolsSheet(context),
-          ),
-          IconButton(
-            tooltip: 'Screenshot',
-            icon: const Icon(LucideIcons.camera, size: 20),
-            onPressed: () => ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Screenshot saved'))),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildToolbar(),
-          // Slim loading bar — doesn't shift layout
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            height: _loading ? 2 : 0,
-            child: _loading
-                ? LinearProgressIndicator(
-                    minHeight: 2,
-                    backgroundColor: Colors.transparent,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      AppColors.primary.withOpacity(0.7),
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Text(
-                'Live chart unavailable: $_error',
-                style: const TextStyle(fontSize: 11, color: AppColors.danger),
-              ),
-            ),
-          Expanded(
-            child: Container(
-              color: _kChartBg,
-              child: FadeTransition(
-                opacity: _fadeAnim,
-                child: _buildChart(chartData, series, compareSeries),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildToolbar() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: const Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            // Chart type selector
-            _chartTypeSelector(),
-            const SizedBox(width: 16),
-            const VerticalDivider(width: 1, thickness: 1),
-            const SizedBox(width: 16),
-            // Timeframe chips
-            ..._timeframeChips(),
-            const SizedBox(width: 16),
-            const VerticalDivider(width: 1, thickness: 1),
-            const SizedBox(width: 16),
-            // Date range chips
-            ..._dateRangeChips(),
-          ],
+    if (chartData.isEmpty || (chartData.length <= 1 && chartData.first.close <= 0)) {
+      return const Center(
+        child: Text(
+          'No data available',
+          style: TextStyle(color: _kAxisColor),
         ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Symbol overlay label
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          color: Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${stock.symbol} · ${_timeframe.name.toUpperCase()} · ${stock.exchange}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF333333),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Text(
+                    stock.currentPrice.toStringAsFixed(2),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: stock.isPositive ? _kBullColor : _kBearColor,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${stock.isPositive ? '+' : ''}${stock.changePercentage.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: stock.isPositive ? _kBullColor : _kBearColor,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // Main Chart
+        Expanded(
+          flex: 5,
+          child: _buildChart(chartData, series, null),
+        ),
+        // Volume Panel
+        if (series.data.any((c) => c.volume > 0)) ...[
+          Container(height: 1, color: const Color(0xFFEEEEEE)),
+          SizedBox(
+            height: 80,
+            child: _buildVolumeChart(series.data),
+          ),
+        ],
+        // Date Range Bar
+        _buildDateRangeToolbar(),
+      ],
+    );
+  }
+
+  Widget _buildBottomStatusBar(Stock stock) {
+    return Container(
+      height: 48,
+      color: stock.isPositive ? _kBullColor : _kBearColor,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          const Icon(Icons.flash_on, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            stock.currentPrice.toStringAsFixed(2),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const Spacer(),
+          const Text(
+            'LIVE MARKET',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _chartTypeSelector() {
-    final types = [
-      (ChartType.candles, 'Candles', LucideIcons.candlestickChart),
-      (ChartType.heikinAshi, 'HA', LucideIcons.candlestickChart),
-      (ChartType.line, 'Line', LucideIcons.trendingUp),
-      (ChartType.area, 'Area', LucideIcons.areaChart),
-      (ChartType.bar, 'Bar', LucideIcons.barChart),
-    ];
-    return Row(
-      children: types.map((t) {
-        final selected = _chartType == t.$1;
-        return Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: InkWell(
-            onTap: () {
-              if (_chartType == t.$1) return;
-              setState(() => _chartType = t.$1);
-              // Chart type change doesn't need a reload — data is the same
-            },
-            borderRadius: BorderRadius.circular(6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: selected
-                    ? AppColors.primary.withOpacity(0.15)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: selected ? AppColors.primary : Colors.transparent,
+  void _showTimeframeSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Select Timeframe', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Divider(),
+              Expanded(
+                child: ListView(
+                  children: ChartTimeframe.values.map((tf) {
+                    return ListTile(
+                      title: Text(tf.name.toUpperCase()),
+                      selected: _timeframe == tf,
+                      onTap: () {
+                        setState(() => _timeframe = tf);
+                        _loadSeries();
+                        Navigator.pop(context);
+                      },
+                    );
+                  }).toList(),
                 ),
               ),
-              child: Text(
-                t.$2,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected ? AppColors.primary : AppColors.textSecondary,
-                ),
-              ),
-            ),
+            ],
           ),
         );
-      }).toList(),
+      },
     );
   }
 
-  List<Widget> _timeframeChips() {
-    const labels = [
-      '1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M',
-    ];
-    const values = [
-      ChartTimeframe.m1, ChartTimeframe.m3, ChartTimeframe.m5,
-      ChartTimeframe.m15, ChartTimeframe.m30, ChartTimeframe.h1,
-      ChartTimeframe.h4, ChartTimeframe.d1, ChartTimeframe.w1,
-      ChartTimeframe.mo1,
-    ];
-    return List.generate(labels.length, (i) {
-      final selected = _timeframe == values[i];
-      return Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: _toolbarChip(labels[i], selected, () {
-          if (_timeframe == values[i]) return;
-          setState(() => _timeframe = values[i]); // instant UI feedback
-          _loadSeries();
-        }),
-      );
-    });
+  void _showChartTypeSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: ChartType.values.map((ct) {
+            return ListTile(
+              leading: Icon(_iconForType(ct)),
+              title: Text(ct.name.toUpperCase()),
+              selected: _chartType == ct,
+              onTap: () {
+                setState(() => _chartType = ct);
+                Navigator.pop(context);
+              },
+            );
+          }).toList(),
+        );
+      },
+    );
   }
 
-  List<Widget> _dateRangeChips() {
-    const labels = ['1D', '5D', '1M', '3M', '6M', '1Y', '3Y', '5Y', 'Max'];
-    const values = [
-      ChartDateRange.d1, ChartDateRange.d5, ChartDateRange.mo1,
-      ChartDateRange.mo3, ChartDateRange.mo6, ChartDateRange.y1,
-      ChartDateRange.y3, ChartDateRange.y5, ChartDateRange.max,
-    ];
-    return List.generate(labels.length, (i) {
-      final selected = _dateRange == values[i];
-      return Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: _toolbarChip(labels[i], selected, () {
-          if (_dateRange == values[i]) return;
-          setState(() => _dateRange = values[i]); // instant UI feedback
-          _loadSeries();
-        }),
-      );
-    });
+  IconData _iconForType(ChartType type) {
+    switch (type) {
+      case ChartType.candles: return Icons.candlestick_chart;
+      case ChartType.line: return Icons.show_chart;
+      case ChartType.area: return Icons.area_chart;
+      case ChartType.bar: return Icons.bar_chart;
+      default: return Icons.auto_graph;
+    }
   }
 
-  Widget _toolbarChip(String label, bool selected, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.primary.withOpacity(0.15)
-              : AppColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: selected ? AppColors.primary : AppColors.border,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            color: selected ? AppColors.primary : AppColors.textSecondary,
-          ),
-        ),
+  Widget _buildDateRangeToolbar() {
+    const labels = ['1D', '5D', '1M', '3M', '6M', '1Y', '5Y', 'All'];
+    const values = [
+      ChartDateRange.d1,
+      ChartDateRange.d5,
+      ChartDateRange.mo1,
+      ChartDateRange.mo3,
+      ChartDateRange.mo6,
+      ChartDateRange.y1,
+      ChartDateRange.y5,
+      ChartDateRange.max,
+    ];
+
+    return Container(
+      height: 40,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: List.generate(labels.length, (i) {
+          final selected = _dateRange == values[i];
+          return GestureDetector(
+            onTap: () {
+              setState(() => _dateRange = values[i]);
+              _loadSeries();
+            },
+            child: Text(
+              labels[i],
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                color: selected ? Colors.black : const Color(0xFF9E9E9E),
+              ),
+            ),
+          );
+        }),
       ),
     );
   }
+
+
 
   Widget _buildChart(
     List<TradingCandle> chartData,
     TradingChartSeries series,
     TradingChartSeries? compareSeries,
   ) {
+    if (chartData.length <= 1 && chartData.first.close <= 0) {
+      return const Center(
+        child: Text(
+          'No candles available for this instrument',
+          style: TextStyle(color: _kAxisColor, fontSize: 13),
+        ),
+      );
+    }
     final closes = chartData.map((c) => c.close).toList();
     final emaValues = _showEma ? TradingChartService.ema(closes, 20) : null;
     final bbValues = _showBollinger
@@ -426,6 +582,11 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
     // Determine if overall trend is up for line/area color
     final isUp = series.close >= series.open;
+
+    // Start zoomed in: show ~50 of the most-recent candles.
+    // Position=1.0 anchors the visible window to the right (latest data).
+    final n = chartData.length;
+    final initialZoom = n > 50 ? (50 / n).clamp(0.02, 1.0) : 1.0;
 
     return SfCartesianChart(
       key: ValueKey(_chartVersion),
@@ -439,6 +600,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         enablePanning: true,
         enableDoubleTapZooming: true,
         enableMouseWheelZooming: true,
+        maximumZoomLevel: 0.02,
         zoomMode: ZoomMode.x,
       ),
       crosshairBehavior: CrosshairBehavior(
@@ -454,51 +616,52 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         activationMode: ActivationMode.singleTap,
         tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
         lineType: TrackballLineType.vertical,
-        lineColor: Colors.white.withOpacity(0.25),
+        lineColor: const Color(0xFF757575).withOpacity(0.4),
         lineWidth: 1,
-        tooltipSettings: InteractiveTooltip(
+        tooltipSettings: const InteractiveTooltip(
           enable: true,
-          color: const Color(0xFF1E2530),
-          borderColor: _kAxisColor,
-          borderWidth: 1,
-          textStyle: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontFamily: 'JetBrainsMono',
-          ),
+          color: Color(0xFF333333),
+          textStyle: TextStyle(color: Colors.white, fontSize: 11),
         ),
       ),
       primaryXAxis: DateTimeAxis(
-        majorGridLines: const MajorGridLines(
-          color: _kGridColor,
-          width: 1,
-        ),
-        minorGridLines: const MinorGridLines(width: 0),
+        initialZoomFactor: initialZoom,
+        initialZoomPosition: 1.0,
+        isVisible: true,
+        majorGridLines: const MajorGridLines(color: _kGridColor, width: 1),
         axisLine: const AxisLine(width: 0),
-        dateFormat: DateFormat.Hm(),
-        intervalType: DateTimeIntervalType.auto,
-        labelStyle: const TextStyle(
-          fontSize: 10,
-          color: _kAxisColor,
-          fontFamily: 'JetBrainsMono',
-        ),
+        dateFormat: DateFormat('MMM'),
+        intervalType: DateTimeIntervalType.months,
+        labelStyle: const TextStyle(fontSize: 11, color: _kAxisColor),
         majorTickLines: const MajorTickLines(size: 0),
       ),
       primaryYAxis: NumericAxis(
         opposedPosition: true,
-        majorGridLines: const MajorGridLines(
-          color: _kGridColor,
-          width: 1,
-        ),
-        minorGridLines: const MinorGridLines(width: 0),
+        isVisible: true,
+        majorGridLines: const MajorGridLines(color: _kGridColor, width: 1),
         axisLine: const AxisLine(width: 0),
-        numberFormat: NumberFormat.simpleCurrency(decimalDigits: 0, name: '₹'),
-        labelStyle: const TextStyle(
-          fontSize: 10,
-          color: _kAxisColor,
-          fontFamily: 'JetBrainsMono',
-        ),
+        numberFormat: NumberFormat('#,##0.00'),
+        rangePadding: ChartRangePadding.round,
+        labelStyle: const TextStyle(fontSize: 11, color: Color(0xFF333333)),
         majorTickLines: const MajorTickLines(size: 0),
+        plotBands: series.close > 0
+            ? [
+                PlotBand(
+                  start: series.close,
+                  end: series.close,
+                  borderColor: const Color(0xFF00897B),
+                  borderWidth: 1.5,
+                  dashArray: const [4, 4],
+                  text: '  ${series.close.toStringAsFixed(2)}',
+                  textStyle: const TextStyle(
+                    color: Color(0xFF00897B),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  verticalTextAlignment: TextAnchor.middle,
+                ),
+              ]
+            : [],
       ),
       series: <CartesianSeries>[
         ..._buildMainSeries(chartData, series),
@@ -507,6 +670,55 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         if (compareSeries != null) _buildCompareSeries(compareSeries),
       ],
     );
+  }
+
+  Widget _buildVolumeChart(List<TradingCandle> data) {
+    return SfCartesianChart(
+      backgroundColor: Colors.white,
+      plotAreaBackgroundColor: Colors.white,
+      plotAreaBorderWidth: 0,
+      margin: const EdgeInsets.only(right: 8),
+      primaryXAxis: DateTimeAxis(isVisible: false),
+      primaryYAxis: NumericAxis(
+        opposedPosition: true,
+        isVisible: true,
+        labelStyle: const TextStyle(fontSize: 9, color: Color(0xFF9E9E9E)),
+        majorGridLines: const MajorGridLines(width: 0),
+        axisLine: const AxisLine(width: 0),
+        majorTickLines: const MajorTickLines(size: 0),
+        numberFormat: NumberFormat.compact(),
+      ),
+      series: <CartesianSeries>[
+        ColumnSeries<TradingCandle, DateTime>(
+          dataSource: data,
+          xValueMapper: (c, _) => c.time,
+          yValueMapper: (c, _) => c.volume,
+          pointColorMapper: (c, _) => c.close >= c.open
+              ? const Color(0xFF00C853).withOpacity(0.4)
+              : const Color(0xFFE53935).withOpacity(0.4),
+          borderWidth: 0,
+          spacing: 0.15,
+          animationDuration: 0,
+        ),
+      ],
+    );
+  }
+
+  DateFormat _dateFormatForRange() {
+    switch (_dateRange) {
+      case ChartDateRange.d1:
+      case ChartDateRange.d5:
+        return DateFormat.Hm();
+      case ChartDateRange.mo1:
+      case ChartDateRange.mo3:
+        return DateFormat('dd MMM');
+      default:
+        return DateFormat('MMM yy');
+    }
+  }
+
+  String _cleanError(String error) {
+    return error.replaceFirst('BackendException: ', '');
   }
 
   List<CartesianSeries> _buildMainSeries(
@@ -530,9 +742,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
             enableSolidCandles: true,
             bearColor: _kBearColor,
             bullColor: _kBullColor,
-            // Slim wicks, slightly wider bodies for premium look
-            width: 0.7,
-            animationDuration: 400,
+            width: data.length > 180 ? 0.45 : 0.68,
+            animationDuration: 150,
             animationDelay: 0,
           ),
         ];
@@ -598,10 +809,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [
-                areaColor.withOpacity(0.18),
-                areaColor.withOpacity(0.0),
-              ],
+              colors: [areaColor.withOpacity(0.18), areaColor.withOpacity(0.0)],
             ),
             animationDuration: 500,
             animationDelay: 0,

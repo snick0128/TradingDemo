@@ -55,10 +55,16 @@ class _OIBuildupScreenState extends State<OIBuildupScreen>
     final key = _cacheKey(datatype);
     if (_cache.containsKey(key)) return; // already loaded
 
-    setState(() { _loading[key] = true; _errors[key] = null; });
+    setState(() {
+      _loading[key] = true;
+      _errors[key] = null;
+    });
     try {
       final data = await _api.getOIBuildup(datatype: datatype, expiry: _expiry);
-      setState(() { _cache[key] = data; _loading[key] = false; });
+      setState(() {
+        _cache[key] = data;
+        _loading[key] = false;
+      });
     } catch (e) {
       setState(() {
         _errors[key] = e.toString().replaceFirst('BackendException: ', '');
@@ -100,12 +106,17 @@ class _OIBuildupScreenState extends State<OIBuildupScreen>
               child: DropdownButton<String>(
                 value: _expiry,
                 isDense: true,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
                 items: ['NEAR', 'NEXT', 'FAR']
                     .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                     .toList(),
-                onChanged: (v) { if (v != null) _onExpiryChanged(v); },
+                onChanged: (v) {
+                  if (v != null) _onExpiryChanged(v);
+                },
               ),
             ),
           ),
@@ -139,10 +150,7 @@ class _OIBuildupScreenState extends State<OIBuildupScreen>
             );
           }
 
-          return _OIBuildupList(
-            datatype: datatype,
-            items: data,
-          );
+          return _OIBuildupList(datatype: datatype, items: data);
         }).toList(),
       ),
     );
@@ -159,21 +167,31 @@ class _OIBuildupList extends StatelessWidget {
 
   Color get _accentColor {
     switch (datatype) {
-      case 'Long Built Up':    return AppColors.success;
-      case 'Short Built Up':   return AppColors.danger;
-      case 'Short Covering':   return AppColors.warning;
-      case 'Long Unwinding':   return const Color(0xFFFF6B35);
-      default:                 return AppColors.primary;
+      case 'Long Built Up':
+        return AppColors.success;
+      case 'Short Built Up':
+        return AppColors.danger;
+      case 'Short Covering':
+        return AppColors.warning;
+      case 'Long Unwinding':
+        return const Color(0xFFFF6B35);
+      default:
+        return AppColors.primary;
     }
   }
 
   String get _description {
     switch (datatype) {
-      case 'Long Built Up':  return 'Price ↑ + OI ↑ — Bullish momentum';
-      case 'Short Built Up': return 'Price ↓ + OI ↑ — Bearish momentum';
-      case 'Short Covering': return 'Price ↑ + OI ↓ — Bears exiting';
-      case 'Long Unwinding': return 'Price ↓ + OI ↓ — Bulls exiting';
-      default: return '';
+      case 'Long Built Up':
+        return 'Price ↑ + OI ↑ — Bullish momentum';
+      case 'Short Built Up':
+        return 'Price ↓ + OI ↑ — Bearish momentum';
+      case 'Short Covering':
+        return 'Price ↑ + OI ↓ — Bears exiting';
+      case 'Long Unwinding':
+        return 'Price ↓ + OI ↓ — Bulls exiting';
+      default:
+        return '';
     }
   }
 
@@ -198,8 +216,11 @@ class _OIBuildupList extends StatelessWidget {
           color: _accentColor.withValues(alpha: 0.08),
           child: Text(
             _description,
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: _accentColor),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: _accentColor,
+            ),
           ),
         ),
         // Header
@@ -209,21 +230,53 @@ class _OIBuildupList extends StatelessWidget {
           child: const Row(
             children: [
               SizedBox(width: 28),
-              Expanded(flex: 4, child: Text('Symbol',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary))),
-              Expanded(flex: 2, child: Text('LTP',
+              Expanded(
+                flex: 4,
+                child: Text(
+                  'Symbol',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  'LTP',
                   textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary))),
-              Expanded(flex: 2, child: Text('Chg%',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  'Chg%',
                   textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary))),
-              Expanded(flex: 3, child: Text('OI Chg',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: Text(
+                  'OI Chg',
                   textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary))),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -236,34 +289,53 @@ class _OIBuildupList extends StatelessWidget {
               final item = items[index];
               final symbol = item['tradingSymbol'] as String? ?? '';
               final underlying = symbol.replaceAll(
-                  RegExp(r'\d{2}[A-Z]{3}\d{2}(FUT|CE|PE)$'), '');
+                RegExp(r'\d{2}[A-Z]{3}\d{2}(FUT|CE|PE)$'),
+                '',
+              );
               final ltp = (item['ltp'] as num?)?.toDouble() ?? 0;
               final pct = (item['percentChange'] as num?)?.toDouble() ?? 0;
-              final oiChg = (item['netChangeOpenInterest'] as num?)?.toDouble() ?? 0;
+              final oiChg =
+                  (item['netChangeOpenInterest'] as num?)?.toDouble() ?? 0;
               final isPos = pct >= 0;
 
               return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
                     SizedBox(
                       width: 28,
-                      child: Text('${index + 1}',
-                          style: const TextStyle(fontSize: 12,
-                              color: AppColors.textSecondary)),
+                      child: Text(
+                        '${index + 1}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                     ),
                     Expanded(
                       flex: 4,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(underlying,
-                              style: const TextStyle(fontWeight: FontWeight.w700,
-                                  fontSize: 14, color: AppColors.textPrimary)),
-                          Text(symbol,
-                              style: const TextStyle(fontSize: 10,
-                                  color: AppColors.textSecondary),
-                              overflow: TextOverflow.ellipsis),
+                          Text(
+                            underlying,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          Text(
+                            symbol,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: AppColors.textSecondary,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ],
                       ),
                     ),
@@ -273,7 +345,9 @@ class _OIBuildupList extends StatelessWidget {
                         '₹${ltp.toStringAsFixed(2)}',
                         textAlign: TextAlign.right,
                         style: GoogleFonts.jetBrainsMono(
-                            fontSize: 12, color: AppColors.textPrimary),
+                          fontSize: 12,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                     ),
                     Expanded(
@@ -281,8 +355,11 @@ class _OIBuildupList extends StatelessWidget {
                       child: Text(
                         '${isPos ? '+' : ''}${pct.toStringAsFixed(2)}%',
                         textAlign: TextAlign.right,
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                            color: isPos ? AppColors.success : AppColors.danger),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: isPos ? AppColors.success : AppColors.danger,
+                        ),
                       ),
                     ),
                     Expanded(
@@ -292,7 +369,9 @@ class _OIBuildupList extends StatelessWidget {
                         textAlign: TextAlign.right,
                         style: GoogleFonts.jetBrainsMono(
                           fontSize: 11,
-                          color: oiChg >= 0 ? AppColors.success : AppColors.danger,
+                          color: oiChg >= 0
+                              ? AppColors.success
+                              : AppColors.danger,
                         ),
                       ),
                     ),
@@ -310,8 +389,8 @@ class _OIBuildupList extends StatelessWidget {
     final sign = v >= 0 ? '+' : '';
     final abs = v.abs();
     if (abs >= 10000000) return '$sign${(v / 10000000).toStringAsFixed(2)}Cr';
-    if (abs >= 100000)   return '$sign${(v / 100000).toStringAsFixed(2)}L';
-    if (abs >= 1000)     return '$sign${(v / 1000).toStringAsFixed(1)}K';
+    if (abs >= 100000) return '$sign${(v / 100000).toStringAsFixed(2)}L';
+    if (abs >= 1000) return '$sign${(v / 1000).toStringAsFixed(1)}K';
     return '$sign${v.toStringAsFixed(0)}';
   }
 }

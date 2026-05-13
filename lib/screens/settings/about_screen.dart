@@ -10,10 +10,7 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        leading: const BackButton(),
-        title: const Text('About'),
-      ),
+      appBar: AppBar(leading: const BackButton(), title: const Text('About')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -31,20 +28,33 @@ class AboutScreen extends StatelessWidget {
                         colors: [AppColors.primary, AppColors.accent],
                       ),
                     ),
-                    child: const Icon(LucideIcons.candlestickChart,
-                        size: 36, color: Colors.white),
+                    child: const Icon(
+                      LucideIcons.candlestickChart,
+                      size: 36,
+                      color: Colors.white,
+                    ),
                   ),
                   const SizedBox(height: 16),
-                  Text('Trade Kosh',
-                      style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    'Trade Kosh',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                   const SizedBox(height: 4),
-                  const Text('Version 1.0.0 (Build 1)',
-                      style: TextStyle(
-                          fontSize: 13, color: AppColors.textSecondary)),
+                  const Text(
+                    'Version 1.0.0 (Build 1)',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  const Text('Client Demo Build',
-                      style: TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary)),
+                  const Text(
+                    'Client Demo Build',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -74,20 +84,28 @@ class AboutScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Credits',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Credits',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 12),
                   const _CreditRow(
-                      name: 'Flutter', role: 'UI Framework by Google'),
+                    name: 'Flutter',
+                    role: 'UI Framework by Google',
+                  ),
                   const _CreditRow(
-                      name: 'Syncfusion',
-                      role: 'Charts & Data Visualization'),
+                    name: 'Syncfusion',
+                    role: 'Charts & Data Visualization',
+                  ),
                   const _CreditRow(
-                      name: 'Google Fonts', role: 'Inter & JetBrains Mono'),
+                    name: 'Google Fonts',
+                    role: 'Inter & JetBrains Mono',
+                  ),
+                  const _CreditRow(name: 'Lucide Icons', role: 'Icon Library'),
                   const _CreditRow(
-                      name: 'Lucide Icons', role: 'Icon Library'),
-                  const _CreditRow(
-                      name: 'flutter_animate', role: 'Animation Library'),
+                    name: 'flutter_animate',
+                    role: 'Animation Library',
+                  ),
                 ],
               ),
             ),
@@ -126,12 +144,17 @@ class AboutScreen extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 13, color: AppColors.textSecondary)),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );
@@ -140,11 +163,14 @@ class AboutScreen extends StatelessWidget {
   Widget _legalTile(BuildContext context, String title) {
     return ListTile(
       title: Text(title, style: const TextStyle(fontSize: 14)),
-      trailing: const Icon(Icons.chevron_right,
-          color: AppColors.textSecondary, size: 20),
-      onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$title coming soon')),
+      trailing: const Icon(
+        Icons.chevron_right,
+        color: AppColors.textSecondary,
+        size: 20,
       ),
+      onTap: () => ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$title coming soon'))),
     );
   }
 }
@@ -161,17 +187,21 @@ class _CreditRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          const Icon(LucideIcons.heart,
-              size: 14, color: AppColors.danger),
+          const Icon(LucideIcons.heart, size: 14, color: AppColors.danger),
           const SizedBox(width: 8),
-          Text(name,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 13)),
+          Text(
+            name,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(role,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary)),
+            child: Text(
+              role,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
+            ),
           ),
         ],
       ),

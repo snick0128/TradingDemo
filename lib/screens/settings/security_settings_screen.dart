@@ -89,8 +89,10 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                   ),
                   if (_error.isNotEmpty) ...[
                     const SizedBox(height: 8),
-                    Text(_error,
-                        style: const TextStyle(color: AppColors.danger)),
+                    Text(
+                      _error,
+                      style: const TextStyle(color: AppColors.danger),
+                    ),
                   ],
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
@@ -111,8 +113,10 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
               child: sessionLog.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.all(16),
-                      child: Text('No session history.',
-                          style: TextStyle(color: AppColors.textSecondary)),
+                      child: Text(
+                        'No session history.',
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
                     )
                   : Column(
                       children: sessionLog.reversed
@@ -120,21 +124,29 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                           .toList()
                           .asMap()
                           .entries
-                          .map((e) => Column(
-                                children: [
-                                  ListTile(
-                                    leading: const Icon(LucideIcons.logIn,
-                                        size: 18, color: AppColors.success),
-                                    title: Text(fmt.format(e.value),
-                                        style: const TextStyle(fontSize: 13)),
-                                    subtitle: const Text('Login session',
-                                        style: TextStyle(fontSize: 11)),
+                          .map(
+                            (e) => Column(
+                              children: [
+                                ListTile(
+                                  leading: const Icon(
+                                    LucideIcons.logIn,
+                                    size: 18,
+                                    color: AppColors.success,
                                   ),
-                                  if (e.key <
-                                      sessionLog.length.clamp(0, 10) - 1)
-                                    const Divider(height: 1),
-                                ],
-                              ))
+                                  title: Text(
+                                    fmt.format(e.value),
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                  subtitle: const Text(
+                                    'Login session',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                                if (e.key < sessionLog.length.clamp(0, 10) - 1)
+                                  const Divider(height: 1),
+                              ],
+                            ),
+                          )
                           .toList(),
                     ),
             ),

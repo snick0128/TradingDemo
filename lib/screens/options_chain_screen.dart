@@ -826,10 +826,11 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       builder: (context, _) {
         return Opacity(
           opacity: _skeletonOpacity.value,
-          child: ListView.builder(
+          child: SingleChildScrollView(
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: 8,
-            itemBuilder: (_, __) => _SkeletonStrikeRow(),
+            child: Column(
+              children: List.generate(8, (_) => _SkeletonStrikeRow()),
+            ),
           ),
         );
       },

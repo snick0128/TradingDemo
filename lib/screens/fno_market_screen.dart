@@ -308,11 +308,10 @@ class _ExchangeTab extends StatelessWidget {
 
   Widget _buildBody(BuildContext context) {
     if (isLoading) {
-      return ListView.builder(
-        itemCount: 8,
-        itemBuilder: (_, __) => const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: ShimmerListTile(),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Column(
+          children: List.generate(8, (_) => const ShimmerListTile()),
         ),
       );
     }
@@ -356,15 +355,19 @@ class _ExchangeTab extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
+    return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 24),
-      itemCount: items.length,
-      separatorBuilder: (_, __) =>
-          const Divider(height: 1, indent: 16, endIndent: 16, color: AppColors.border),
-      itemBuilder: (context, i) => _UnderlyingTile(
-        data: items[i],
-        exchangeMeta: meta,
-        onTap: () => onUnderlyingTap(items[i]),
+      child: Column(
+        children: items.map((item) => Column(
+          children: [
+            _UnderlyingTile(
+              data: item,
+              exchangeMeta: meta,
+              onTap: () => onUnderlyingTap(item),
+            ),
+            const Divider(height: 1, indent: 16, endIndent: 16, color: AppColors.border),
+          ],
+        )).toList(),
       ),
     );
   }
@@ -912,12 +915,13 @@ class _FuturesContractsScreenState extends State<_FuturesContractsScreen> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return ListView.builder(
+      return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        itemCount: 5,
-        itemBuilder: (_, __) => const Padding(
-          padding: EdgeInsets.only(bottom: 8),
-          child: ShimmerListTile(),
+        child: Column(
+          children: List.generate(5, (_) => const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: ShimmerListTile(),
+          )),
         ),
       );
     }
@@ -959,12 +963,14 @@ class _FuturesContractsScreenState extends State<_FuturesContractsScreen> {
       );
     }
 
-    return ListView.separated(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      itemCount: _contracts.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) =>
-          _FutureContractTile(contract: _contracts[i], exchange: widget.exchange),
+      child: Column(
+        children: _contracts.map((contract) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _FutureContractTile(contract: contract, exchange: widget.exchange),
+        )).toList(),
+      ),
     );
   }
 }

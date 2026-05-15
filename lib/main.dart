@@ -396,6 +396,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                       ? updatedAt.toDate()
                       : DateTime.now();
 
+                  final rawExchange =
+                      (data['exchange'] as String?)?.trim().toUpperCase() ??
+                      'NSE';
                   return Position(
                     symbol: symbol,
                     name: symbolName,
@@ -405,6 +408,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                     currentPrice: currentPrice,
                     side: rawSide == 'SELL' ? OrderType.sell : OrderType.buy,
                     openedAt: openedAt,
+                    exchange: rawExchange,
                   );
                 })
                 .where((p) => p.quantity > 0)
@@ -438,6 +442,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final avgPrice = ((data['avg_price'] as num?) ?? 0).toDouble();
               final productType = ((data['productType'] as String?) ?? 'MIS')
                   .toUpperCase();
+              final rawSide =
+                  ((data['side'] as String?) ?? 'BUY').trim().toUpperCase();
+              final isShort = rawSide == 'SELL';
               final currentPrice = _tradingStore
                   .stockBySymbol(symbol)
                   .currentPrice;
@@ -448,7 +455,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                   ? DateTime.fromMillisecondsSinceEpoch(updatedAt as int)
                   : DateTime.now();
 
-              if (productType == 'CNC' || productType == 'NRML') {
+              if ((productType == 'CNC' || productType == 'NRML') &&
+                  !isShort) {
+                // Long NRML/CNC holdings → Holdings tab
                 newHoldings.add(
                   Holding(
                     symbol: symbol,
@@ -460,17 +469,23 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                   ),
                 );
               } else {
-                // MIS (intraday) → Positions tab
+                // MIS positions + short NRML/MIS → Positions tab
+                final posExchange =
+                    ((data['exchange'] as String?)?.trim().toUpperCase()) ??
+                    'NSE';
                 newPositions.add(
                   Position(
                     symbol: symbol,
                     name: symbol,
-                    product: ProductType.mis,
+                    product: productType == 'NRML'
+                        ? ProductType.nrml
+                        : ProductType.mis,
                     quantity: qty,
                     avgPrice: avgPrice,
                     currentPrice: currentPrice,
-                    side: OrderType.buy,
+                    side: isShort ? OrderType.sell : OrderType.buy,
                     openedAt: date,
+                    exchange: posExchange,
                   ),
                 );
               }

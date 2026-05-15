@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../theme.dart';
+import '../widgets/shared_widgets.dart';
 
 /// Full-screen error state shown when the backend is unreachable.
 ///
@@ -144,35 +145,14 @@ class _CompactError extends StatelessWidget {
   }
 }
 
-/// Loading shimmer shown while waiting for first data from backend.
+/// Shimmer loading skeleton shown while waiting for first data from backend.
+/// Shows a dashboard-like skeleton instead of a plain spinner.
 class BackendLoadingWidget extends StatelessWidget {
   const BackendLoadingWidget({super.key, this.message});
   final String? message;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 36,
-            height: 36,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: AppColors.primary,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            message ?? 'Loading market data...',
-            style: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
+    return const ShimmerDashboard();
   }
 }

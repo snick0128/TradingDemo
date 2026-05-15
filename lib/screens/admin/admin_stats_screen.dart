@@ -159,9 +159,9 @@ class _KpiGrid extends StatelessWidget {
         physics: const NeverScrollableScrollPhysics(),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: cols,
+          mainAxisExtent: 68,
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
-          childAspectRatio: cols == 8 ? 2.4 : 2.0,
         ),
         itemCount: kpis.length,
         itemBuilder: (_, i) => _KpiCard(data: kpis[i]),

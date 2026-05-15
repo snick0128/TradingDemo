@@ -511,113 +511,143 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   Widget _buildStockHeader(BuildContext context, Stock stock) {
     final isPos = stock.changePercentage >= 0;
-    final changeColor = isPos
-        ? const Color(0xFF00C853)
-        : const Color(0xFFD50000);
+    final changeColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
     final arrow = isPos ? '+' : '';
+    final exColor = _exchangeBadgeColor(stock.exchange);
+    final chips = _derivativeChips(context, stock);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Logo / letter avatar
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFE0E0E0)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 4,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              stock.symbol.isNotEmpty ? stock.symbol[0] : '?',
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1565C0),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Symbol · Exchange badge (uses actual exchange from stock model)
+          // ── Compact two-column header row ──────────────────────────────
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '${stock.symbol} · ',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF757575),
+              // Left: avatar + symbol + name
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Small letter badge
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: exColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: exColor.withOpacity(0.25)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        stock.symbol.isNotEmpty ? stock.symbol[0] : '?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: exColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Symbol + exchange badge row
+                          Row(
+                            children: [
+                              Text(
+                                stock.symbol,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF0D0D0D),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: exColor.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  stock.exchange.isNotEmpty
+                                      ? stock.exchange
+                                      : 'NSE',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: exColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          // Expiry badge on its own line so it never overlaps price
+                          if (stock.isFutures) ...[
+                            const SizedBox(height: 3),
+                            _ExpiryBadge(stock: stock),
+                          ],
+                          const SizedBox(height: 2),
+                          Text(
+                            stock.name,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF757575),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _exchangeBadgeColor(stock.exchange).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: _exchangeBadgeColor(stock.exchange),
+              const SizedBox(width: 12),
+              // Right: LTP + change
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '₹${stock.currentPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF0D0D0D),
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: changeColor.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '$arrow${(stock.currentPrice * stock.changePercentage / 100).toStringAsFixed(2)} ($arrow${stock.changePercentage.abs().toStringAsFixed(2)}%)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: changeColor,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              // Show expiry badge for futures contracts
-              if (stock.isFutures) ...[
-                const SizedBox(width: 6),
-                _ExpiryBadge(stock: stock),
-              ],
             ],
           ),
-          const SizedBox(height: 4),
-          // Full company name
-          Text(
-            stock.name,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF0D0D0D),
-            ),
-          ),
-          const SizedBox(height: 8),
-          // LTP
-          Text(
-            '₹${stock.currentPrice.toStringAsFixed(2)}',
-            style: GoogleFonts.inter(
-              fontSize: 32,
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF0D0D0D),
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          const SizedBox(height: 4),
-          // Change
-          Text(
-            '${arrow}${(stock.currentPrice * stock.changePercentage / 100).toStringAsFixed(2)} (${arrow}${stock.changePercentage.toStringAsFixed(2)}%) · ${['1D', '1W', '1M', '1Y', '5Y', 'Max'][_selectedRange]}',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: changeColor,
-            ),
-          ),
-          // Derivative action chips — content depends on what this instrument IS
-          if (_derivativeChips(context, stock).isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Row(children: _derivativeChips(context, stock)),
+          // ── Derivative chips ────────────────────────────────────────────
+          if (chips.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(children: chips),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
         ],
       ),
     );
@@ -632,8 +662,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final fadeOpacity = _loadingSeries && _prevSeries == null
         ? const AlwaysStoppedAnimation(0.4)
         : _fadeAnim;
-    final hasRealCandles =
-        series.data.length > 1 || (series.data.isNotEmpty && series.close > 0);
+    final hasRealCandles = series.data.isNotEmpty && series.close > 0;
+    // Use line chart when only 1 candle exists — candle series can't render a single point
+    final effectiveLineMode = use1DLine || series.data.length <= 1;
     final low = hasRealCandles
         ? series.data.map((c) => c.low).reduce((a, b) => a < b ? a : b)
         : 0.0;
@@ -648,6 +679,16 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         : (series.data.isNotEmpty
             ? series.data.first.close // other ranges: first candle close
             : 0.0);
+
+    // Clamp axis to data range so no empty gaps appear (e.g. NIFTY index charts)
+    final axisMin = hasRealCandles ? series.data.first.time : null;
+    final axisMax = hasRealCandles
+        ? series.data.last.time.add(
+            _selectedRange <= 1
+                ? const Duration(minutes: 5)
+                : const Duration(days: 1),
+          )
+        : null;
 
     return Stack(
       children: [
@@ -671,7 +712,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               ),
                             ),
                           )
-                        : use1DLine
+                        : effectiveLineMode
                         ? SfCartesianChart(
                             backgroundColor: Colors.white,
                             plotAreaBackgroundColor: Colors.white,
@@ -680,6 +721,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                             margin: const EdgeInsets.only(right: 8),
                         primaryXAxis: DateTimeAxis(
                           isVisible: false,
+                          minimum: axisMin,
+                          maximum: axisMax,
                           majorGridLines: const MajorGridLines(width: 0),
                           axisLine: const AxisLine(width: 0),
                           majorTickLines: const MajorTickLines(size: 0),
@@ -727,6 +770,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         margin: const EdgeInsets.only(right: 8),
                         primaryXAxis: DateTimeAxis(
                           isVisible: false,
+                          minimum: axisMin,
+                          maximum: axisMax,
                           majorGridLines: const MajorGridLines(width: 0),
                           axisLine: const AxisLine(width: 0),
                           majorTickLines: const MajorTickLines(size: 0),
@@ -1290,8 +1335,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) =>
-                  OptionsChainScreen(symbol: _underlyingSymbol(stock.symbol)),
+              builder: (_) => OptionsChainScreen(
+                symbol: _underlyingSymbol(stock.symbol),
+                exchange: ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO',
+              ),
             ),
           ),
         ),
@@ -1307,8 +1354,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) =>
-                  OptionsChainScreen(symbol: _underlyingSymbol(stock.symbol)),
+              builder: (_) => OptionsChainScreen(
+                symbol: _underlyingSymbol(stock.symbol),
+                exchange: ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO',
+              ),
             ),
           ),
         ),
@@ -1322,6 +1371,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         ex == 'MCX' ||
         type == InstrumentType.equity ||
         type == InstrumentType.marketIndex) {
+      final chainExchange = ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO';
       return [
         _DerivativeChip(
           label: 'Option Chain',
@@ -1329,7 +1379,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => OptionsChainScreen(symbol: stock.symbol),
+              builder: (_) => OptionsChainScreen(
+                symbol: stock.symbol,
+                exchange: chainExchange,
+              ),
             ),
           ),
         ),
@@ -1341,7 +1394,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => OptionsChainScreen(symbol: stock.symbol),
+                builder: (_) => OptionsChainScreen(
+                  symbol: stock.symbol,
+                  exchange: chainExchange,
+                ),
               ),
             ),
           ),

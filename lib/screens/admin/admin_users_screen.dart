@@ -496,34 +496,73 @@ class _LeverageDialogState extends State<_LeverageDialog> {
               decoration: const BoxDecoration(
                 border: Border(top: BorderSide(color: AppColors.border)),
               ),
-              child: Row(
-                children: [
-                  // Reset all to default
-                  TextButton.icon(
-                    onPressed: () => setState(() {
-                      for (final seg in _kSegments) {
-                        _selected[seg.key] = null;
-                      }
-                    }),
-                    icon: const Icon(LucideIcons.rotateCcw, size: 14),
-                    label: const Text('Reset All'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.textSecondary,
+              child: isMobile
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _save,
+                          icon: const Icon(LucideIcons.save, size: 14),
+                          label: const Text('Save Leverage'),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: () => setState(() {
+                                  for (final seg in _kSegments) {
+                                    _selected[seg.key] = null;
+                                  }
+                                }),
+                                icon:
+                                    const Icon(LucideIcons.rotateCcw, size: 14),
+                                label: const Text('Reset All'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.textSecondary,
+                                  padding: EdgeInsets.zero,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        // Reset all to default
+                        TextButton.icon(
+                          onPressed: () => setState(() {
+                            for (final seg in _kSegments) {
+                              _selected[seg.key] = null;
+                            }
+                          }),
+                          icon: const Icon(LucideIcons.rotateCcw, size: 14),
+                          label: const Text('Reset All'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.textSecondary,
+                          ),
+                        ),
+                        const Spacer(),
+                        OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton.icon(
+                          onPressed: _save,
+                          icon: const Icon(LucideIcons.save, size: 14),
+                          label: const Text('Save Leverage'),
+                        ),
+                      ],
                     ),
-                  ),
-                  const Spacer(),
-                  OutlinedButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel'),
-                  ),
-                  const SizedBox(width: 10),
-                  ElevatedButton.icon(
-                    onPressed: _save,
-                    icon: const Icon(LucideIcons.save, size: 14),
-                    label: const Text('Save Leverage'),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
@@ -580,6 +619,47 @@ class _SegmentRow extends StatelessWidget {
         ),
       ),
     ];
+
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
+    if (isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            seg.label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceAlt,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected != null
+                    ? AppColors.warning.withOpacity(0.6)
+                    : AppColors.border,
+              ),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<double?>(
+                value: selected,
+                isExpanded: true,
+                icon: const Icon(LucideIcons.chevronDown, size: 14),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textPrimary,
+                ),
+                items: items,
+                onChanged: onChanged,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return Row(
       children: [

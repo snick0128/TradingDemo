@@ -10,6 +10,7 @@ import '../screens/admin/admin_shell.dart';
 import '../screens/main_shell.dart';
 import '../screens/auth/register_screen.dart';
 import '../screens/auth/pin_setup_screen.dart';
+import '../screens/auth/splash_screen.dart';
 
 /// Creates the app-wide GoRouter with dual entry points and role-based guards.
 ///
@@ -39,8 +40,10 @@ GoRouter createAppRouter(AuthSession authSession) {
       host.startsWith('admin-') ||
       currentPath.startsWith('/admin');
 
-  // Set the default landing page based on the host
-  String defaultLoc = isAdminHost ? '/admin/login' : '/app/login';
+  // Set the default landing page based on the host.
+  // Customer app starts at /app/splash which handles auth check then
+  // redirects to /app/login or /app/dashboard via GoRouter redirect logic.
+  String defaultLoc = isAdminHost ? '/admin/login' : '/app/splash';
 
   final String initialLoc = (currentPath == '/' || currentPath.isEmpty)
       ? defaultLoc
@@ -68,10 +71,11 @@ GoRouter createAppRouter(AuthSession authSession) {
       }
 
       final isAppLogin = loc == '/app/login';
+      final isAppSplash = loc == '/app/splash';
       final isAppRegister = loc == '/app/register';
       final isAdminLogin = loc == '/admin/login';
       final isProtectedApp =
-          loc.startsWith('/app/') && !isAppLogin && !isAppRegister;
+          loc.startsWith('/app/') && !isAppLogin && !isAppRegister && !isAppSplash;
       final isProtectedAdmin = loc.startsWith('/admin/') && !isAdminLogin;
 
       // Protect /app/* routes
@@ -86,14 +90,18 @@ GoRouter createAppRouter(AuthSession authSession) {
         if (!isAdmin) return '/admin/login';
       }
 
-      // Redirect authenticated users away from login pages
-      if (isAppLogin && isAuthenticated && isUser) return '/app/dashboard';
+      // Redirect authenticated users away from auth pages
+      if ((isAppLogin || isAppSplash) && isAuthenticated && isUser) return '/app/dashboard';
       if (isAdminLogin && isAuthenticated && isAdmin) return '/admin/dashboard';
 
       return null;
     },
     routes: [
       // ── Customer App ──────────────────────────────────────────────────
+      GoRoute(
+        path: '/app/splash',
+        builder: (context, state) => const SplashScreen(),
+      ),
       GoRoute(
         path: '/app/login',
         builder: (context, state) => const UserLoginPage(),

@@ -13,7 +13,8 @@ import '../widgets/backend_error_widget.dart';
 import '../widgets/shared_widgets.dart';
 import 'advanced_chart_screen.dart';
 import 'fno_dashboard_screen.dart';
-import 'ipo_screen.dart';
+import 'fno_market_screen.dart';
+import 'stock_guide_screen.dart';
 import 'market_depth_screen.dart';
 import 'notifications_center_screen.dart';
 import 'options_chain_screen.dart';
@@ -337,8 +338,8 @@ class _QuickActionsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = [
       (LucideIcons.barChart2, 'Markets', AppColors.primary),
-      (LucideIcons.bookOpen, 'Courses', const Color(0xFF6A1B9A)), // Purple for learning
-      (LucideIcons.fileText, 'IPO', AppColors.warning),
+      (LucideIcons.activity, 'F&O', const Color(0xFF00897B)),
+      (LucideIcons.bookOpen, 'Courses', const Color(0xFF6A1B9A)),
       (LucideIcons.moreHorizontal, 'More', AppColors.textSecondary),
     ];
 
@@ -355,15 +356,15 @@ class _QuickActionsRow extends StatelessWidget {
                 context,
                 MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
               );
+            } else if (a.$2 == 'F&O') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FnoMarketScreen()),
+              );
             } else if (a.$2 == 'Courses') {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const StockGuideScreen()),
-              );
-            } else if (a.$2 == 'IPO') {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const IPOScreen()),
               );
             } else if (a.$2 == 'More') {
               _showMoreActions(context);
@@ -408,6 +409,12 @@ class _QuickActionsRow extends StatelessWidget {
             ),
             _sheetItem(
               ctx,
+              'F&O Markets',
+              const FnoMarketScreen(),
+              icon: LucideIcons.activity,
+            ),
+            _sheetItem(
+              ctx,
               'Options Chain',
               const OptionsChainScreen(),
               icon: Icons.stacked_bar_chart,
@@ -416,7 +423,7 @@ class _QuickActionsRow extends StatelessWidget {
               ctx,
               'F&O Dashboard',
               const FnoDashboardScreen(),
-              icon: LucideIcons.activity,
+              icon: LucideIcons.barChart2,
             ),
             _sheetItem(
               ctx,

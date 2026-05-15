@@ -43,7 +43,15 @@ class BackendApiService {
     'Accept': 'application/json',
   };
 
-  Future<Map<String, dynamic>> _get(String path, {Duration? ttl}) async {
+  // Render free-tier cold starts can take up to 40s. Use 35s as the cap
+  // so requests survive a cold start without flooding the UI with errors.
+  static const _getTimeout = Duration(seconds: 35);
+
+  Future<Map<String, dynamic>> _get(
+    String path, {
+    Duration? ttl,
+    int attempt = 0,
+  }) async {
     final effectiveTtl = ttl ?? _shortTtl;
     final now = DateTime.now();
     final cached = _cache[path];
@@ -55,11 +63,11 @@ class BackendApiService {
     final pending = _inFlightGets[path];
     if (pending != null) return pending;
 
-    print('[BackendAPI] GET: $uri');
+    print('[BackendAPI] GET: $uri (attempt ${attempt + 1})');
     final request = () async {
       final response = await http
           .get(uri, headers: _headers)
-          .timeout(const Duration(seconds: 10));
+          .timeout(_getTimeout);
       print('[BackendAPI] Response: ${response.statusCode} for $path');
       final result = _parse(response);
       _cache[path] = _CacheEntry(data: result, expiry: now.add(effectiveTtl));
@@ -69,13 +77,20 @@ class BackendApiService {
     _inFlightGets[path] = request;
     try {
       return await request;
+    } on BackendException {
+      rethrow; // 4xx/5xx — pass the real backend error through
     } on TimeoutException {
-      if (cached != null) return cached.data; // serve stale on timeout
+      if (cached != null) return cached.data; // stale-while-revalidate
+      // One automatic retry for timeouts — covers Render cold starts
+      if (attempt == 0) {
+        _inFlightGets.remove(path);
+        return _get(path, ttl: ttl, attempt: 1);
+      }
       throw BackendException(
-        'The request took too long. Please check your connection and try again.',
+        'Server is waking up — please wait a moment and try again.',
       );
     } catch (e) {
-      if (cached != null) return cached.data; // serve stale on network error
+      if (cached != null) return cached.data; // stale-while-revalidate
       throw BackendException(
         'Could not reach the server. Please check your connection and try again.',
       );
@@ -96,6 +111,8 @@ class BackendApiService {
             const Duration(seconds: 30),
           ); // increased from 15s — Render cold starts + Firestore reads
       return _parse(response);
+    } on BackendException {
+      rethrow; // 4xx/5xx — pass the real error message through
     } on TimeoutException {
       throw BackendException(
         'The request took too long. Please check your connection and try again.',
@@ -312,6 +329,65 @@ class BackendApiService {
     final ex = (exchange.isNotEmpty) ? exchange.toUpperCase() : 'NSE';
     final res = await _get('/derivatives/quote?token=$token&exchange=$ex');
     return res['data'] as Map<String, dynamic>;
+  }
+
+  // ── F&O Instruments ─────────────────────────────────────────────────────────
+
+  /// Get all F&O underlyings for an exchange.
+  /// [exchange]: 'NFO' | 'BFO' | 'MCX'
+  Future<List<Map<String, dynamic>>> getFnoUnderlyings({
+    String exchange = 'NFO',
+  }) async {
+    final res = await _get(
+      '/derivatives/fno-underlyings?exchange=${Uri.encodeComponent(exchange)}',
+      ttl: _longTtl,
+    );
+    return List<Map<String, dynamic>>.from(res['data'] as List);
+  }
+
+  /// Get expiry dates for a symbol.
+  /// Returns ISO date strings e.g. ['2026-05-26', '2026-06-30'].
+  Future<List<String>> getFnoExpiryDates(
+    String symbol, {
+    String exchange = 'NFO',
+  }) async {
+    final res = await _get(
+      '/derivatives/expiry-dates?symbol=${Uri.encodeComponent(symbol)}&exchange=${Uri.encodeComponent(exchange)}',
+      ttl: _mediumTtl,
+    );
+    return List<String>.from(res['data'] as List);
+  }
+
+  /// Get live options chain for symbol + expiry.
+  /// Returns raw map with keys: underlying, expiry, underlyingLtp, strikes.
+  Future<Map<String, dynamic>> getOptionsChainData(
+    String symbol,
+    String expiry, {
+    String exchange = 'NFO',
+  }) async {
+    final res = await _get(
+      '/derivatives/options-chain?symbol=${Uri.encodeComponent(symbol)}&expiry=${Uri.encodeComponent(expiry)}&exchange=${Uri.encodeComponent(exchange)}',
+      ttl: _shortTtl,
+    );
+    return res['data'] as Map<String, dynamic>;
+  }
+
+  /// Browse F&O instruments (paginated).
+  /// [type]: 'ALL' | 'FUT' | 'OPT'
+  Future<List<Map<String, dynamic>>> getFnoInstruments({
+    String exchange = 'NFO',
+    String type = 'ALL',
+    String? underlying,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    var path =
+        '/derivatives/fno-instruments?exchange=${Uri.encodeComponent(exchange)}&type=${Uri.encodeComponent(type)}&limit=$limit&offset=$offset';
+    if (underlying != null && underlying.isNotEmpty) {
+      path += '&underlying=${Uri.encodeComponent(underlying)}';
+    }
+    final res = await _get(path, ttl: _longTtl);
+    return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 
   // ── IPO ─────────────────────────────────────────────────────────────────────

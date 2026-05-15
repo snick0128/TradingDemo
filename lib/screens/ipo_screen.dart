@@ -278,7 +278,14 @@ class _IPOScreenState extends State<IPOScreen>
     Widget body;
 
     if (_loading) {
-      body = const Center(child: CircularProgressIndicator());
+      body = ShimmerWrapper(
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: 5,
+          separatorBuilder: (_, __) => const SizedBox(height: 0),
+          itemBuilder: (_, __) => const ShimmerCard(height: 130),
+        ),
+      );
     } else if (_error != null) {
       body = Center(
         child: Column(

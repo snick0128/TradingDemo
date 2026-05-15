@@ -94,9 +94,9 @@ class _AdminOrdersScreenState extends State<AdminOrdersScreen> {
 
           // ── Filters ───────────────────────────────────────────────────────
           Container(
-            color: Colors.white,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             decoration: const BoxDecoration(
+              color: Colors.white,
               border: Border(bottom: BorderSide(color: AppColors.border)),
             ),
             child: Column(
@@ -580,7 +580,7 @@ class _TableRow extends StatelessWidget {
           Expanded(
             flex: 2,
             child: Text(
-              DateFormat('dd/MM HH:mm').format(order.dateTime),
+              DateFormat('dd/MM HH:mm:ss').format(order.dateTime),
               style: GoogleFonts.jetBrainsMono(
                 fontSize: 10,
                 color: AppColors.textSecondary,
@@ -895,7 +895,7 @@ class _OrderCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      DateFormat('dd MMM · HH:mm').format(order.dateTime),
+                      DateFormat('dd MMM · HH:mm:ss').format(order.dateTime),
                       style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
                     ),
                   ],

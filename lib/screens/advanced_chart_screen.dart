@@ -583,10 +583,18 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     // Determine if overall trend is up for line/area color
     final isUp = series.close >= series.open;
 
-    // Start zoomed in: show ~50 of the most-recent candles.
-    // Position=1.0 anchors the visible window to the right (latest data).
+    // Show ~40 of the most-recent candles (right-anchored, no empty gaps).
     final n = chartData.length;
-    final initialZoom = n > 50 ? (50 / n).clamp(0.02, 1.0) : 1.0;
+    final initialZoom = n > 40 ? (40 / n).clamp(0.02, 1.0) : 1.0;
+    // Clamp X axis to data range so no empty pre/post-market gaps appear.
+    final axisMin = chartData.first.time;
+    final axisMax = chartData.last.time.add(
+      _timeframe == ChartTimeframe.m1 || _timeframe == ChartTimeframe.m5
+          ? const Duration(minutes: 5)
+          : _timeframe == ChartTimeframe.m15
+          ? const Duration(minutes: 15)
+          : const Duration(days: 1),
+    );
 
     return SfCartesianChart(
       key: ValueKey(_chartVersion),
@@ -627,11 +635,13 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       primaryXAxis: DateTimeAxis(
         initialZoomFactor: initialZoom,
         initialZoomPosition: 1.0,
+        minimum: axisMin,
+        maximum: axisMax,
         isVisible: true,
         majorGridLines: const MajorGridLines(color: _kGridColor, width: 1),
         axisLine: const AxisLine(width: 0),
-        dateFormat: DateFormat('MMM'),
-        intervalType: DateTimeIntervalType.months,
+        dateFormat: _dateFormatForRange(),
+        intervalType: DateTimeIntervalType.auto,
         labelStyle: const TextStyle(fontSize: 11, color: _kAxisColor),
         majorTickLines: const MajorTickLines(size: 0),
       ),

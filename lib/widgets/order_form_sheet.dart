@@ -313,6 +313,19 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     // BUY: check margin (leverage-adjusted), not full trade value
     final hasInsufficientFunds = _isBuy && _requiredMargin > balance;
 
+    // Determine if this is a futures/options/MIS instrument that allows short selling.
+    // For such instruments we skip the "insufficient holdings" check on SELL.
+    final ex = widget.stock.exchange.toUpperCase();
+    final sym = widget.stock.symbol.toUpperCase();
+    final isFnoOrMis = _isFuturesOrOptions ||
+        ex == 'MCX' ||
+        ex == 'NFO' ||
+        ex == 'BFO' ||
+        sym.endsWith('FUT') ||
+        sym.endsWith('CE') ||
+        sym.endsWith('PE') ||
+        _product == ProductType.mis;
+
     // SELL: find available qty from both holdings (CNC) and positions (MIS)
     final holdingQty = store.holdings
         .where((h) => h.symbol == widget.stock.symbol)
@@ -321,7 +334,13 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         .where((p) => p.symbol == widget.stock.symbol)
         .fold(0, (s, p) => s + p.quantity);
     final availableQty = holdingQty + positionQty;
-    final hasInsufficientQty = !_isBuy && _qty > availableQty;
+
+    // For F&O/MIS: allow naked short selling — never block on qty check.
+    // For CNC equity: require sufficient holdings before selling.
+    final hasInsufficientQty = !_isBuy && !isFnoOrMis && _qty > availableQty;
+
+    // For short-sell info display: show margin needed when selling F&O with no position
+    final isShortSell = !_isBuy && isFnoOrMis && availableQty == 0;
 
     final blockReason = _marketBlockReason;
     final isBlocked = blockReason != null;
@@ -364,16 +383,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                   ],
                   _buildSideToggle(),
                   const SizedBox(height: 16),
-                  if (_isBuy)
-                    Row(
-                      children: [
-                        Expanded(child: _buildProductRow()),
-                        const SizedBox(width: 12),
-                        Expanded(child: _buildOrderTypeRow()),
-                      ],
-                    )
-                  else
-                    _buildOrderTypeRow(),
+                  if (_isBuy) ...[
+                    _buildProductRow(),
+                    const SizedBox(height: 12),
+                  ],
+                  _buildOrderTypeRow(),
                   const SizedBox(height: 16),
                   _buildQuantityRow(availableQty),
                   const SizedBox(height: 16),
@@ -473,7 +487,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Available',
+                                    isFnoOrMis ? 'Position' : 'Available',
                                     style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.w600,
@@ -488,19 +502,25 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                       vertical: 3,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: availableQty > 0
-                                          ? const Color(0xFFE8F5E9)
-                                          : const Color(0xFFFFEBEE),
+                                      color: isShortSell
+                                          ? const Color(0xFFFFF3E0)
+                                          : availableQty > 0
+                                              ? const Color(0xFFE8F5E9)
+                                              : const Color(0xFFFFEBEE),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
-                                      '$availableQty qty',
+                                      isShortSell
+                                          ? 'Short'
+                                          : '$availableQty qty',
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w700,
-                                        color: availableQty > 0
-                                            ? const Color(0xFF2E7D32)
-                                            : const Color(0xFFD50000),
+                                        color: isShortSell
+                                            ? const Color(0xFFE65100)
+                                            : availableQty > 0
+                                                ? const Color(0xFF2E7D32)
+                                                : const Color(0xFFD50000),
                                       ),
                                     ),
                                   ),
@@ -575,6 +595,31 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                           ],
                         ),
                       ],
+                      if (isShortSell) ...[
+                        const SizedBox(height: 10),
+                        const Divider(height: 1, color: Color(0xFFE9ECEF)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.info_outline,
+                              size: 14,
+                              color: Color(0xFFE65100),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Opening short position — margin will be blocked.',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFFE65100),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -635,7 +680,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 ? (_isBuy
                                       ? 'Buy Unavailable'
                                       : 'Sell Unavailable')
-                                : '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
+                                : isShortSell
+                                    ? 'Short ${widget.stock.symbol}  ·  $_qty qty'
+                                    : '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
                             style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
@@ -1105,13 +1152,32 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               }
             }),
             SizedBox(
-              width: 36,
-              child: Text(
-                '$_qty',
+              width: 56,
+              child: TextField(
+                controller: _qtyController,
+                keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
+                ),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 6,
+                  ),
+                  border: InputBorder.none,
+                ),
+                onChanged: (value) {
+                  final parsed = int.tryParse(value.trim());
+                  if (parsed != null && parsed > 0) {
+                    setState(() => _qty = parsed);
+                  }
+                },
+                onTap: () => _qtyController.selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: _qtyController.text.length,
                 ),
               ),
             ),
@@ -1123,20 +1189,6 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               }),
             ),
           ],
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _qtyController,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Custom quantity',
-            hintText: 'Enter quantity',
-          ),
-          onChanged: (value) {
-            final parsed = int.tryParse(value);
-            if (parsed == null || parsed <= 0) return;
-            setState(() => _qty = parsed);
-          },
         ),
       ],
     );

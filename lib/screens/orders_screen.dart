@@ -87,6 +87,19 @@ class _OrderBookTabState extends State<_OrderBookTab> {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
+
+    // If no data yet (store just connected), show skeleton
+    if (store.watchlist.isEmpty && !store.backendError) {
+      return ShimmerWrapper(
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: 8,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
+          itemBuilder: (_, __) => const ShimmerOrderTile(),
+        ),
+      );
+    }
+
     final allOrders = store.orders.toList()
       ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
@@ -469,7 +482,7 @@ class _OrderCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 6),
-                    // Row 3: Side + qty + avg
+                    // Row 3: Side + qty + price(s)
                     Row(
                       children: [
                         Text(
@@ -481,12 +494,40 @@ class _OrderCard extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          ' · ${order.quantity} qty · Avg ₹${order.price.toStringAsFixed(2)}',
+                          ' · ${order.executedQuantity ?? order.quantity} qty',
                           style: const TextStyle(
                             fontSize: 12,
                             color: Color(0xFF757575),
                           ),
                         ),
+                        if (order.status == OrderStatus.executed ||
+                            order.status == OrderStatus.approved) ...[
+                          Text(
+                            '  ·  ₹${order.price.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF9E9E9E),
+                              decoration: TextDecoration.lineThrough,
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward,
+                              size: 11, color: Color(0xFF9E9E9E)),
+                          Text(
+                            ' ₹${(order.executedPrice ?? order.price).toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF0D0D0D),
+                            ),
+                          ),
+                        ] else
+                          Text(
+                            '  ·  ₹${order.price.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF757575),
+                            ),
+                          ),
                       ],
                     ),
                   ],

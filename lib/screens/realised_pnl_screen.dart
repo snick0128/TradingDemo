@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
@@ -15,7 +16,6 @@ class RealisedPnlScreen extends StatelessWidget {
     final store = TradingScope.of(context);
     final today = DateTime.now();
 
-    // Filter executed orders for today
     final executedOrders = store.orders.where((o) {
       if (o.status != OrderStatus.executed) return false;
       final execAt = o.executedAt ?? o.dateTime;
@@ -24,19 +24,65 @@ class RealisedPnlScreen extends StatelessWidget {
           execAt.day == today.day;
     }).toList();
 
-    // Compute trade P&L entries
     final trades = executedOrders.map((o) => _TradePnl.fromOrder(o)).toList();
     final totalNetPnl = trades.fold(0.0, (s, t) => s + t.netPnl);
+    final totalGrossPnl = trades.fold(0.0, (s, t) => s + t.grossPnl);
+    final totalCharges = trades.fold(0.0, (s, t) => s + t.totalCharges);
+    final winners = trades.where((t) => t.netPnl > 0).length;
+    final losers = trades.where((t) => t.netPnl < 0).length;
 
-    final body = Column(
-      children: [
-        _TotalPnlBanner(totalNetPnl: totalNetPnl, tradeCount: trades.length),
-        const Divider(height: 1),
-        Expanded(
-          child: trades.isEmpty ? _buildEmptyState() : _buildTradeList(trades),
-        ),
-      ],
-    );
+    final body = trades.isEmpty
+        ? _buildEmptyState()
+        : SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Summary cards ────────────────────────────────────────
+                _SummaryGrid(
+                  totalNetPnl: totalNetPnl,
+                  totalGrossPnl: totalGrossPnl,
+                  totalCharges: totalCharges,
+                  tradeCount: trades.length,
+                  winners: winners,
+                  losers: losers,
+                ),
+                const SizedBox(height: 20),
+                // ── Trade list ───────────────────────────────────────────
+                Row(
+                  children: [
+                    const Text(
+                      'Trade History',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${trades.length}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ...trades.map((t) => _TradeCard(trade: t)),
+              ],
+            ),
+          );
 
     if (!showAppBar) return Scaffold(body: body);
 
@@ -66,249 +112,334 @@ class RealisedPnlScreen extends StatelessWidget {
       ),
     );
   }
-
-  Widget _buildTradeList(List<_TradePnl> trades) {
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: AppColors.border),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Column(
-            children: [
-              _tableHeader(),
-              const Divider(height: 1),
-              ...trades.map((t) => _TradeRow(trade: t)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _tableHeader() {
-    return Container(
-      color: AppColors.surfaceAlt.withOpacity(0.3),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: const Row(
-        children: [
-          Expanded(flex: 3, child: Text('Instrument', style: _headerStyle)),
-          Expanded(flex: 2, child: Text('Qty', style: _headerStyle)),
-          Expanded(flex: 2, child: Text('Avg Price', style: _headerStyle)),
-          Expanded(flex: 2, child: Text('Exec Price', style: _headerStyle)),
-          Expanded(flex: 2, child: Text('Gross P&L', style: _headerStyle)),
-          Expanded(flex: 2, child: Text('Charges', style: _headerStyle)),
-          Expanded(
-            flex: 2,
-            child: Text(
-              'Net P&L',
-              style: _headerStyle,
-              textAlign: TextAlign.right,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  static const _headerStyle = TextStyle(
-    fontSize: 11,
-    fontWeight: FontWeight.w600,
-    color: AppColors.textSecondary,
-    letterSpacing: 0.2,
-  );
 }
 
-// ─── Total P&L Banner ─────────────────────────────────────────────────────────
+// ─── Summary Grid ─────────────────────────────────────────────────────────────
 
-class _TotalPnlBanner extends StatelessWidget {
+class _SummaryGrid extends StatelessWidget {
   final double totalNetPnl;
+  final double totalGrossPnl;
+  final double totalCharges;
   final int tradeCount;
+  final int winners;
+  final int losers;
 
-  const _TotalPnlBanner({required this.totalNetPnl, required this.tradeCount});
+  const _SummaryGrid({
+    required this.totalNetPnl,
+    required this.totalGrossPnl,
+    required this.totalCharges,
+    required this.tradeCount,
+    required this.winners,
+    required this.losers,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isPos = totalNetPnl >= 0;
-    final color = isPos ? AppColors.success : AppColors.danger;
+    final pnlColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final winRate = tradeCount == 0 ? 0.0 : (winners / tradeCount) * 100;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      color: Theme.of(context).colorScheme.surface,
-      child: Row(
-        children: [
-          Column(
+    return Column(
+      children: [
+        // Top card — total net P&L hero
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE0E0E0)),
+          ),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Total Net P&L (Today)',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                'Net P&L (Today)',
+                style: TextStyle(fontSize: 12, color: Color(0xFF757575)),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
                 '${isPos ? '+' : ''}₹${totalNetPnl.abs().toStringAsFixed(2)}',
                 style: AppTheme.tabular(
                   TextStyle(
-                    fontSize: 28,
+                    fontSize: 32,
                     fontWeight: FontWeight.w700,
-                    color: color,
+                    color: pnlColor,
                   ),
                 ),
               ),
+              const SizedBox(height: 12),
+              const Divider(height: 1, color: Color(0xFFEEEEEE)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _miniStat(
+                      'Gross P&L',
+                      '${totalGrossPnl >= 0 ? '+' : ''}₹${totalGrossPnl.abs().toStringAsFixed(2)}',
+                      totalGrossPnl >= 0
+                          ? const Color(0xFF00C853)
+                          : const Color(0xFFD50000),
+                    ),
+                  ),
+                  Expanded(
+                    child: _miniStat(
+                      'Charges',
+                      '-₹${totalCharges.toStringAsFixed(2)}',
+                      const Color(0xFF757575),
+                    ),
+                  ),
+                  Expanded(
+                    child: _miniStat(
+                      'Trades',
+                      '$tradeCount',
+                      AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
-          const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+        ),
+        const SizedBox(height: 12),
+        // Win/Loss row
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: LucideIcons.trendingUp,
+                iconColor: const Color(0xFF00C853),
+                label: 'Winners',
+                value: '$winners',
+                sub: '',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _statCard(
+                icon: LucideIcons.trendingDown,
+                iconColor: const Color(0xFFD50000),
+                label: 'Losers',
+                value: '$losers',
+                sub: '',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _statCard(
+                icon: LucideIcons.percent,
+                iconColor: AppColors.primary,
+                label: 'Win Rate',
+                value: '${winRate.toStringAsFixed(0)}%',
+                sub: '',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _miniStat(String label, String value, Color valueColor) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF757575))),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: AppTheme.tabular(TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: valueColor,
+          )),
+        ),
+      ],
+    );
+  }
+
+  Widget _statCard({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required String sub,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              const Text(
-                'Trades',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '$tradeCount',
-                style: AppTheme.tabular(
-                  const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ),
+              Icon(icon, size: 14, color: iconColor),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 11, color: Color(0xFF757575))),
             ],
           ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: AppTheme.tabular(const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
+            )),
+          ),
+          if (sub.isNotEmpty)
+            Text(sub,
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF9E9E9E))),
         ],
       ),
     );
   }
 }
 
-// ─── Trade Row ────────────────────────────────────────────────────────────────
+// ─── Trade Card ────────────────────────────────────────────────────────────────
 
-class _TradeRow extends StatelessWidget {
+class _TradeCard extends StatelessWidget {
   final _TradePnl trade;
 
-  const _TradeRow({required this.trade});
+  const _TradeCard({required this.trade});
 
   @override
   Widget build(BuildContext context) {
     final isPos = trade.netPnl >= 0;
-    final pnlColor = isPos ? AppColors.success : AppColors.danger;
+    final pnlColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final isSell = trade.type == OrderType.sell;
+    final sideColor = isSell ? const Color(0xFFD50000) : const Color(0xFF00C853);
+    final sideBg = isSell
+        ? const Color(0xFFFFEBEE)
+        : const Color(0xFFE8F5E9);
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              // Instrument
-              Expanded(
-                flex: 3,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      trade.symbol,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.primary,
-                        fontSize: 13,
-                      ),
-                    ),
-                    Text(
-                      trade.type == OrderType.sell ? 'SELL' : 'BUY',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: trade.type == OrderType.sell
-                            ? AppColors.danger
-                            : AppColors.success,
-                      ),
-                    ),
-                  ],
-                ),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Left color bar
+          Container(
+            width: 3,
+            decoration: BoxDecoration(
+              color: pnlColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12),
               ),
-              // Qty
-              Expanded(
-                flex: 2,
-                child: Text(
-                  '${trade.quantity}',
-                  style: AppTheme.tabular(const TextStyle(fontSize: 13)),
-                ),
-              ),
-              // Avg price
-              Expanded(
-                flex: 2,
-                child: Text(
-                  trade.avgPrice.toStringAsFixed(2),
-                  style: AppTheme.tabular(const TextStyle(fontSize: 13)),
-                ),
-              ),
-              // Exec price
-              Expanded(
-                flex: 2,
-                child: Text(
-                  trade.execPrice.toStringAsFixed(2),
-                  style: AppTheme.tabular(const TextStyle(fontSize: 13)),
-                ),
-              ),
-              // Gross P&L
-              Expanded(
-                flex: 2,
-                child: Text(
-                  '${trade.grossPnl >= 0 ? '+' : ''}${trade.grossPnl.toStringAsFixed(2)}',
-                  style: AppTheme.tabular(
-                    TextStyle(
-                      fontSize: 13,
-                      color: trade.grossPnl >= 0
-                          ? AppColors.success
-                          : AppColors.danger,
-                    ),
-                  ),
-                ),
-              ),
-              // Charges
-              Expanded(
-                flex: 2,
-                child: Tooltip(
-                  message:
-                      'STT: ₹${trade.stt.toStringAsFixed(2)}\n'
-                      'Brokerage: ₹${trade.brokerage.toStringAsFixed(2)}\n'
-                      'GST: ₹${trade.gst.toStringAsFixed(2)}',
-                  child: Text(
-                    '-₹${trade.totalCharges.toStringAsFixed(2)}',
-                    style: AppTheme.tabular(
-                      const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Net P&L
-              Expanded(
-                flex: 2,
-                child: Text(
-                  '${isPos ? '+' : ''}₹${trade.netPnl.abs().toStringAsFixed(2)}',
-                  textAlign: TextAlign.right,
-                  style: AppTheme.tabular(
-                    TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: pnlColor,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-        const Divider(height: 1),
-      ],
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Row 1: symbol + net P&L
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            trade.symbol,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF0D0D0D),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: sideBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              isSell ? 'SELL' : 'BUY',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: sideColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        '${isPos ? '+' : ''}₹${trade.netPnl.abs().toStringAsFixed(2)}',
+                        style: AppTheme.tabular(
+                          TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: pnlColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // Row 2: qty · avg → exec + charges
+                  Row(
+                    children: [
+                      Text(
+                        '${trade.quantity} qty',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF757575)),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text('·',
+                          style: TextStyle(color: Color(0xFF9E9E9E))),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Avg ₹${trade.avgPrice.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF757575)),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(Icons.arrow_forward,
+                          size: 12, color: Color(0xFF9E9E9E)),
+                      const SizedBox(width: 6),
+                      Text(
+                        '₹${trade.execPrice.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF757575)),
+                      ),
+                      const Spacer(),
+                      Tooltip(
+                        message:
+                            'STT: ₹${trade.stt.toStringAsFixed(2)}\n'
+                            'Brokerage: ₹${trade.brokerage.toStringAsFixed(2)}\n'
+                            'GST: ₹${trade.gst.toStringAsFixed(2)}',
+                        child: Text(
+                          'Charges -₹${trade.totalCharges.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF9E9E9E)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -347,16 +478,13 @@ class _TradePnl {
     final qty = order.executedQuantity ?? order.quantity;
     final tradeValue = execPrice * qty;
 
-    // Gross P&L: for sells, profit = (execPrice - avgPrice) * qty
-    // For buys (covering short), profit = (avgPrice - execPrice) * qty
     final grossPnl = order.type == OrderType.sell
         ? (execPrice - avgPrice) * qty
         : (avgPrice - execPrice) * qty;
 
-    // Charges
-    final stt = tradeValue * 0.001; // 0.1% of trade value
-    const brokerage = 20.0; // flat ₹20
-    final gst = brokerage * 0.18; // 18% of brokerage
+    final stt = tradeValue * 0.001;
+    const brokerage = 20.0;
+    final gst = brokerage * 0.18;
 
     return _TradePnl(
       symbol: order.symbol,

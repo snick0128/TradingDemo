@@ -439,9 +439,9 @@ class _SummaryGrid extends StatelessWidget {
       physics: const NeverScrollableScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: cols,
+        mainAxisExtent: 96,
         crossAxisSpacing: 10,
         mainAxisSpacing: 10,
-        childAspectRatio: isWide ? 2.2 : 1.8,
       ),
       itemCount: cards.length,
       itemBuilder: (_, i) => _SummaryCard(data: cards[i]),

@@ -55,6 +55,32 @@ class _PositionsScreenState extends State<PositionsScreen> {
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
     final positions = store.positions.toList();
+
+    // Shimmer while market data hasn't arrived yet
+    if (store.watchlist.isEmpty && !store.backendError) {
+      final shimmerBody = ShimmerWrapper(
+        child: Column(
+          children: [
+            const ShimmerSummaryStrip(count: 3),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: 6,
+                separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
+                itemBuilder: (_, __) => const ShimmerPositionTile(),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (!widget.showAppBar) return shimmerBody;
+      return Scaffold(
+        appBar: AppBar(title: const Text('Positions')),
+        body: shimmerBody,
+      );
+    }
+
     final hasMis = positions.any((p) => p.product == ProductType.mis);
 
     final body = Column(
@@ -80,14 +106,18 @@ class _PositionsScreenState extends State<PositionsScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
                   itemCount: positions.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, i) => _PositionCard(
-                    position: positions[i],
-                    onExit: (p) =>
-                        _squareOffPosition(context, store, p, p.quantity),
-                    onPartialExit: (p) =>
-                        _showPartialExitDialog(context, store, p),
-                    onConvert: (p) => _convertPosition(context, store, p),
-                  ),
+                  itemBuilder: (context, i) {
+                    final pos = positions[i];
+                    final key = '${pos.symbol}_${pos.quantity}_${pos.side.name}';
+                    return _PositionCard(
+                      position: pos,
+                      isPendingExit: _pendingSquareOff.contains(key),
+                      onExit: (p) =>
+                          _squareOffPosition(context, store, p, p.quantity),
+                      onPartialExit: (p) =>
+                          _showPartialExitDialog(context, store, p),
+                    );
+                  },
                 ),
         ),
       ],
@@ -111,7 +141,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
   ) async {
     final pendingKey = '${p.symbol}_${qty}_${p.side.name}';
     if (_pendingSquareOff.contains(pendingKey)) return;
-    _pendingSquareOff.add(pendingKey);
+    setState(() => _pendingSquareOff.add(pendingKey));
     final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
 
     if (appScope != null) {
@@ -122,13 +152,20 @@ class _PositionsScreenState extends State<PositionsScreen> {
       }
       try {
         final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
-        // Sell = exit a long position; Buy = exit a short position
         final exitType = p.side == OrderType.buy ? 'SELL' : 'BUY';
+        final productTypeStr = switch (p.product) {
+          ProductType.nrml => 'NRML',
+          ProductType.overnight => 'CNC',
+          ProductType.mtf => 'MTF',
+          _ => 'MIS',
+        };
         await api.placeOrder(
           userId: sessionUser.uid,
           symbol: p.symbol,
           qty: qty,
           type: exitType,
+          productType: productTypeStr,
+          exchange: p.exchange,
           clientRequestId:
               '${sessionUser.uid}_${DateTime.now().microsecondsSinceEpoch}_sq',
         );
@@ -142,7 +179,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
           AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
         }
       } finally {
-        _pendingSquareOff.remove(pendingKey);
+        if (mounted) setState(() => _pendingSquareOff.remove(pendingKey));
       }
       return;
     }
@@ -163,7 +200,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
     } else {
       AppToast.error(context, msg);
     }
-    _pendingSquareOff.remove(pendingKey);
+    if (mounted) setState(() => _pendingSquareOff.remove(pendingKey));
   }
 
   void _squareOffAll(BuildContext context, TradingStore store) {
@@ -205,13 +242,6 @@ class _PositionsScreenState extends State<PositionsScreen> {
     );
   }
 
-  void _convertPosition(BuildContext context, TradingStore store, Position p) {
-    final to = p.product == ProductType.mis
-        ? ProductType.overnight
-        : ProductType.mis;
-    store.convertPositionProduct(p.symbol, p.product, to);
-    AppToast.info(context, '${p.symbol} → ${to.name.toUpperCase()}');
-  }
 }
 
 // ─── MIS Warning Banner ───────────────────────────────────────────────────────
@@ -311,15 +341,15 @@ class _SummaryHeader extends StatelessWidget {
 
 class _PositionCard extends StatelessWidget {
   final Position position;
+  final bool isPendingExit;
   final void Function(Position) onExit;
   final void Function(Position) onPartialExit;
-  final void Function(Position) onConvert;
 
   const _PositionCard({
     required this.position,
     required this.onExit,
     required this.onPartialExit,
-    required this.onConvert,
+    this.isPendingExit = false,
   });
 
   @override
@@ -330,9 +360,6 @@ class _PositionCard extends StatelessWidget {
     final barColor = pnlColor;
     final isLong = p.side == OrderType.buy;
     final arrow = isPos ? '▲' : '▼';
-    final canConvert =
-        p.product == ProductType.mis || p.product == ProductType.overnight;
-    final convertLabel = p.product == ProductType.mis ? '→Overnight' : '→MIS';
 
     return IntrinsicHeight(
       child: Container(
@@ -493,52 +520,36 @@ class _PositionCard extends StatelessWidget {
                           ),
                         ),
                         const Spacer(),
-                        if (canConvert) ...[
-                          GestureDetector(
-                            onTap: () => onConvert(p),
-                            child: Container(
-                              height: 32,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: const Color(0xFFE0E0E0),
-                                ),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                convertLabel,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: Color(0xFF757575),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
                         // EXIT button
                         GestureDetector(
-                          onTap: () => onExit(p),
+                          onTap: isPendingExit ? null : () => onExit(p),
                           child: Container(
                             height: 32,
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFD50000),
+                              color: isPendingExit
+                                  ? const Color(0xFFEF9A9A)
+                                  : const Color(0xFFD50000),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             alignment: Alignment.center,
-                            child: const Text(
-                              'EXIT',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.white,
-                              ),
-                            ),
+                            child: isPendingExit
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'EXIT',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white,
+                                    ),
+                                  ),
                           ),
                         ),
                       ],

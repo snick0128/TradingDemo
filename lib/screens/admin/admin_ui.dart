@@ -32,22 +32,43 @@ class AdminHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
     return CustomCard(
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
+      child: isMobile
+          ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title, style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 4),
                 Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                if (trailing != null) ...[
+                  const SizedBox(height: 16),
+                  trailing!,
+                ],
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                if (trailing != null) trailing!,
               ],
             ),
-          ),
-          if (trailing != null) trailing!,
-        ],
-      ),
     );
   }
 }

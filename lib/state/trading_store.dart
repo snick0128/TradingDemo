@@ -63,6 +63,13 @@ class TradingStore extends ChangeNotifier {
   // No mock price subscription — live backend is the only price source.
   StreamSubscription<Map<String, double>>? _priceSubscription;
 
+  // Debounce notifyListeners() so rapid-fire ticks collapse into one
+  // rebuild per animation frame (~16 ms at 60 fps).
+  Timer? _notifyDebounce;
+
+  // Track last known LTP per symbol to suppress no-op emissions.
+  final Map<String, double> _lastLtpBySymbol = {};
+
   // ── Live backend wiring ────────────────────────────────────────────────────
   LiveMarketService? _liveMarketService;
   StreamSubscription<List<Stock>>? _liveStockSub;
@@ -125,16 +132,31 @@ class TradingStore extends ChangeNotifier {
   // it does NOT open its own Firestore listeners.
 
   /// Called when the live backend emits a fresh batch of stocks.
+  ///
+  /// LTP deduplication: skips the notify if no price actually changed.
+  /// Debounced notify: collapses rapid-fire ticks into one rebuild per ~16 ms.
   void _onLiveStockUpdate(List<Stock> stocks) {
     if (stocks.isEmpty) return;
+
+    bool anyPriceChanged = false;
 
     // Clear error state — backend is responding
     if (_backendError) {
       _backendError = false;
       _backendErrorMessage = '';
+      anyPriceChanged = true; // force notify to clear error banner
     }
 
     for (final stock in stocks) {
+      final newLtp = stock.currentPrice;
+      final lastLtp = _lastLtpBySymbol[stock.symbol];
+
+      // Skip if LTP is identical — no meaningful state change.
+      if (newLtp > 0 && lastLtp == newLtp) continue;
+
+      if (newLtp > 0) _lastLtpBySymbol[stock.symbol] = newLtp;
+      anyPriceChanged = true;
+
       final existing = _watchlistUniverse[stock.symbol];
       final oldPrice = existing?.currentPrice;
 
@@ -148,40 +170,39 @@ class TradingStore extends ChangeNotifier {
       _watchlistUniverse[stock.symbol] = stock;
 
       // Record direction for price flash arrows
-      if (oldPrice != null) {
-        _marketDataService.recordDirection(
-          stock.symbol,
-          oldPrice,
-          stock.currentPrice,
-        );
+      if (oldPrice != null && oldPrice != newLtp) {
+        _marketDataService.recordDirection(stock.symbol, oldPrice, newLtp);
       }
 
-      // Update open positions
+      // Update open positions with new price
       for (var i = 0; i < _positions.length; i++) {
         if (_positions[i].symbol == stock.symbol) {
-          _positions[i] = _positions[i].copyWith(
-            currentPrice: stock.currentPrice,
-          );
+          _positions[i] = _positions[i].copyWith(currentPrice: newLtp);
         }
       }
 
-      // Update holdings
+      // Update holdings with new price
       for (var i = 0; i < _holdings.length; i++) {
         if (_holdings[i].symbol == stock.symbol) {
-          _holdings[i] = _holdings[i].copyWith(
-            currentPrice: stock.currentPrice,
-          );
+          _holdings[i] = _holdings[i].copyWith(currentPrice: newLtp);
         }
       }
     }
-    _refreshMarketSubscriptions();
-    notifyListeners();
+
+    if (!anyPriceChanged) return;
+
+    // Debounce: collapse rapid ticks into one notification per ~16 ms frame.
+    // This prevents 60+ rebuilds/second when many symbols tick simultaneously.
+    _notifyDebounce ??= Timer(const Duration(milliseconds: 16), () {
+      _notifyDebounce = null;
+      notifyListeners();
+    });
   }
 
   void _refreshMarketSubscriptions() {
     final service = _liveMarketService;
     if (service == null) return;
-    final symbols = _watchlist.map((s) => s.symbol).toSet();
+    final symbols = {..._watchlist.map((s) => s.symbol), ..._monitoredSymbols};
     if (symbols.isEmpty) {
       // Default subscription covers all tracked symbols — NSE + MCX
       symbols.addAll(const [
@@ -196,8 +217,21 @@ class TradingStore extends ChangeNotifier {
     service.setSubscribedSymbols(symbols);
   }
 
+  void monitorSymbol(String symbol) {
+    final normalized = symbol.trim().toUpperCase();
+    if (normalized.isEmpty || !_monitoredSymbols.add(normalized)) return;
+    _refreshMarketSubscriptions();
+  }
+
+  void unmonitorSymbol(String symbol) {
+    final normalized = symbol.trim().toUpperCase();
+    if (!_monitoredSymbols.remove(normalized)) return;
+    _refreshMarketSubscriptions();
+  }
+
   final List<Stock> _watchlist;
   final Map<String, Stock> _watchlistUniverse;
+  final Set<String> _monitoredSymbols = {};
   final List<Order> _orders;
   final List<PortfolioItem> _portfolio;
   final List<Position> _positions;
@@ -227,6 +261,7 @@ class TradingStore extends ChangeNotifier {
 
   @override
   void dispose() {
+    _notifyDebounce?.cancel();
     _priceSubscription?.cancel();
     _liveStockSub?.cancel();
     _liveMarketService?.dispose();
@@ -422,14 +457,15 @@ class TradingStore extends ChangeNotifier {
   /// - MIS/MTF: 20% of trade value (5x leverage)
   /// - NRML: 100% of trade value
   /// - Overnight (carry-forward): 100% of trade value
-  /// - SELL orders: always 0 (exit trade, no new margin required)
+  /// - SELL orders: 0 for exits, normal margin when opening a short position
   double requiredMargin(
     int quantity,
     double price,
     ProductType product, {
     bool isSell = false,
+    bool opensShort = false,
   }) {
-    if (isSell) return 0; // Exit orders never require margin
+    if (isSell && !opensShort) return 0; // Exit orders never require margin
     final fullValue = quantity * price;
     if (product == ProductType.mis || product == ProductType.mtf) {
       return fullValue / 5;

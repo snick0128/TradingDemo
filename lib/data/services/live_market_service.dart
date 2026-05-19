@@ -36,8 +36,10 @@ class LiveMarketService {
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
   Timer? _reconnectTimer;
+  Timer? _moversDebounce;
   int _reconnectAttempt = 0;
   final Map<String, int> _lastSeqBySymbol = {};
+  final Map<String, double> _lastEmittedLtpBySymbol = {};
   bool _started = false;
   bool _hasError = false;
   bool get hasError => _hasError;
@@ -68,6 +70,8 @@ class LiveMarketService {
     _started = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _moversDebounce?.cancel();
+    _moversDebounce = null;
     _wsSub?.cancel();
     _wsSub = null;
     _channel?.sink.close();
@@ -150,9 +154,12 @@ class LiveMarketService {
         if (row == null) return;
         final stock = _mapToStock(row);
         if (stock == null) return;
+        final lastLtp = _lastEmittedLtpBySymbol[stock.symbol] ?? 0;
+        if (lastLtp == stock.currentPrice) return;
+        _lastEmittedLtpBySymbol[stock.symbol] = stock.currentPrice;
         _latestMap[stock.symbol] = stock;
         _emitStocks();
-        _emitMovers();
+        _scheduleMovers();
         _setError(false, '');
       }
     } catch (e) {
@@ -187,6 +194,13 @@ class LiveMarketService {
     if (!_moversController.isClosed) {
       _moversController.add({'gainers': gainers, 'losers': losers});
     }
+  }
+
+  void _scheduleMovers() {
+    _moversDebounce ??= Timer(const Duration(seconds: 5), () {
+      _moversDebounce = null;
+      _emitMovers();
+    });
   }
 
   void _sendSubscribe() {

@@ -75,6 +75,29 @@ void main() {
     }
   });
 
+  group('SELL margin depends on whether it opens a short', () {
+    test('exit sell requires no new margin', () {
+      final margin = store.requiredMargin(
+        10,
+        500,
+        ProductType.mis,
+        isSell: true,
+      );
+      expect(margin, equals(0.0));
+    });
+
+    test('short sell blocks product margin', () {
+      final margin = store.requiredMargin(
+        10,
+        500,
+        ProductType.mis,
+        isSell: true,
+        opensShort: true,
+      );
+      expect(margin, equals(1000.0));
+    });
+  });
+
   // ─── Property 3: MIS margin is always less than CNC margin ────────────────
 
   group('MIS margin < Overnight margin for positive qty and price', () {

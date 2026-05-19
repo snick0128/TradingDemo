@@ -927,15 +927,16 @@ class TradingService {
     String variety = 'MARKET',
   }) {
     final available = _balance(userData);
+    final marginRequired = _requiredMargin(total, product);
 
-    if (available < total) {
+    if (available < marginRequired) {
       throw Exception(
-        'Insufficient balance. Required ₹${total.toStringAsFixed(2)}, '
+        'Insufficient balance. Required ₹${marginRequired.toStringAsFixed(2)}, '
         'available ₹${available.toStringAsFixed(2)}.',
       );
     }
 
-    final balanceAfter = available - total;
+    final balanceAfter = available - marginRequired;
 
     // Wallet
     tx.update(userRef, {
@@ -1028,7 +1029,8 @@ class TradingService {
       'userId': userId,
       'type': 'DEBIT',
       'subType': 'BUY',
-      'amount': total,
+      'amount': marginRequired,
+      'trade_value': total,
       'before_balance': available,
       'balance_after': balanceAfter,
       'referenceType': 'ORDER',
@@ -1070,33 +1072,92 @@ class TradingService {
     final inventoryData = inventorySnap.data() as Map<String, dynamic>?;
     final currentQty = _int(inventoryData?['qty']);
     final isIntraday = _isIntradayProduct(product);
+    final existingSide =
+        (inventoryData?['side'] as String?)?.trim().toUpperCase() ?? 'BUY';
+    final available = _balance(userData);
+    double balanceAfter;
+    double realizedPnl = 0;
+    String ledgerType;
+    String ledgerSubType;
+    double ledgerAmount;
 
-    if (currentQty < fillQty) {
+    if (!isIntraday && currentQty < fillQty) {
       throw Exception(
         'Insufficient holdings. You have $currentQty shares of $symbol, '
         'tried to sell $fillQty.',
       );
     }
 
-    final newQty = currentQty - fillQty;
     final avgPrice = _double(inventoryData?['avg_price']);
+    if (isIntraday && (existingSide == 'SELL' || currentQty < fillQty)) {
+      final closingLongQty = existingSide == 'BUY'
+          ? (currentQty < fillQty ? currentQty : fillQty)
+          : 0;
+      final shortQty = fillQty - closingLongQty;
+      final marginRequired = _requiredMargin(shortQty * executedPrice, product);
+      if (available < marginRequired) {
+        throw Exception(
+          'Insufficient balance for short sell margin. Required ₹${marginRequired.toStringAsFixed(2)}, '
+          'available ₹${available.toStringAsFixed(2)}.',
+        );
+      }
 
-    if (newQty == 0) {
-      tx.delete(inventoryRef);
+      if (closingLongQty > 0) {
+        realizedPnl += (executedPrice - avgPrice) * closingLongQty;
+      }
+
+      final oldShortQty = existingSide == 'SELL' ? currentQty : 0;
+      final newShortQty = oldShortQty + shortQty;
+      final oldShortAvg = existingSide == 'SELL' ? avgPrice : 0.0;
+      final newShortAvg = newShortQty == 0
+          ? 0.0
+          : ((oldShortAvg * oldShortQty) + (executedPrice * shortQty)) /
+                newShortQty;
+
+      if (newShortQty > 0) {
+        tx.set(inventoryRef, {
+          'stock': symbol,
+          'product': product,
+          'qty': newShortQty,
+          'avg_price': _safeDouble(newShortAvg),
+          'side': 'SELL',
+          'last_price': executedPrice,
+          'unrealized_pnl': _safeDouble(
+            (newShortAvg - executedPrice) * newShortQty,
+          ),
+          'updatedAt': serverTs,
+        }, SetOptions(merge: false));
+      } else {
+        tx.delete(inventoryRef);
+      }
+
+      balanceAfter = available - marginRequired;
+      ledgerType = 'DEBIT';
+      ledgerSubType = 'SHORT_MARGIN';
+      ledgerAmount = marginRequired;
     } else {
-      final unrealizedPnl = (executedPrice - avgPrice) * newQty;
-      tx.update(inventoryRef, {
-        'qty': newQty,
-        'product': product,
-        if (isIntraday) 'side': 'BUY',
-        'last_price': executedPrice,
-        'unrealized_pnl': unrealizedPnl,
-        'updatedAt': serverTs,
-      });
-    }
+      final newQty = currentQty - fillQty;
 
-    final available = _balance(userData);
-    final balanceAfter = available + total;
+      if (newQty == 0) {
+        tx.delete(inventoryRef);
+      } else {
+        final unrealizedPnl = (executedPrice - avgPrice) * newQty;
+        tx.update(inventoryRef, {
+          'qty': newQty,
+          'product': product,
+          if (isIntraday) 'side': 'BUY',
+          'last_price': executedPrice,
+          'unrealized_pnl': unrealizedPnl,
+          'updatedAt': serverTs,
+        });
+      }
+
+      realizedPnl = (executedPrice - avgPrice) * fillQty;
+      balanceAfter = available + total;
+      ledgerType = 'CREDIT';
+      ledgerSubType = 'SELL';
+      ledgerAmount = total;
+    }
 
     tx.update(userRef, {
       'available_balance': balanceAfter,
@@ -1164,14 +1225,13 @@ class TradingService {
       'createdAt': serverTs,
     });
 
-    final realizedPnl = (executedPrice - avgPrice) * fillQty;
-
     // Ledger CREDIT — inside transaction (atomic with balance update)
     tx.set(ledgerRef, {
       'userId': userId,
-      'type': 'CREDIT',
-      'subType': 'SELL',
-      'amount': total,
+      'type': ledgerType,
+      'subType': ledgerSubType,
+      'amount': ledgerAmount,
+      'trade_value': total,
       'realized_pnl': realizedPnl,
       'before_balance': available,
       'balance_after': balanceAfter,
@@ -1324,7 +1384,8 @@ class TradingService {
         final total = fillQty * executionPrice;
         final priceTimestamp = DateTime.now().millisecondsSinceEpoch;
 
-        if (side == 'BUY' && _balance(userData) < total) {
+        final marginRequired = _requiredMargin(total, product);
+        if (side == 'BUY' && _balance(userData) < marginRequired) {
           tx.update(orderRef, {
             'status': 'REJECTED',
             'rejectionReason': 'Insufficient funds at trigger time.',
@@ -1337,7 +1398,7 @@ class TradingService {
         if (side == 'SELL') {
           final inventoryData = inventorySnap.data();
           final currentQty = _int(inventoryData?['qty']);
-          if (currentQty < fillQty) {
+          if (!_isIntradayProduct(product) && currentQty < fillQty) {
             tx.update(orderRef, {
               'status': 'REJECTED',
               'rejectionReason': 'Insufficient quantity at trigger time.',
@@ -1574,6 +1635,14 @@ class TradingService {
   }
 
   bool _isIntradayProduct(String product) => product == 'MIS';
+
+  double _requiredMargin(double tradeValue, String product) {
+    final normalized = _normalizeProduct(product);
+    if (normalized == 'MIS' || normalized == 'MTF') {
+      return tradeValue / 5;
+    }
+    return tradeValue;
+  }
 
   DocumentReference<Map<String, dynamic>> _inventoryRefForOrder({
     required String userId,

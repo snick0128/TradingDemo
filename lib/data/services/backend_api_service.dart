@@ -207,6 +207,10 @@ class BackendApiService {
     required String type, // 'BUY' or 'SELL'
     String productType = 'MIS', // 'MIS' | 'CNC' | 'NRML'
     String exchange = 'NSE', // 'NSE' | 'MCX' | 'BSE' etc.
+    // For F&O contracts (options/futures) not tracked by the live WebSocket feed,
+    // pass the current LTP from the options chain or detail screen so the backend
+    // can price the order instead of throwing "Live price unavailable".
+    double? lockedLtp,
     String? clientRequestId,
   }) async {
     final result = await _post('/orders', {
@@ -216,6 +220,7 @@ class BackendApiService {
       'type': type,
       'productType': productType,
       'exchange': exchange,
+      if (lockedLtp != null && lockedLtp > 0) 'lockedLtp': lockedLtp,
       if (clientRequestId != null) 'clientRequestId': clientRequestId,
     });
     // Invalidate stale portfolio/order caches after a successful order
@@ -347,12 +352,14 @@ class BackendApiService {
 
   /// Get expiry dates for a symbol.
   /// Returns ISO date strings e.g. ['2026-05-26', '2026-06-30'].
+  /// [typeFilter]: 'OPT' for options only, 'FUT' for futures only, 'ALL' for both.
   Future<List<String>> getFnoExpiryDates(
     String symbol, {
     String exchange = 'NFO',
+    String typeFilter = 'ALL',
   }) async {
     final res = await _get(
-      '/derivatives/expiry-dates?symbol=${Uri.encodeComponent(symbol)}&exchange=${Uri.encodeComponent(exchange)}',
+      '/derivatives/expiry-dates?symbol=${Uri.encodeComponent(symbol)}&exchange=${Uri.encodeComponent(exchange)}&type=${Uri.encodeComponent(typeFilter)}',
       ttl: _mediumTtl,
     );
     return List<String>.from(res['data'] as List);

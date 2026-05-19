@@ -147,36 +147,81 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   /// Resolves which category_leverage document applies to this stock.
   /// Mirrors the backend _resolveCategoryKey logic.
   String _resolveCategoryKey() {
-    final ex  = widget.stock.exchange.toUpperCase();
+    final ex = widget.stock.exchange.toUpperCase();
     final sym = widget.stock.symbol.toUpperCase();
 
     if (ex == 'MCX') {
       if (['GOLD', 'GOLDM', 'GOLDPETAL'].contains(sym)) return 'mcx_gold';
-      if (['SILVER', 'SILVERM'].contains(sym))           return 'mcx_silver';
-      if (['CRUDEOIL', 'NATURALGAS'].contains(sym))      return 'mcx_energy';
-      if (['COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL'].contains(sym)) return 'mcx_base_metals';
-      if (['COTTON', 'KAPAS'].contains(sym))             return 'mcx_agri';
+      if (['SILVER', 'SILVERM'].contains(sym)) return 'mcx_silver';
+      if (['CRUDEOIL', 'NATURALGAS'].contains(sym)) return 'mcx_energy';
+      if (['COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL'].contains(sym))
+        return 'mcx_base_metals';
+      if (['COTTON', 'KAPAS'].contains(sym)) return 'mcx_agri';
       return 'mcx_energy';
     }
 
     const nifty50 = {
-      'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'SBIN', 'BHARTIARTL',
-      'ICICIBANK', 'KOTAKBANK', 'LT', 'ITC', 'AXISBANK', 'ASIANPAINT',
-      'MARUTI', 'TITAN', 'NESTLEIND', 'ULTRACEMCO', 'WIPRO', 'ONGC',
-      'HCLTECH', 'POWERGRID', 'TECHM', 'NTPC', 'SUNPHARMA', 'TATAMOTORS',
-      'TATASTEEL', 'JSWSTEEL', 'M&M', 'ADANIENT', 'HDFC', 'BAJAJFINSV',
+      'RELIANCE',
+      'TCS',
+      'INFY',
+      'HDFCBANK',
+      'SBIN',
+      'BHARTIARTL',
+      'ICICIBANK',
+      'KOTAKBANK',
+      'LT',
+      'ITC',
+      'AXISBANK',
+      'ASIANPAINT',
+      'MARUTI',
+      'TITAN',
+      'NESTLEIND',
+      'ULTRACEMCO',
+      'WIPRO',
+      'ONGC',
+      'HCLTECH',
+      'POWERGRID',
+      'TECHM',
+      'NTPC',
+      'SUNPHARMA',
+      'TATAMOTORS',
+      'TATASTEEL',
+      'JSWSTEEL',
+      'M&M',
+      'ADANIENT',
+      'HDFC',
+      'BAJAJFINSV',
     };
     if (nifty50.contains(sym)) return 'nifty50';
 
     const bankNifty = {
-      'HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK',
-      'BANKBARODA', 'PNB', 'INDUSINDBK', 'IDFCFIRSTB', 'FEDERALBNK', 'BANKINDIA',
+      'HDFCBANK',
+      'ICICIBANK',
+      'SBIN',
+      'AXISBANK',
+      'KOTAKBANK',
+      'BANKBARODA',
+      'PNB',
+      'INDUSINDBK',
+      'IDFCFIRSTB',
+      'FEDERALBNK',
+      'BANKINDIA',
     };
     if (bankNifty.contains(sym)) return 'banknifty';
 
     const midcap = {
-      'BAJFINANCE', 'WIPRO', 'HINDUNILVR', 'MARICO', 'DABUR',
-      'MPHASIS', 'PERSISTENT', 'COFORGE', 'LTIM', 'INDUSTOWER', 'ALKEM', 'VOLTAS',
+      'BAJFINANCE',
+      'WIPRO',
+      'HINDUNILVR',
+      'MARICO',
+      'DABUR',
+      'MPHASIS',
+      'PERSISTENT',
+      'COFORGE',
+      'LTIM',
+      'INDUSTOWER',
+      'ALKEM',
+      'VOLTAS',
     };
     if (midcap.contains(sym)) return 'nifty_midcap';
 
@@ -229,22 +274,26 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   double _getLeverageForProduct(ProductType product) {
     final categoryKey = _resolveCategoryKey();
-    final catData = _categoryLeverageMap[categoryKey]
-                 ?? _categoryLeverageMap['nse_equity'];
+    final catData =
+        _categoryLeverageMap[categoryKey] ?? _categoryLeverageMap['nse_equity'];
 
     if (catData != null) {
       final pStr = product == ProductType.mis ? 'mis' : 'nrml';
       final side = _isBuy ? 'buy' : 'sell';
-      final lev = (catData['${pStr}_${side}_leverage'] as num?)?.toDouble()
-               ?? (catData['${pStr}_leverage'] as num?)?.toDouble()
-               ?? (catData['leverage'] as num?)?.toDouble();
+      final lev =
+          (catData['${pStr}_${side}_leverage'] as num?)?.toDouble() ??
+          (catData['${pStr}_leverage'] as num?)?.toDouble() ??
+          (catData['leverage'] as num?)?.toDouble();
       if (lev != null && lev > 0) return lev;
     }
 
     // Fallback to hardcoded defaults
-    final ex   = widget.stock.exchange.toUpperCase().isEmpty ? 'NSE' : widget.stock.exchange.toUpperCase();
+    final ex = widget.stock.exchange.toUpperCase().isEmpty
+        ? 'NSE'
+        : widget.stock.exchange.toUpperCase();
     final pStr = product == ProductType.mis ? 'MIS' : 'NRML';
-    return (_defaultLeverage[ex]?[pStr] ?? _defaultLeverage['NSE']!['MIS'])!.toDouble();
+    return (_defaultLeverage[ex]?[pStr] ?? _defaultLeverage['NSE']!['MIS'])!
+        .toDouble();
   }
 
   /// Formatted leverage string — avoids trailing ".0"
@@ -271,8 +320,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   double get _estimatedCharges {
     final categoryKey = _resolveCategoryKey();
-    final catData = _categoryLeverageMap[categoryKey] ??
-        _categoryLeverageMap['nse_equity'];
+    final catData =
+        _categoryLeverageMap[categoryKey] ?? _categoryLeverageMap['nse_equity'];
     if (catData == null) return 0.0;
 
     final pStr = _product == ProductType.mis ? 'mis' : 'nrml';
@@ -310,14 +359,12 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final store = TradingScope.of(context);
     final balance = store.balance;
 
-    // BUY: check margin (leverage-adjusted), not full trade value
-    final hasInsufficientFunds = _isBuy && _requiredMargin > balance;
-
     // Determine if this is a futures/options/MIS instrument that allows short selling.
     // For such instruments we skip the "insufficient holdings" check on SELL.
     final ex = widget.stock.exchange.toUpperCase();
     final sym = widget.stock.symbol.toUpperCase();
-    final isFnoOrMis = _isFuturesOrOptions ||
+    final isFnoOrMis =
+        _isFuturesOrOptions ||
         ex == 'MCX' ||
         ex == 'NFO' ||
         ex == 'BFO' ||
@@ -339,8 +386,13 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     // For CNC equity: require sufficient holdings before selling.
     final hasInsufficientQty = !_isBuy && !isFnoOrMis && _qty > availableQty;
 
-    // For short-sell info display: show margin needed when selling F&O with no position
-    final isShortSell = !_isBuy && isFnoOrMis && availableQty == 0;
+    // For short-sell info display: show margin needed when selling beyond
+    // the currently available quantity.
+    final isShortSell = !_isBuy && isFnoOrMis && _qty > availableQty;
+
+    // BUY and short SELL both block margin. Exit SELL only needs quantity.
+    final hasInsufficientFunds =
+        (_isBuy || isShortSell) && _requiredMargin > balance;
 
     final blockReason = _marketBlockReason;
     final isBlocked = blockReason != null;
@@ -456,7 +508,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    _leverage > 1 ? 'Margin needed' : 'Cash needed',
+                                    _leverage > 1
+                                        ? 'Margin needed'
+                                        : 'Cash needed',
                                     style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.w600,
@@ -505,8 +559,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                       color: isShortSell
                                           ? const Color(0xFFFFF3E0)
                                           : availableQty > 0
-                                              ? const Color(0xFFE8F5E9)
-                                              : const Color(0xFFFFEBEE),
+                                          ? const Color(0xFFE8F5E9)
+                                          : const Color(0xFFFFEBEE),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
@@ -519,8 +573,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                         color: isShortSell
                                             ? const Color(0xFFE65100)
                                             : availableQty > 0
-                                                ? const Color(0xFF2E7D32)
-                                                : const Color(0xFFD50000),
+                                            ? const Color(0xFF2E7D32)
+                                            : const Color(0xFFD50000),
                                       ),
                                     ),
                                   ),
@@ -583,8 +637,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 hasInsufficientFunds
                                     ? 'Insufficient funds. Please add money.'
                                     : (availableQty == 0
-                                        ? 'No ${widget.stock.symbol} to sell.'
-                                        : 'Only $availableQty qty available.'),
+                                          ? 'No ${widget.stock.symbol} to sell.'
+                                          : 'Only $availableQty qty available.'),
                                 style: const TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w500,
@@ -681,8 +735,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                       ? 'Buy Unavailable'
                                       : 'Sell Unavailable')
                                 : isShortSell
-                                    ? 'Short ${widget.stock.symbol}  ·  $_qty qty'
-                                    : '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
+                                ? 'Short ${widget.stock.symbol}  ·  $_qty qty'
+                                : '${_isBuy ? 'Buy' : 'Sell'} ${widget.stock.symbol}  ·  $_qty qty',
                             style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
@@ -739,7 +793,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  isCE ? 'CALL' : isPE ? 'PUT' : 'FUTURES',
+                  isCE
+                      ? 'CALL'
+                      : isPE
+                      ? 'PUT'
+                      : 'FUTURES',
                   style: const TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
@@ -804,8 +862,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                       color: daysLeft <= 7
                           ? const Color(0xFFFFEBEE)
                           : daysLeft <= 30
-                              ? const Color(0xFFFFF8E1)
-                              : const Color(0xFFF5F5F5),
+                          ? const Color(0xFFFFF8E1)
+                          : const Color(0xFFF5F5F5),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -816,8 +874,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                         color: daysLeft <= 7
                             ? const Color(0xFFD32F2F)
                             : daysLeft <= 30
-                                ? const Color(0xFFE65100)
-                                : const Color(0xFF757575),
+                            ? const Color(0xFFE65100)
+                            : const Color(0xFF757575),
                       ),
                     ),
                   ),
@@ -999,7 +1057,12 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     );
   }
 
-  Widget _productChip(String label, double leverage, bool selected, VoidCallback onTap) {
+  Widget _productChip(
+    String label,
+    double leverage,
+    bool selected,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -1021,7 +1084,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? const Color(0xFF2E7D32) : const Color(0xFF666666),
+                color: selected
+                    ? const Color(0xFF2E7D32)
+                    : const Color(0xFF666666),
               ),
             ),
             if (leverage > 1) ...[
@@ -1029,7 +1094,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
-                  color: selected ? const Color(0xFF00C853) : const Color(0xFFF0F0F0),
+                  color: selected
+                      ? const Color(0xFF00C853)
+                      : const Color(0xFFF0F0F0),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -1402,8 +1469,19 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         '${sessionUser.uid}_${DateTime.now().microsecondsSinceEpoch}';
 
     // Optimistic: deduct margin from balance immediately so the UI feels instant
-    final optimisticDebit = isBuy ? _requiredMargin + _estimatedCharges : 0.0;
-    if (isBuy) store.setOptimisticBalance(store.balance - optimisticDebit);
+    final holdingQty = store.holdings
+        .where((h) => h.symbol == widget.stock.symbol)
+        .fold(0, (s, h) => s + h.quantity);
+    final positionQty = store.positions
+        .where((p) => p.symbol == widget.stock.symbol)
+        .fold(0, (s, p) => s + p.quantity);
+    final isShortSell = !isBuy && qty > (holdingQty + positionQty);
+    final optimisticDebit = (isBuy || isShortSell)
+        ? _requiredMargin + _estimatedCharges
+        : 0.0;
+    if (optimisticDebit > 0) {
+      store.setOptimisticBalance(store.balance - optimisticDebit);
+    }
 
     // Close the sheet right away — perceived latency drops to ~0ms
     setState(() => _submitting = true);
@@ -1449,6 +1527,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             type: isBuy ? 'BUY' : 'SELL',
             productType: productType,
             exchange: exchange,
+            // Pass current price so backend can execute F&O contracts that are
+            // not in the live WebSocket feed (options, futures).
+            lockedLtp: widget.stock.currentPrice > 0
+                ? widget.stock.currentPrice
+                : null,
             clientRequestId: requestId,
           );
           break; // success
@@ -1504,7 +1587,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       );
     } on BackendException catch (e) {
       // Undo optimistic balance deduction on failure
-      if (isBuy) store.setOptimisticBalance(store.balance + optimisticDebit);
+      if (optimisticDebit > 0) {
+        store.setOptimisticBalance(store.balance + optimisticDebit);
+      }
 
       String msg = e.message;
       if (msg.contains('Insufficient balance') ||
@@ -1530,7 +1615,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         ),
       );
     } catch (e) {
-      if (isBuy) store.setOptimisticBalance(store.balance + optimisticDebit);
+      if (optimisticDebit > 0) {
+        store.setOptimisticBalance(store.balance + optimisticDebit);
+      }
       sm.clearSnackBars();
       sm.showSnackBar(
         SnackBar(

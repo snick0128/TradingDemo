@@ -150,6 +150,47 @@ class TradingChartService {
     );
   }
 
+  static TradingChartSeries withRealtimePrice(
+    TradingChartSeries series,
+    double price,
+  ) {
+    if (series.data.isEmpty || price <= 0) return series;
+    final candles = [...series.data];
+    final last = candles.last;
+    candles[candles.length - 1] = TradingCandle(
+      time: last.time,
+      open: last.open,
+      high: math.max(last.high, price),
+      low: last.low == 0 ? price : math.min(last.low, price),
+      close: price,
+      volume: last.volume,
+      sma20: last.sma20,
+      sma50: last.sma50,
+    );
+
+    final highs = candles.map((c) => c.high).toList(growable: false);
+    final lows = candles.map((c) => c.low).toList(growable: false);
+    final volumes = candles.map((c) => c.volume).toList(growable: false);
+    final closes = candles.map((c) => c.close).toList(growable: false);
+    final totalVolume = volumes.fold<double>(0, (sum, item) => sum + item);
+    var vwapNumerator = 0.0;
+    for (final candle in candles) {
+      final tp = (candle.high + candle.low + candle.close) / 3;
+      vwapNumerator += tp * candle.volume;
+    }
+
+    return TradingChartSeries(
+      data: candles,
+      open: candles.first.open,
+      high: highs.reduce(math.max),
+      low: lows.reduce(math.min),
+      close: price,
+      volume: totalVolume,
+      vwap: totalVolume == 0 ? price : vwapNumerator / totalVolume,
+      rsi14: _rsi(closes, 14),
+    );
+  }
+
   // ─── Heikin-Ashi ────────────────────────────────────────────────────────────
 
   static List<TradingCandle> toHeikinAshi(List<TradingCandle> candles) {

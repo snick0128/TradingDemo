@@ -236,6 +236,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       final dates = await BackendApiService().getFnoExpiryDates(
         _selectedSymbol,
         exchange: _resolvedExchange,
+        typeFilter: 'OPT',  // only option expiries — avoids futures dates in chain dropdown
       );
       if (!mounted) return;
       if (dates.isNotEmpty) {
@@ -410,6 +411,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       return OptionStrike(
         strike: strike,
         isAtm: strike == atmStrike,
+        ceToken: m['ceToken']?.toString() ?? '',
+        peToken: m['peToken']?.toString() ?? '',
         ce: OptionData(
           ltp: ceLtp,
           oi: ceOi,
@@ -470,7 +473,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
+    final store = TradingScope.read(context);
     final stock = store.stockBySymbol(_selectedSymbol);
     final expiryStr = DateFormat('yyyy-MM-dd').format(_selectedExpiry);
     final cachedChain = _chainCache['$_selectedSymbol-$expiryStr'];
@@ -789,8 +792,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
           strike: s,
           callItm: s.strike < underlying,
           putItm: s.strike > underlying,
-          onTap: (strike, optType, ltp) {
-            final sc = TradingScope.of(context);
+          onTap: (strike, optType, ltp, token) {
+            final sc = TradingScope.read(context);
             final optTypeStr =
                 optType == InstrumentType.optionCE ? 'CE' : 'PE';
             final dateStr =
@@ -804,7 +807,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
               instrumentType: optType,
               exchange: _resolvedExchange,
               ltp: ltp,
-              token: '',
+              token: token,
             );
             final optStock = sc.stockBySymbol(sym);
             OrderFormSheet.show(
@@ -1061,7 +1064,7 @@ class _StrikeRow extends StatelessWidget {
   final OptionStrike strike;
   final bool callItm;
   final bool putItm;
-  final void Function(double strike, InstrumentType side, double ltp) onTap;
+  final void Function(double strike, InstrumentType side, double ltp, String token) onTap;
 
   const _StrikeRow({
     required this.strike,
@@ -1099,7 +1102,7 @@ class _StrikeRow extends StatelessWidget {
                   splashColor: _kCallColor.withOpacity(0.08),
                   highlightColor: _kCallColor.withOpacity(0.04),
                   onTap: () =>
-                      onTap(strike.strike, InstrumentType.optionCE, strike.ce.ltp),
+                      onTap(strike.strike, InstrumentType.optionCE, strike.ce.ltp, strike.ceToken),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
                     child: Row(
@@ -1200,7 +1203,7 @@ class _StrikeRow extends StatelessWidget {
                   splashColor: _kPutColor.withOpacity(0.08),
                   highlightColor: _kPutColor.withOpacity(0.04),
                   onTap: () =>
-                      onTap(strike.strike, InstrumentType.optionPE, strike.pe.ltp),
+                      onTap(strike.strike, InstrumentType.optionPE, strike.pe.ltp, strike.peToken),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
                     child: Row(

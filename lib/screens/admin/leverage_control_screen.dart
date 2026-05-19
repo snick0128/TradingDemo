@@ -60,46 +60,66 @@ String _fmtValue(double v, bool perLotMode) =>
 // ─── Data model ───────────────────────────────────────────────────────────────
 
 class _MarginData {
-  double misValue;  // leverage multiplier or per-lot amount
+  double misBuyValue;   // MIS leverage for BUY orders
+  double misSellValue;  // MIS leverage for SELL (short) orders
   double nrmlValue;
 
-  _MarginData({required this.misValue, required this.nrmlValue});
-  _MarginData copy() => _MarginData(misValue: misValue, nrmlValue: nrmlValue);
-  bool equals(_MarginData o) => misValue == o.misValue && nrmlValue == o.nrmlValue;
+  _MarginData({
+    required this.misBuyValue,
+    required this.misSellValue,
+    required this.nrmlValue,
+  });
+
+  _MarginData copy() => _MarginData(
+        misBuyValue: misBuyValue,
+        misSellValue: misSellValue,
+        nrmlValue: nrmlValue,
+      );
+
+  bool equals(_MarginData o) =>
+      misBuyValue == o.misBuyValue &&
+      misSellValue == o.misSellValue &&
+      nrmlValue == o.nrmlValue;
 
   Map<String, dynamic> toFirestore(String key, String name, bool perLotMode) {
-    final misMar  = perLotMode || misValue  <= 0 ? 0.0 : double.parse((100 / misValue).toStringAsFixed(4));
-    final nrmlMar = perLotMode || nrmlValue <= 0 ? 0.0 : double.parse((100 / nrmlValue).toStringAsFixed(4));
+    final misBuyMar  = perLotMode || misBuyValue  <= 0 ? 0.0 : double.parse((100 / misBuyValue).toStringAsFixed(4));
+    final misSellMar = perLotMode || misSellValue <= 0 ? 0.0 : double.parse((100 / misSellValue).toStringAsFixed(4));
+    final nrmlMar    = perLotMode || nrmlValue    <= 0 ? 0.0 : double.parse((100 / nrmlValue).toStringAsFixed(4));
     return {
       'categoryKey':  key,
       'categoryName': name,
-      // New unified fields
-      'mis_value':  misValue,
-      'nrml_value': nrmlValue,
+      'mis_value':    misBuyValue,  // legacy: treat buy as default
+      'nrml_value':   nrmlValue,
       'per_lot_mode': perLotMode,
       if (perLotMode) ...{
-        'mis_per_lot':  misValue,
+        'mis_per_lot':  misBuyValue,
         'nrml_per_lot': nrmlValue,
-        'mis_leverage':  0.0,
-        'mis_margin':    0.0,
-        'nrml_leverage': 0.0,
-        'nrml_margin':   0.0,
+        'mis_leverage':       0.0,
+        'mis_buy_leverage':   0.0,
+        'mis_sell_leverage':  0.0,
+        'mis_margin':         0.0,
+        'nrml_leverage':      0.0,
+        'nrml_buy_leverage':  nrmlValue,
+        'nrml_sell_leverage': nrmlValue,
+        'nrml_margin':        0.0,
       } else ...{
-        'mis_leverage':       misValue,
-        'mis_margin':         misMar,
-        'nrml_leverage':      nrmlValue,
-        'nrml_margin':        nrmlMar,
-        // Legacy buy/sell fields (backward compat with orderEngine)
-        'mis_buy_leverage':   misValue,
-        'mis_buy_margin':     misMar,
-        'mis_sell_leverage':  misValue,
-        'mis_sell_margin':    misMar,
+        // Separate buy / sell leverage — read by backend resolveLeverage()
+        'mis_buy_leverage':   misBuyValue,
+        'mis_buy_margin':     misBuyMar,
+        'mis_sell_leverage':  misSellValue,
+        'mis_sell_margin':    misSellMar,
+        // Shared NRML (no short-selling on overnight/delivery)
         'nrml_buy_leverage':  nrmlValue,
         'nrml_buy_margin':    nrmlMar,
         'nrml_sell_leverage': nrmlValue,
         'nrml_sell_margin':   nrmlMar,
-        'leverage':           misValue,
-        'margin':             misMar,
+        'nrml_leverage':      nrmlValue,
+        'nrml_margin':        nrmlMar,
+        // Legacy aliases for backward compatibility
+        'mis_leverage':       misBuyValue,
+        'mis_margin':         misBuyMar,
+        'leverage':           misBuyValue,
+        'margin':             misBuyMar,
         'mis_per_lot':        0.0,
         'nrml_per_lot':       0.0,
       },
@@ -149,26 +169,37 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
           final nrml = (d['nrml_per_lot'] as num?)?.toDouble() ??
                        (d['nrml_value']   as num?)?.toDouble() ??
                        cat.defaultNrmlValue;
-          loaded[doc.id] = _MarginData(misValue: mis, nrmlValue: nrml);
+          loaded[doc.id] = _MarginData(
+            misBuyValue: mis,
+            misSellValue: mis,
+            nrmlValue: nrml,
+          );
         } else {
-          final mis  = (d['mis_leverage']     as num?)?.toDouble() ??
-                       (d['mis_buy_leverage'] as num?)?.toDouble() ??
-                       (d['leverage']         as num?)?.toDouble() ??
-                       (d['mis_value']        as num?)?.toDouble() ??
-                       cat.defaultMisValue;
+          final misBuy  = (d['mis_buy_leverage']  as num?)?.toDouble() ??
+                          (d['mis_leverage']       as num?)?.toDouble() ??
+                          (d['leverage']           as num?)?.toDouble() ??
+                          (d['mis_value']          as num?)?.toDouble() ??
+                          cat.defaultMisValue;
+          final misSell = (d['mis_sell_leverage'] as num?)?.toDouble() ??
+                          misBuy;
           final nrml = (d['nrml_leverage']     as num?)?.toDouble() ??
                        (d['nrml_buy_leverage'] as num?)?.toDouble() ??
                        (d['nrml_value']        as num?)?.toDouble() ??
                        cat.defaultNrmlValue;
-          loaded[doc.id] = _MarginData(misValue: mis, nrmlValue: nrml);
+          loaded[doc.id] = _MarginData(
+            misBuyValue: misBuy,
+            misSellValue: misSell,
+            nrmlValue: nrml,
+          );
         }
       }
 
       // Seed defaults for any category not yet in Firestore
       for (final cat in _kCategories) {
         loaded.putIfAbsent(cat.key, () => _MarginData(
-          misValue:  cat.defaultMisValue,
-          nrmlValue: cat.defaultNrmlValue,
+          misBuyValue:  cat.defaultMisValue,
+          misSellValue: cat.defaultMisValue,
+          nrmlValue:    cat.defaultNrmlValue,
         ));
       }
 
@@ -223,9 +254,26 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
     });
   }
 
-  void _openEdit(BuildContext ctx, _Category cat, bool isMis) {
-    final data    = _draft[cat.key]!;
-    final current = isMis ? data.misValue : data.nrmlValue;
+  // field: 'misBuy' | 'misSell' | 'nrml'
+  void _openEdit(BuildContext ctx, _Category cat, String field) {
+    final data = _draft[cat.key]!;
+    final double current;
+    final String label;
+    switch (field) {
+      case 'misSell':
+        current = data.misSellValue;
+        label   = 'Intraday SELL (Short)';
+        break;
+      case 'nrml':
+        current = data.nrmlValue;
+        label   = 'Holding (NRML)';
+        break;
+      case 'misBuy':
+      default:
+        current = data.misBuyValue;
+        label   = 'Intraday BUY (MIS)';
+        break;
+    }
     final presets = cat.perLotMode ? _kPerLotPresets : _kLeveragePresets;
 
     showModalBottomSheet(
@@ -237,15 +285,23 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
       ),
       builder: (_) => _EditSheet(
         categoryName: cat.displayName,
-        label: isMis ? 'Intraday (MIS)' : 'Holding (NRML)',
+        label: label,
         perLotMode: cat.perLotMode,
         currentValue: current,
         presets: presets,
         onConfirm: (val) {
           setState(() {
             final copy = _draft[cat.key]!.copy();
-            if (isMis) copy.misValue  = val;
-            else        copy.nrmlValue = val;
+            switch (field) {
+              case 'misSell':
+                copy.misSellValue = val;
+                break;
+              case 'nrml':
+                copy.nrmlValue = val;
+                break;
+              default:
+                copy.misBuyValue = val;
+            }
             _draft[cat.key] = copy;
           });
         },
@@ -307,7 +363,7 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                     categories: _kCategories,
                     draft: _draft,
                     saved: _saved,
-                    onEdit: (cat, isMis) => _openEdit(context, cat, isMis),
+                    onEdit: (cat, field) => _openEdit(context, cat, field),
                   ),
 
                 const SizedBox(height: 24),
@@ -384,7 +440,8 @@ class _MarginTable extends StatelessWidget {
   final List<_Category> categories;
   final Map<String, _MarginData> draft;
   final Map<String, _MarginData> saved;
-  final void Function(_Category, bool isMis) onEdit;
+  // field: 'misBuy' | 'misSell' | 'nrml'
+  final void Function(_Category, String field) onEdit;
 
   const _MarginTable({
     required this.categories,
@@ -393,11 +450,13 @@ class _MarginTable extends StatelessWidget {
     required this.onEdit,
   });
 
-  static const _kGreen     = Color(0xFF2E7D32);
-  static const _kDarkNavy  = Color(0xFF1A2035);
-  static const _kRowOdd    = Color(0xFFF7F7F7);
-  static const _kRowEven   = Colors.white;
-  static const _kDivider   = Color(0xFFE4E4E4);
+  static const _kGreen        = Color(0xFF2E7D32);
+  static const _kDarkNavy     = Color(0xFF1A2035);
+  static const _kDeepRed      = Color(0xFF7B1522);
+  static const _kDeepOlive    = Color(0xFF3E4A1E);
+  static const _kRowOdd       = Color(0xFFF7F7F7);
+  static const _kRowEven      = Colors.white;
+  static const _kDivider      = Color(0xFFE4E4E4);
 
   @override
   Widget build(BuildContext context) {
@@ -440,16 +499,16 @@ class _MarginTable extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  flex: 4,
+                  flex: 3,
                   child: Container(
                     color: _kDarkNavy,
-                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                     alignment: Alignment.center,
                     child: const Text(
-                      'INTRADAY\nMARGIN',
+                      'INTRADAY\nBUY',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                         letterSpacing: 0.4,
@@ -459,16 +518,35 @@ class _MarginTable extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  flex: 4,
+                  flex: 3,
                   child: Container(
-                    color: _kDarkNavy,
-                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+                    color: _kDeepRed,
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                     alignment: Alignment.center,
                     child: const Text(
-                      'HOLDING\nMARGIN',
+                      'INTRADAY\nSELL',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 0.4,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Container(
+                    color: _kDeepOlive,
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    alignment: Alignment.center,
+                    child: const Text(
+                      'HOLDING\n(NRML)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                         letterSpacing: 0.4,
@@ -484,8 +562,11 @@ class _MarginTable extends StatelessWidget {
           // ── Data rows ────────────────────────────────────────────────────
           ...List.generate(categories.length, (i) {
             final cat  = categories[i];
-            final data = draft[cat.key] ??
-                _MarginData(misValue: cat.defaultMisValue, nrmlValue: cat.defaultNrmlValue);
+            final data = draft[cat.key] ?? _MarginData(
+              misBuyValue:  cat.defaultMisValue,
+              misSellValue: cat.defaultMisValue,
+              nrmlValue:    cat.defaultNrmlValue,
+            );
             final savedData = saved[cat.key];
             final isDirty   = savedData != null && !data.equals(savedData);
             final rowBg     = i.isOdd ? _kRowOdd : _kRowEven;
@@ -493,9 +574,7 @@ class _MarginTable extends StatelessWidget {
             return Container(
               decoration: BoxDecoration(
                 color: rowBg,
-                border: const Border(
-                  bottom: BorderSide(color: _kDivider),
-                ),
+                border: const Border(bottom: BorderSide(color: _kDivider)),
               ),
               child: IntrinsicHeight(
                 child: Row(
@@ -531,24 +610,34 @@ class _MarginTable extends StatelessWidget {
                         ),
                       ),
                     ),
-                    // Intraday cell
+                    // Intraday BUY
                     Expanded(
-                      flex: 4,
+                      flex: 3,
                       child: _ValueCell(
-                        value: data.misValue,
+                        value: data.misBuyValue,
                         perLotMode: cat.perLotMode,
                         rowBg: rowBg,
-                        onTap: () => onEdit(cat, true),
+                        onTap: () => onEdit(cat, 'misBuy'),
                       ),
                     ),
-                    // Holding cell
+                    // Intraday SELL (short)
                     Expanded(
-                      flex: 4,
+                      flex: 3,
+                      child: _ValueCell(
+                        value: data.misSellValue,
+                        perLotMode: cat.perLotMode,
+                        rowBg: rowBg,
+                        onTap: () => onEdit(cat, 'misSell'),
+                      ),
+                    ),
+                    // Holding (NRML)
+                    Expanded(
+                      flex: 3,
                       child: _ValueCell(
                         value: data.nrmlValue,
                         perLotMode: cat.perLotMode,
                         rowBg: rowBg,
-                        onTap: () => onEdit(cat, false),
+                        onTap: () => onEdit(cat, 'nrml'),
                       ),
                     ),
                   ],

@@ -236,6 +236,10 @@ class Order {
   final bool isBracketOrder;
   final bool isCoverOrder;
   final double? chargesApplied;
+  final String? exchange;
+  final double? leverageApplied;
+  final double? marginUsed;
+  final bool isAutoSquareOff;
 
   Order({
     required this.id,
@@ -262,6 +266,10 @@ class Order {
     this.isBracketOrder = false,
     this.isCoverOrder = false,
     this.chargesApplied,
+    this.exchange,
+    this.leverageApplied,
+    this.marginUsed,
+    this.isAutoSquareOff = false,
   });
 
   Order copyWith({
@@ -289,6 +297,10 @@ class Order {
     bool? isBracketOrder,
     bool? isCoverOrder,
     double? chargesApplied,
+    String? exchange,
+    double? leverageApplied,
+    double? marginUsed,
+    bool? isAutoSquareOff,
   }) {
     return Order(
       id: id ?? this.id,
@@ -315,6 +327,10 @@ class Order {
       isBracketOrder: isBracketOrder ?? this.isBracketOrder,
       isCoverOrder: isCoverOrder ?? this.isCoverOrder,
       chargesApplied: chargesApplied ?? this.chargesApplied,
+      exchange: exchange ?? this.exchange,
+      leverageApplied: leverageApplied ?? this.leverageApplied,
+      marginUsed: marginUsed ?? this.marginUsed,
+      isAutoSquareOff: isAutoSquareOff ?? this.isAutoSquareOff,
     );
   }
 }
@@ -560,12 +576,18 @@ class OptionStrike {
   final OptionData ce;
   final OptionData pe;
   final bool isAtm;
+  /// Angel One instrument token for the CE contract. Empty for mock/fallback strikes.
+  final String ceToken;
+  /// Angel One instrument token for the PE contract. Empty for mock/fallback strikes.
+  final String peToken;
 
   const OptionStrike({
     required this.strike,
     required this.ce,
     required this.pe,
     this.isAtm = false,
+    this.ceToken = '',
+    this.peToken = '',
   });
 }
 

@@ -273,7 +273,18 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final timestamp = data['createdAt'];
               final dateTime = timestamp is Timestamp
                   ? timestamp.toDate()
+                  : timestamp is int
+                  ? DateTime.fromMillisecondsSinceEpoch(timestamp)
                   : DateTime.now();
+
+              // product: backend writes 'productType', TradingService writes 'product'
+              final rawProduct = ((data['productType'] as String?) ??
+                      (data['product'] as String?) ??
+                      'MIS')
+                  .toUpperCase();
+              // variety: normalize backend 'MARKET' / TradingService 'MARKET'
+              final rawVariety = ((data['variety'] as String?) ?? 'MARKET')
+                  .toUpperCase();
 
               return Order(
                 id: doc.id,
@@ -295,6 +306,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 type: rawType == 'SELL' ? OrderType.sell : OrderType.buy,
                 status: _mapOrderStatus(rawStatus),
                 dateTime: dateTime,
+                product: _mapProductType(rawProduct),
+                variety: _mapOrderVariety(rawVariety),
                 rejectionReason: data['rejectionReason'] as String?,
                 executedAt: data['executedAt'] is Timestamp
                     ? (data['executedAt'] as Timestamp).toDate()
@@ -310,6 +323,12 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                         ?.toDouble(),
                 pnl: ((data['pnl'] as num?) ?? 0).toDouble(),
                 chargesApplied: (data['chargesApplied'] as num?)?.toDouble(),
+                exchange: (data['exchange'] as String?)?.trim().toUpperCase(),
+                leverageApplied:
+                    (data['leverageApplied'] as num?)?.toDouble(),
+                marginUsed: (data['marginUsed'] as num?)?.toDouble(),
+                isAutoSquareOff:
+                    (data['isAutoSquareOff'] as bool?) ?? false,
               );
             }).toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
@@ -531,6 +550,23 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         return ProductType.mtf;
       default:
         return ProductType.mis;
+    }
+  }
+
+  OrderVariety _mapOrderVariety(String variety) {
+    switch (variety.toUpperCase()) {
+      case 'LIMIT':
+        return OrderVariety.limit;
+      case 'SL':
+      case 'SL_LIMIT':
+        return OrderVariety.sl;
+      case 'AMO':
+        return OrderVariety.amo;
+      case 'ICEBERG':
+        return OrderVariety.iceberg;
+      case 'MARKET':
+      default:
+        return OrderVariety.market;
     }
   }
 

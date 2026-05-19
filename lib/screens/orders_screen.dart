@@ -88,18 +88,6 @@ class _OrderBookTabState extends State<_OrderBookTab> {
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
 
-    // If no data yet (store just connected), show skeleton
-    if (store.watchlist.isEmpty && !store.backendError) {
-      return ShimmerWrapper(
-        child: ListView.separated(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: 8,
-          separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
-          itemBuilder: (_, __) => const ShimmerOrderTile(),
-        ),
-      );
-    }
-
     final allOrders = store.orders.toList()
       ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
@@ -350,37 +338,42 @@ class _OrderCard extends StatelessWidget {
     final isBuy = order.type == OrderType.buy;
     final sideColor = isBuy ? const Color(0xFF00C853) : const Color(0xFFD50000);
     final isPending = order.status == OrderStatus.pending;
+    final isExecuted = order.status == OrderStatus.executed ||
+        order.status == OrderStatus.approved;
 
-    // Status chip colors
-    Color statusBg, statusText;
+    Color statusBg, statusFg;
     String statusLabel;
     switch (order.status) {
       case OrderStatus.approved:
       case OrderStatus.executed:
         statusBg = const Color(0xFFE8F5E9);
-        statusText = const Color(0xFF2E7D32);
+        statusFg = const Color(0xFF2E7D32);
         statusLabel = 'Executed';
         break;
       case OrderStatus.rejected:
         statusBg = const Color(0xFFFFEBEE);
-        statusText = const Color(0xFFC62828);
+        statusFg = const Color(0xFFC62828);
         statusLabel = 'Rejected';
         break;
       case OrderStatus.cancelled:
         statusBg = const Color(0xFFF5F5F5);
-        statusText = const Color(0xFF616161);
+        statusFg = const Color(0xFF616161);
         statusLabel = 'Cancelled';
         break;
       case OrderStatus.partiallyExecuted:
         statusBg = const Color(0xFFFFF8E1);
-        statusText = const Color(0xFFF57F17);
+        statusFg = const Color(0xFFF57F17);
         statusLabel = 'Partial';
         break;
       case OrderStatus.pending:
         statusBg = const Color(0xFFFFF8E1);
-        statusText = const Color(0xFFF57F17);
+        statusFg = const Color(0xFFF57F17);
         statusLabel = 'Pending';
     }
+
+    final pnl = order.pnl;
+    final hasPnl = pnl != null && pnl != 0;
+    final pnlPositive = (pnl ?? 0) >= 0;
 
     return IntrinsicHeight(
       child: Container(
@@ -393,7 +386,7 @@ class _OrderCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Left 3dp color bar
+            // Left color bar
             Container(
               width: 3,
               decoration: BoxDecoration(
@@ -404,24 +397,35 @@ class _OrderCard extends StatelessWidget {
                 ),
               ),
             ),
-            // Content
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Row 1: Symbol + time
+                    // Row 1: Symbol + cancel/time
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          order.symbol,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: Color(0xFF0D0D0D),
-                          ),
+                        Row(
+                          children: [
+                            Text(
+                              order.symbol,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF0D0D0D),
+                              ),
+                            ),
+                            if (order.isAutoSquareOff) ...[
+                              const SizedBox(width: 6),
+                              _chip(
+                                'Auto SQ-OFF',
+                                const Color(0xFFFFF3E0),
+                                const Color(0xFFE65100),
+                              ),
+                            ],
+                          ],
                         ),
                         Row(
                           children: [
@@ -478,7 +482,13 @@ class _OrderCard extends StatelessWidget {
                           const Color(0xFFF3E5F5),
                           const Color(0xFF6A1B9A),
                         ),
-                        _chip(statusLabel, statusBg, statusText),
+                        if (order.exchange?.isNotEmpty == true)
+                          _chip(
+                            order.exchange!,
+                            const Color(0xFFE8F5E9),
+                            const Color(0xFF2E7D32),
+                          ),
+                        _chip(statusLabel, statusBg, statusFg),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -500,18 +510,19 @@ class _OrderCard extends StatelessWidget {
                             color: Color(0xFF757575),
                           ),
                         ),
-                        if (order.status == OrderStatus.executed ||
-                            order.status == OrderStatus.approved) ...[
+                        if (isExecuted) ...[
                           Text(
                             '  ·  ₹${order.price.toStringAsFixed(2)}',
                             style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF9E9E9E),
-                              decoration: TextDecoration.lineThrough,
                             ),
                           ),
-                          const Icon(Icons.arrow_forward,
-                              size: 11, color: Color(0xFF9E9E9E)),
+                          const Icon(
+                            Icons.arrow_forward,
+                            size: 11,
+                            color: Color(0xFF9E9E9E),
+                          ),
                           Text(
                             ' ₹${(order.executedPrice ?? order.price).toStringAsFixed(2)}',
                             style: const TextStyle(
@@ -530,13 +541,55 @@ class _OrderCard extends StatelessWidget {
                           ),
                       ],
                     ),
+                    // Row 4: Margin / leverage / P&L (only when data is present)
+                    if (order.marginUsed != null ||
+                        order.leverageApplied != null ||
+                        (hasPnl && isExecuted) ||
+                        order.chargesApplied != null) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 2,
+                        children: [
+                          if (order.marginUsed != null &&
+                              order.marginUsed! > 0)
+                            _metaItem(
+                              'Margin',
+                              '₹${order.marginUsed!.toStringAsFixed(0)}',
+                              const Color(0xFF757575),
+                            ),
+                          if (order.leverageApplied != null &&
+                              order.leverageApplied! > 1)
+                            _metaItem(
+                              'Leverage',
+                              '${order.leverageApplied!.toStringAsFixed(0)}x',
+                              const Color(0xFF757575),
+                            ),
+                          if (order.chargesApplied != null &&
+                              order.chargesApplied! > 0)
+                            _metaItem(
+                              'Charges',
+                              '₹${order.chargesApplied!.toStringAsFixed(2)}',
+                              const Color(0xFF757575),
+                            ),
+                          if (hasPnl && isExecuted)
+                            _metaItem(
+                              'P&L',
+                              '${pnlPositive ? '+' : ''}₹${pnl!.toStringAsFixed(2)}',
+                              pnlPositive
+                                  ? const Color(0xFF2E7D32)
+                                  : const Color(0xFFC62828),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
           ],
         ),
-      ), // IntrinsicHeight
+      ),
     );
   }
 
@@ -555,6 +608,26 @@ class _OrderCard extends StatelessWidget {
           color: text,
         ),
       ),
+    );
+  }
+
+  Widget _metaItem(String label, String value, Color valueColor) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: valueColor,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -623,23 +696,38 @@ class _TradeCard extends StatelessWidget {
     final sideBg = isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
     final execTime = order.executedAt ?? order.dateTime;
     final avgPrice = order.executedPrice ?? order.price;
+    final pnl = order.pnl;
+    final hasPnl = pnl != null && pnl != 0;
 
     return Container(
-      height: 64,
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE0E0E0)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
           // Time
-          Text(
-            DateFormat('HH:mm:ss').format(execTime),
-            style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                DateFormat('HH:mm:ss').format(execTime),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
+              ),
+              if (order.isAutoSquareOff)
+                const Text(
+                  'Auto SQ',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFFE65100),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           // BUY/SELL chip
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -656,24 +744,67 @@ class _TradeCard extends StatelessWidget {
               ),
             ),
           ),
+          if (order.exchange?.isNotEmpty == true) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F5F5),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                order.exchange!,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF555555),
+                ),
+              ),
+            ),
+          ],
           const Spacer(),
-          // Symbol + qty + price
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                order.symbol,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF0D0D0D),
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    order.symbol,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF0D0D0D),
+                    ),
+                  ),
+                  if (order.product != ProductType.mis) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      order.product.name.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF1565C0),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
               ),
               Text(
                 '${order.executedQuantity ?? order.quantity} qty · ₹${avgPrice.toStringAsFixed(2)}',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
               ),
+              if (hasPnl)
+                Text(
+                  '${(pnl! >= 0) ? '+' : ''}₹${pnl.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: pnl >= 0
+                        ? const Color(0xFF2E7D32)
+                        : const Color(0xFFC62828),
+                  ),
+                ),
             ],
           ),
         ],

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
-import 'package:intl/intl.dart';
 
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
@@ -13,8 +12,10 @@ import '../models/trading_models.dart';
 import 'alert_creation_screen.dart';
 import '../screens/advanced_chart_screen.dart';
 import '../screens/options_chain_screen.dart';
+import '../services/local_chart_cache.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../widgets/order_form_sheet.dart';
 
 class StockDetailScreen extends StatefulWidget {
@@ -29,13 +30,20 @@ class StockDetailScreen extends StatefulWidget {
 class _StockDetailScreenState extends State<StockDetailScreen>
     with SingleTickerProviderStateMixin {
   static final Map<String, int> _savedRangeBySymbol = {};
+  static final Map<String, TradingChartSeries> _chartCache = {};
+  static final Map<String, Stock> _quoteCache = {};
+  static final Map<String, DateTime> _firstOpenedAt = {};
+  static const _localChartCache = LocalChartCache();
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   int _selectedRange = 0;
   bool _useCandleChart = true;
   TradingChartSeries? _series;
   TradingChartSeries? _prevSeries;
-  bool _loadingSeries = true;
+  bool _loadingSeries = false;
+  bool _hydrationStarted = false;
   String? _seriesError;
+  String _quoteStage = 'cached';
+  String _chartStage = 'cached';
 
   // Market settings stream
   final _settingsService = MarketSettingsService();
@@ -44,9 +52,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
-  bool _initializing = true;
   int _loadGeneration = 0;
+  int _buildCount = 0;
   Timer? _refreshTimer;
+  Timer? _tickDebounce;
+  TradingStore? _store;
+  double? _lastRealtimePrice;
+  double? _pendingRealtimePrice;
+  bool _firstTickLogged = false;
 
   @override
   void initState() {
@@ -60,19 +73,87 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _settingsSub = _settingsService.stream.listen((s) {
       if (mounted) setState(() => _marketSettings = s);
     });
-    // Load required quote + chart data first, then render the detail UI.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeAndOpen());
+    _firstOpenedAt[_cacheSymbol] = DateTime.now();
+    // Render from cache/placeholders first. Network hydration starts after the
+    // first frame so no API can hold the initial route paint hostage.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _logStage('screen_open_ms', _openElapsedMs());
+      _startProgressiveHydration();
+    });
   }
 
-  Future<void> _initializeAndOpen() async {
-    try {
-      await _loadSeries();
-      await _fetchLiveQuoteIfNeeded();
-    } finally {
-      if (mounted) {
-        setState(() => _initializing = false);
-      }
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store == store) return;
+    _store?.removeListener(_onStorePriceTick);
+    _store = store;
+    store.addListener(_onStorePriceTick);
+    store.monitorSymbol(widget.symbol);
+    _primeInstantState(store);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _startProgressiveHydration();
+    });
+  }
+
+  String get _cacheSymbol => widget.symbol.trim().toUpperCase();
+
+  String get _seriesCacheKey => '$_cacheSymbol:$_selectedRange';
+
+  int _openElapsedMs() {
+    final openedAt = _firstOpenedAt[_cacheSymbol];
+    if (openedAt == null) return 0;
+    return DateTime.now().difference(openedAt).inMilliseconds;
+  }
+
+  void _logStage(String name, Object value) {
+    debugPrint('[StockDetailPerf] ${widget.symbol} $name=$value');
+  }
+
+  void _primeInstantState(TradingStore store) {
+    final cachedSeries =
+        _chartCache[_seriesCacheKey] ??
+        _localChartCache.readSeries(_seriesCacheKey);
+    final cachedQuote = _quoteCache[_cacheSymbol];
+    final liveStock = store.stockBySymbol(widget.symbol);
+    if (cachedQuote != null && liveStock.currentPrice <= 0) {
+      store.registerSearchResult(
+        symbol: widget.symbol,
+        displayName: cachedQuote.name.isNotEmpty
+            ? cachedQuote.name
+            : widget.symbol,
+        exchange: cachedQuote.exchange.isNotEmpty
+            ? cachedQuote.exchange
+            : 'NSE',
+        token: cachedQuote.token,
+        ltp: cachedQuote.currentPrice,
+        changePercent: cachedQuote.changePercentage,
+        instrumentType: cachedQuote.instrumentType,
+        strikePrice: cachedQuote.strikePrice,
+        expiry: cachedQuote.expiry,
+      );
     }
+    if (cachedSeries != null && _series == null) {
+      _series = cachedSeries;
+      _loadingSeries = false;
+      _chartStage = 'memory-cache';
+      _fadeCtrl.value = 1;
+    }
+  }
+
+  void _startProgressiveHydration() {
+    if (_hydrationStarted || !mounted) return;
+    _hydrationStarted = true;
+    _store?.monitorSymbol(widget.symbol);
+    _logStage('instant_render_ms', _openElapsedMs());
+
+    // Independent background work. Quote, chart, and websocket subscription are
+    // deliberately not awaited together.
+    unawaited(_fetchLiveQuoteIfNeeded());
+    unawaited(_loadSeries());
+    _logStage('ws_attach_requested_ms', _openElapsedMs());
   }
 
   /// If the stock has no live price (currentPrice == 0), fetch a quote
@@ -80,15 +161,21 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   /// This covers indices (NIFTY, SENSEX) and any non-tracked instrument.
   Future<void> _fetchLiveQuoteIfNeeded() async {
     if (!mounted) return;
-    final store = TradingScope.of(context);
+    final store = _store!;
     final stock = store.stockBySymbol(widget.symbol);
 
     // Already has a live price — nothing to do
-    if (stock.currentPrice > 0) return;
+    if (stock.currentPrice > 0) {
+      _quoteCache[_cacheSymbol] = stock;
+      _quoteStage = 'live-store';
+      return;
+    }
 
     debugPrint(
       '[StockDetail] No live price for ${widget.symbol} — fetching...',
     );
+    final sw = Stopwatch()..start();
+    if (mounted) setState(() => _quoteStage = 'refreshing');
 
     double ltp = 0;
     double pct = 0;
@@ -96,7 +183,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // Strategy 1: Try /market/stock?symbol= (reads from live WebSocket cache)
     // This works for any symbol the backend has ever received a tick for.
     try {
-      final detail = await _api.getStockDetail(widget.symbol.toUpperCase());
+      final detail = await _api
+          .getStockDetail(widget.symbol.toUpperCase())
+          .timeout(const Duration(seconds: 3));
       final rawLtp = (detail['ltp'] as num?)?.toDouble() ?? 0.0;
       if (rawLtp > 0) {
         ltp = rawLtp;
@@ -109,10 +198,12 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // Works for any instrument with a valid token, including MCX futures.
     if (ltp <= 0 && stock.token.isNotEmpty) {
       try {
-        final quote = await _api.getQuoteByToken(
-          stock.token,
-          exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-        );
+        final quote = await _api
+            .getQuoteByToken(
+              stock.token,
+              exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+            )
+            .timeout(const Duration(seconds: 3));
         final rawLtp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
         if (rawLtp > 0) {
           ltp = rawLtp;
@@ -125,6 +216,22 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     if (!mounted) return;
 
     if (ltp > 0) {
+      final resolvedStock = Stock(
+        symbol: widget.symbol,
+        name: stock.name.isNotEmpty ? stock.name : widget.symbol,
+        currentPrice: ltp,
+        changePercentage: pct,
+        sector: stock.sector,
+        exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
+        token: stock.token,
+        prevClose: stock.prevClose,
+        volume: stock.volume,
+        isStale: stock.isStale,
+        expiry: stock.expiry,
+        instrumentType: stock.instrumentType,
+        strikePrice: stock.strikePrice,
+      );
+      _quoteCache[_cacheSymbol] = resolvedStock;
       store.registerSearchResult(
         symbol: widget.symbol,
         displayName: stock.name.isNotEmpty ? stock.name : widget.symbol,
@@ -132,20 +239,58 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         token: stock.token,
         ltp: ltp,
         changePercent: pct,
+        instrumentType: stock.instrumentType,
+        strikePrice: stock.strikePrice,
+        expiry: stock.expiry,
       );
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _quoteStage = 'fresh');
       debugPrint('[StockDetail] Price updated: ${widget.symbol} = ₹$ltp');
     } else {
+      if (mounted) setState(() => _quoteStage = 'unavailable');
       debugPrint('[StockDetail] Could not fetch price for ${widget.symbol}');
     }
+    sw.stop();
+    _logStage('quote_fetch_ms', sw.elapsedMilliseconds);
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _tickDebounce?.cancel();
+    _store?.unmonitorSymbol(widget.symbol);
+    _store?.removeListener(_onStorePriceTick);
     _fadeCtrl.dispose();
     _settingsSub?.cancel();
     super.dispose();
+  }
+
+  void _onStorePriceTick() {
+    if (!mounted || _selectedRange > 1) return;
+    final stock = _store?.stockBySymbol(widget.symbol);
+    final price = stock?.currentPrice ?? 0;
+    if (price <= 0 || price == _lastRealtimePrice) return;
+    if (stock != null) _quoteCache[_cacheSymbol] = stock;
+    _pendingRealtimePrice = price;
+    _tickDebounce ??= Timer(const Duration(milliseconds: 250), () {
+      _tickDebounce = null;
+      final pending = _pendingRealtimePrice;
+      if (!mounted || pending == null || pending == _lastRealtimePrice) return;
+      _lastRealtimePrice = pending;
+      if (!_firstTickLogged) {
+        _firstTickLogged = true;
+        _logStage('first_tick_latency_ms', _openElapsedMs());
+      }
+      final current = _series;
+      if (current == null) {
+        setState(() {});
+        return;
+      }
+      setState(() {
+        _series = TradingChartService.withRealtimePrice(current, pending);
+        _chartCache[_seriesCacheKey] = _series!;
+        _localChartCache.writeSeries(_seriesCacheKey, _series!);
+      });
+    });
   }
 
   Future<void> _loadSeries() async {
@@ -153,25 +298,34 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _refreshTimer?.cancel();
     final gen = ++_loadGeneration;
 
+    final cached =
+        _chartCache[_seriesCacheKey] ??
+        _localChartCache.readSeries(_seriesCacheKey);
     setState(() {
       _loadingSeries = true;
       _seriesError = null;
-      _prevSeries = _series;
+      _prevSeries = _series ?? cached;
+      if (_series == null && cached != null) {
+        _series = cached;
+        _chartStage = 'memory-cache-refreshing';
+      } else {
+        _chartStage = 'refreshing';
+      }
     });
     _fadeCtrl.reverse();
 
-    for (int attempt = 0; attempt < 4; attempt++) {
+    for (int attempt = 0; attempt < 2; attempt++) {
       if (gen != _loadGeneration || !mounted) return;
       if (attempt > 0) {
-        // Exponential backoff: 2s, 4s, 8s
         await Future.delayed(Duration(seconds: 2 << (attempt - 1)));
         if (gen != _loadGeneration || !mounted) return;
       }
       try {
+        final sw = Stopwatch()..start();
         final now = DateTime.now().toUtc();
         final interval = _intervalForRange(_selectedRange);
         final from = _fromForRange(now, _selectedRange);
-        final store = TradingScope.of(context);
+        final store = _store!;
         final stock = store.stockBySymbol(widget.symbol);
 
         // Warmup ping on first attempt — avoids Render cold-start blocking the fetch.
@@ -179,29 +333,37 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           _api.getHealth().catchError((_) => <String, dynamic>{});
         }
 
-        final candles = await _api.getHistoricalData(
-          widget.symbol.toUpperCase(),
-          interval: interval,
-          from: _fmtApiDate(from, interval: interval),
-          to: _fmtApiDate(now, interval: interval),
-          exchange: stock.exchange.isNotEmpty ? stock.exchange : null,
-          token: stock.token.isNotEmpty ? stock.token : null,
-        );
+        final candles = await _api
+            .getHistoricalData(
+              widget.symbol.toUpperCase(),
+              interval: interval,
+              from: _fmtApiDate(from, interval: interval),
+              to: _fmtApiDate(now, interval: interval),
+              exchange: stock.exchange.isNotEmpty ? stock.exchange : null,
+              token: stock.token.isNotEmpty ? stock.token : null,
+            )
+            .timeout(const Duration(seconds: 8));
         if (gen != _loadGeneration || !mounted) return;
+        final maxCandles = _maxCandlesForRange(_selectedRange);
+        final visibleCandles = candles.length > maxCandles
+            ? candles.sublist(candles.length - maxCandles)
+            : candles;
+        final nextSeries = TradingChartService.fromRawCandles(
+          visibleCandles,
+          fallbackPrice: stock.currentPrice,
+        );
+        _chartCache[_seriesCacheKey] = nextSeries;
+        _localChartCache.writeSeries(_seriesCacheKey, nextSeries);
         setState(() {
-          final maxCandles = _maxCandlesForRange(_selectedRange);
-          final visibleCandles = candles.length > maxCandles
-              ? candles.sublist(candles.length - maxCandles)
-              : candles;
-          _series = TradingChartService.fromRawCandles(
-            visibleCandles,
-            fallbackPrice: stock.currentPrice,
-          );
+          _series = nextSeries;
           _prevSeries = null;
           _loadingSeries = false;
           _seriesError = null;
+          _chartStage = 'fresh';
         });
         _fadeCtrl.forward();
+        sw.stop();
+        _logStage('chart_fetch_ms', sw.elapsedMilliseconds);
         // Auto-refresh intraday and weekly charts every 30s
         if (_selectedRange <= 1) {
           _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
@@ -210,11 +372,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         }
         return;
       } catch (e) {
-        if (attempt < 3) continue; // retry with backoff
+        if (attempt < 1) continue; // one background retry with backoff
         if (gen != _loadGeneration || !mounted) return;
         setState(() {
           _seriesError = e.toString();
           _loadingSeries = false;
+          _chartStage = _series != null || _prevSeries != null
+              ? 'stale'
+              : 'unavailable';
         });
         _fadeCtrl.forward();
       }
@@ -308,32 +473,15 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final rawStock = store.stockBySymbol(widget.symbol);
-
-    if (_initializing) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: _buildAppBar(context, store, rawStock),
-        body: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
-              SizedBox(height: 12),
-              Text(
-                'Fetching live price & chart…',
-                style: TextStyle(fontSize: 13, color: Color(0xFF757575)),
-              ),
-            ],
-          ),
-        ),
+    _buildCount += 1;
+    assert(() {
+      debugPrint(
+        '[StockDetailPerf] ${widget.symbol} rebuild_count=$_buildCount',
       );
-    }
+      return true;
+    }());
+    final store = _store!;
+    final rawStock = store.stockBySymbol(widget.symbol);
 
     // Show previous series while loading new one (no blank flash)
     final displaySeries =
@@ -360,6 +508,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildStockHeader(context, stock),
+            _buildHydrationStrip(),
             _buildChartSection(
               context,
               displaySeries,
@@ -451,6 +600,41 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     );
   }
 
+  Widget _buildHydrationStrip() {
+    final messages = <String>[];
+    if (_quoteStage == 'refreshing') messages.add('Refreshing quote');
+    if (_quoteStage == 'unavailable') messages.add('Using cached quote');
+    if (_chartStage == 'refreshing' ||
+        _chartStage == 'memory-cache-refreshing') {
+      messages.add('Refreshing chart');
+    }
+    if (_chartStage == 'stale') messages.add('Showing cached chart');
+    if (messages.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Row(
+        children: [
+          if (_quoteStage == 'refreshing' || _chartStage.contains('refreshing'))
+            const SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(strokeWidth: 1.4),
+            ),
+          if (_quoteStage == 'refreshing' || _chartStage.contains('refreshing'))
+            const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              messages.join(' • '),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF757575)),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context, store, Stock stock) {
     final inWatchlist = store.isInWatchlist(stock.symbol);
     return AppBar(
@@ -511,7 +695,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   Widget _buildStockHeader(BuildContext context, Stock stock) {
     final isPos = stock.changePercentage >= 0;
-    final changeColor = isPos ? const Color(0xFF00C853) : const Color(0xFFD50000);
+    final changeColor = isPos
+        ? const Color(0xFF00C853)
+        : const Color(0xFFD50000);
     final arrow = isPos ? '+' : '';
     final exColor = _exchangeBadgeColor(stock.exchange);
     final chips = _derivativeChips(context, stock);
@@ -568,7 +754,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               const SizedBox(width: 6),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 5, vertical: 1),
+                                  horizontal: 5,
+                                  vertical: 1,
+                                ),
                                 decoration: BoxDecoration(
                                   color: exColor.withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(3),
@@ -624,7 +812,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                   const SizedBox(height: 2),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 3),
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: changeColor.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(6),
@@ -665,20 +855,17 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final hasRealCandles = series.data.isNotEmpty && series.close > 0;
     // Use line chart when only 1 candle exists — candle series can't render a single point
     final effectiveLineMode = use1DLine || series.data.length <= 1;
-    final low = hasRealCandles
-        ? series.data.map((c) => c.low).reduce((a, b) => a < b ? a : b)
-        : 0.0;
-    final high = hasRealCandles
-        ? series.data.map((c) => c.high).reduce((a, b) => a > b ? a : b)
-        : 0.0;
-    final pad = high > low ? (high - low) * 0.12 : high * 0.01;
     final showVolume = series.data.any((c) => c.volume > 0);
 
     final prevCloseRef = _selectedRange == 0
-        ? series.open // 1D: use today's open
+        ? series
+              .open // 1D: use today's open
         : (series.data.isNotEmpty
-            ? series.data.first.close // other ranges: first candle close
-            : 0.0);
+              ? series
+                    .data
+                    .first
+                    .close // other ranges: first candle close
+              : 0.0);
 
     // Clamp axis to data range so no empty gaps appear (e.g. NIFTY index charts)
     final axisMin = hasRealCandles ? series.data.first.time : null;
@@ -719,110 +906,110 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                             enableAxisAnimation: true,
                             plotAreaBorderWidth: 0,
                             margin: const EdgeInsets.only(right: 8),
-                        primaryXAxis: DateTimeAxis(
-                          isVisible: false,
-                          minimum: axisMin,
-                          maximum: axisMax,
-                          majorGridLines: const MajorGridLines(width: 0),
-                          axisLine: const AxisLine(width: 0),
-                          majorTickLines: const MajorTickLines(size: 0),
-                        ),
-                        primaryYAxis: NumericAxis(
-                          isVisible: false,
-                          rangePadding: ChartRangePadding.round,
-                          plotBands: hasRealCandles && prevCloseRef > 0
-                              ? <PlotBand>[
-                                  PlotBand(
-                                    start: prevCloseRef,
-                                    end: prevCloseRef,
-                                    borderColor: const Color(0xFFBDBDBD),
-                                    borderWidth: 1,
-                                    dashArray: const <double>[5, 4],
-                                  ),
-                                ]
-                              : [],
-                          majorGridLines: const MajorGridLines(width: 0),
-                          axisLine: const AxisLine(width: 0),
-                          majorTickLines: const MajorTickLines(size: 0),
-                        ),
-                        trackballBehavior: TrackballBehavior(
-                          enable: true,
-                          activationMode: ActivationMode.singleTap,
-                          lineColor: chartColor.withOpacity(0.4),
-                          lineWidth: 1,
-                        ),
-                        series: <CartesianSeries>[
-                          LineSeries<TradingCandle, DateTime>(
-                            dataSource: series.data,
-                            xValueMapper: (c, _) => c.time,
-                            yValueMapper: (c, _) => c.close,
-                            color: chartColor,
-                            width: 2.2,
-                            animationDuration: 0,
+                            primaryXAxis: DateTimeAxis(
+                              isVisible: false,
+                              minimum: axisMin,
+                              maximum: axisMax,
+                              majorGridLines: const MajorGridLines(width: 0),
+                              axisLine: const AxisLine(width: 0),
+                              majorTickLines: const MajorTickLines(size: 0),
+                            ),
+                            primaryYAxis: NumericAxis(
+                              isVisible: false,
+                              rangePadding: ChartRangePadding.round,
+                              plotBands: hasRealCandles && prevCloseRef > 0
+                                  ? <PlotBand>[
+                                      PlotBand(
+                                        start: prevCloseRef,
+                                        end: prevCloseRef,
+                                        borderColor: const Color(0xFFBDBDBD),
+                                        borderWidth: 1,
+                                        dashArray: const <double>[5, 4],
+                                      ),
+                                    ]
+                                  : [],
+                              majorGridLines: const MajorGridLines(width: 0),
+                              axisLine: const AxisLine(width: 0),
+                              majorTickLines: const MajorTickLines(size: 0),
+                            ),
+                            trackballBehavior: TrackballBehavior(
+                              enable: true,
+                              activationMode: ActivationMode.singleTap,
+                              lineColor: chartColor.withOpacity(0.4),
+                              lineWidth: 1,
+                            ),
+                            series: <CartesianSeries>[
+                              LineSeries<TradingCandle, DateTime>(
+                                dataSource: series.data,
+                                xValueMapper: (c, _) => c.time,
+                                yValueMapper: (c, _) => c.close,
+                                color: chartColor,
+                                width: 2.2,
+                                animationDuration: 0,
+                              ),
+                            ],
+                          )
+                        : SfCartesianChart(
+                            backgroundColor: Colors.white,
+                            plotAreaBackgroundColor: Colors.white,
+                            enableAxisAnimation: true,
+                            plotAreaBorderWidth: 0,
+                            margin: const EdgeInsets.only(right: 8),
+                            primaryXAxis: DateTimeAxis(
+                              isVisible: false,
+                              minimum: axisMin,
+                              maximum: axisMax,
+                              majorGridLines: const MajorGridLines(width: 0),
+                              axisLine: const AxisLine(width: 0),
+                              majorTickLines: const MajorTickLines(size: 0),
+                            ),
+                            primaryYAxis: NumericAxis(
+                              isVisible: false,
+                              rangePadding: ChartRangePadding.round,
+                              plotBands: hasRealCandles && prevCloseRef > 0
+                                  ? <PlotBand>[
+                                      PlotBand(
+                                        start: prevCloseRef,
+                                        end: prevCloseRef,
+                                        borderColor: const Color(0xFFBDBDBD),
+                                        borderWidth: 1,
+                                        dashArray: const <double>[5, 4],
+                                      ),
+                                    ]
+                                  : [],
+                              majorGridLines: const MajorGridLines(width: 0),
+                              axisLine: const AxisLine(width: 0),
+                              majorTickLines: const MajorTickLines(size: 0),
+                            ),
+                            trackballBehavior: TrackballBehavior(
+                              enable: true,
+                              activationMode: ActivationMode.singleTap,
+                              lineColor: const Color(0xFFBDBDBD),
+                              lineWidth: 1,
+                            ),
+                            zoomPanBehavior: ZoomPanBehavior(
+                              enablePinching: true,
+                              enablePanning: true,
+                              enableMouseWheelZooming: true,
+                              zoomMode: ZoomMode.x,
+                            ),
+                            series: <CartesianSeries>[
+                              CandleSeries<TradingCandle, DateTime>(
+                                dataSource: series.data,
+                                xValueMapper: (c, _) => c.time,
+                                lowValueMapper: (c, _) => c.low,
+                                highValueMapper: (c, _) => c.high,
+                                openValueMapper: (c, _) => c.open,
+                                closeValueMapper: (c, _) => c.close,
+                                enableSolidCandles: true,
+                                bearColor: const Color(0xFFE53935),
+                                bullColor: const Color(0xFF00C853),
+                                width: series.data.length > 100 ? 0.7 : 0.6,
+                                spacing: series.data.length > 100 ? 0.1 : 0.15,
+                                animationDuration: 0,
+                              ),
+                            ],
                           ),
-                        ],
-                      )
-                    : SfCartesianChart(
-                        backgroundColor: Colors.white,
-                        plotAreaBackgroundColor: Colors.white,
-                        enableAxisAnimation: true,
-                        plotAreaBorderWidth: 0,
-                        margin: const EdgeInsets.only(right: 8),
-                        primaryXAxis: DateTimeAxis(
-                          isVisible: false,
-                          minimum: axisMin,
-                          maximum: axisMax,
-                          majorGridLines: const MajorGridLines(width: 0),
-                          axisLine: const AxisLine(width: 0),
-                          majorTickLines: const MajorTickLines(size: 0),
-                        ),
-                        primaryYAxis: NumericAxis(
-                          isVisible: false,
-                          rangePadding: ChartRangePadding.round,
-                          plotBands: hasRealCandles && prevCloseRef > 0
-                              ? <PlotBand>[
-                                  PlotBand(
-                                    start: prevCloseRef,
-                                    end: prevCloseRef,
-                                    borderColor: const Color(0xFFBDBDBD),
-                                    borderWidth: 1,
-                                    dashArray: const <double>[5, 4],
-                                  ),
-                                ]
-                              : [],
-                          majorGridLines: const MajorGridLines(width: 0),
-                          axisLine: const AxisLine(width: 0),
-                          majorTickLines: const MajorTickLines(size: 0),
-                        ),
-                        trackballBehavior: TrackballBehavior(
-                          enable: true,
-                          activationMode: ActivationMode.singleTap,
-                          lineColor: const Color(0xFFBDBDBD),
-                          lineWidth: 1,
-                        ),
-                        zoomPanBehavior: ZoomPanBehavior(
-                          enablePinching: true,
-                          enablePanning: true,
-                          enableMouseWheelZooming: true,
-                          zoomMode: ZoomMode.x,
-                        ),
-                        series: <CartesianSeries>[
-                          CandleSeries<TradingCandle, DateTime>(
-                            dataSource: series.data,
-                            xValueMapper: (c, _) => c.time,
-                            lowValueMapper: (c, _) => c.low,
-                            highValueMapper: (c, _) => c.high,
-                            openValueMapper: (c, _) => c.open,
-                            closeValueMapper: (c, _) => c.close,
-                            enableSolidCandles: true,
-                            bearColor: const Color(0xFFE53935),
-                            bullColor: const Color(0xFF00C853),
-                            width: series.data.length > 100 ? 0.7 : 0.6,
-                            spacing: series.data.length > 100 ? 0.1 : 0.15,
-                            animationDuration: 0,
-                          ),
-                        ],
-                      ),
                   ),
                 ),
               ),
@@ -1337,7 +1524,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             MaterialPageRoute(
               builder: (_) => OptionsChainScreen(
                 symbol: _underlyingSymbol(stock.symbol),
-                exchange: ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO',
+                exchange: ex == 'MCX'
+                    ? 'MCX'
+                    : ex == 'BFO'
+                    ? 'BFO'
+                    : 'NFO',
               ),
             ),
           ),
@@ -1356,7 +1547,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             MaterialPageRoute(
               builder: (_) => OptionsChainScreen(
                 symbol: _underlyingSymbol(stock.symbol),
-                exchange: ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO',
+                exchange: ex == 'MCX'
+                    ? 'MCX'
+                    : ex == 'BFO'
+                    ? 'BFO'
+                    : 'NFO',
               ),
             ),
           ),
@@ -1371,7 +1566,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         ex == 'MCX' ||
         type == InstrumentType.equity ||
         type == InstrumentType.marketIndex) {
-      final chainExchange = ex == 'MCX' ? 'MCX' : ex == 'BFO' ? 'BFO' : 'NFO';
+      final chainExchange = ex == 'MCX'
+          ? 'MCX'
+          : ex == 'BFO'
+          ? 'BFO'
+          : 'NFO';
       return [
         _DerivativeChip(
           label: 'Option Chain',
@@ -1547,7 +1746,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     OrderFormSheet.show(
       context,
       stock: _withSeriesFallback(
-        TradingScope.of(context).stockBySymbol(widget.symbol),
+        _store!.stockBySymbol(widget.symbol),
         _series ??
             TradingChartService.fromRawCandles(const [], fallbackPrice: 0),
       ),

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
 import '../data/services/live_market_service.dart';
+import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../services/alert_service.dart';
 import '../services/market_data_service.dart';
@@ -73,6 +74,7 @@ class TradingStore extends ChangeNotifier {
   // ── Live backend wiring ────────────────────────────────────────────────────
   LiveMarketService? _liveMarketService;
   StreamSubscription<List<Stock>>? _liveStockSub;
+  StreamSubscription<Map<String, dynamic>>? _wsNotifSub;
   bool _usingLiveBackend = false;
   bool get usingLiveBackend => _usingLiveBackend;
 
@@ -98,15 +100,56 @@ class TradingStore extends ChangeNotifier {
     _marketDataService.dispose();
 
     _liveStockSub = _liveMarketService!.stockUpdates.listen(_onLiveStockUpdate);
+    _wsNotifSub   = _liveMarketService!.notificationStream.listen(_onWsNotification);
     unawaited(_liveMarketService!.start());
     _refreshMarketSubscriptions();
     _usingLiveBackend = true;
+  }
+
+  /// Register userId with the live backend WebSocket for real-time notification push.
+  void registerLiveUser(String userId) {
+    _liveMarketService?.registerUser(userId);
+  }
+
+  void _onWsNotification(Map<String, dynamic> raw) {
+    final id        = raw['id']        as String? ?? '${DateTime.now().millisecondsSinceEpoch}';
+    final title     = raw['title']     as String? ?? '';
+    final body      = raw['body']      as String? ?? '';
+    final typeStr   = raw['type']      as String? ?? '';
+    final createdAt = raw['createdAt'] as int?;
+    final ts = createdAt != null
+        ? DateTime.fromMillisecondsSinceEpoch(createdAt)
+        : DateTime.now();
+
+    final alertType = _alertTypeFromNotifType(typeStr);
+    final notif = AppNotification(
+      id:               id,
+      title:            title,
+      message:          body,
+      timestamp:        ts,
+      isRead:           false,
+      relatedAlertType: alertType,
+    );
+    addNotification(notif);
+  }
+
+  AlertType? _alertTypeFromNotifType(String type) {
+    switch (type) {
+      case 'order_executed':      return AlertType.orderExecution;
+      case 'order_rejected':      return AlertType.orderRejection;
+      case 'margin_warning':      return AlertType.marginWarning;
+      case 'rms_alert':           return AlertType.marginWarning;
+      case 'rms_auto_squareoff':  return AlertType.autoSquareOffWarning;
+      case 'squareoff_warning':   return AlertType.autoSquareOffWarning;
+      default:                    return AlertType.news;
+    }
   }
 
   /// Disconnect from live backend.
   void disconnectLiveBackend() {
     if (!_usingLiveBackend) return;
     _liveStockSub?.cancel();
+    _wsNotifSub?.cancel();
     _liveMarketService?.dispose();
     _liveMarketService = null;
     _usingLiveBackend = false;
@@ -174,18 +217,18 @@ class TradingStore extends ChangeNotifier {
         _marketDataService.recordDirection(stock.symbol, oldPrice, newLtp);
       }
 
-      // Update open positions with new price
-      for (var i = 0; i < _positions.length; i++) {
-        if (_positions[i].symbol == stock.symbol) {
+      // Update open positions with new price (O(1) via index map)
+      final posIndices = _positionIndex[stock.symbol];
+      if (posIndices != null) {
+        for (final i in posIndices) {
           _positions[i] = _positions[i].copyWith(currentPrice: newLtp);
         }
       }
 
-      // Update holdings with new price
-      for (var i = 0; i < _holdings.length; i++) {
-        if (_holdings[i].symbol == stock.symbol) {
-          _holdings[i] = _holdings[i].copyWith(currentPrice: newLtp);
-        }
+      // Update holdings with new price (O(1) via index map)
+      final holdingIdx = _holdingIndex[stock.symbol];
+      if (holdingIdx != null) {
+        _holdings[holdingIdx] = _holdings[holdingIdx].copyWith(currentPrice: newLtp);
       }
     }
 
@@ -237,6 +280,10 @@ class TradingStore extends ChangeNotifier {
   final List<Position> _positions;
   final List<Holding> _holdings;
   final List<Transaction> _transactions;
+
+  // O(1) index maps for tick-driven price updates — rebuilt on every replace.
+  final Map<String, List<int>> _positionIndex = {}; // symbol → indices (multiple products)
+  final Map<String, int> _holdingIndex = {};        // symbol → index (unique per symbol)
   User _currentUser;
 
   double _balance;
@@ -249,6 +296,27 @@ class TradingStore extends ChangeNotifier {
 
   bool _showMisSquareOffWarning = false;
   bool get showMisSquareOffWarning => _showMisSquareOffWarning;
+
+  // ── Platform settings (leverage, RMS, support) ────────────────────────────
+  PlatformRmsSettings _rmsSettings = PlatformRmsSettings.defaults;
+  SupportConfig _supportConfig = const SupportConfig();
+
+  PlatformRmsSettings get rmsSettings => _rmsSettings;
+  SupportConfig get supportConfig => _supportConfig;
+
+  void updateRmsSettings(PlatformRmsSettings settings) {
+    _rmsSettings = settings;
+    notifyListeners();
+  }
+
+  void updateSupportConfig(SupportConfig config) {
+    _supportConfig = config;
+    notifyListeners();
+  }
+
+  /// Effective intraday leverage — uses admin setting or 5x default.
+  double get intradayLeverage => _rmsSettings.intradayLeverage;
+  double get shortSellLeverage => _rmsSettings.shortSellLeverage;
 
   void setMisSquareOffWarning(bool value) {
     if (_showMisSquareOffWarning == value) return;
@@ -264,6 +332,7 @@ class TradingStore extends ChangeNotifier {
     _notifyDebounce?.cancel();
     _priceSubscription?.cancel();
     _liveStockSub?.cancel();
+    _wsNotifSub?.cancel();
     _liveMarketService?.dispose();
     _alertService.dispose();
     _marketDataService.dispose();
@@ -451,13 +520,11 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Returns the required margin for an order.
-  /// CNC and NRML: full value (quantity * price)
-  /// Returns required margin for an order.
-  /// - MIS/MTF: 20% of trade value (5x leverage)
+  /// Returns the required margin for an order using admin-configured leverage.
+  /// - MIS/MTF: tradeValue / intradayLeverage  (admin-controlled, default 5x)
   /// - NRML: 100% of trade value
-  /// - Overnight (carry-forward): 100% of trade value
-  /// - SELL orders: 0 for exits, normal margin when opening a short position
+  /// - CNC/Overnight (carry-forward): 100% of trade value
+  /// - SELL exits: 0 (no margin needed); SELL short-opens: margin required
   double requiredMargin(
     int quantity,
     double price,
@@ -468,7 +535,8 @@ class TradingStore extends ChangeNotifier {
     if (isSell && !opensShort) return 0; // Exit orders never require margin
     final fullValue = quantity * price;
     if (product == ProductType.mis || product == ProductType.mtf) {
-      return fullValue / 5;
+      final leverage = isSell ? _rmsSettings.shortSellLeverage : _rmsSettings.intradayLeverage;
+      return fullValue / leverage;
     }
     return fullValue; // nrml, overnight
   }
@@ -1011,10 +1079,25 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _rebuildPositionIndex() {
+    _positionIndex.clear();
+    for (var i = 0; i < _positions.length; i++) {
+      _positionIndex.putIfAbsent(_positions[i].symbol, () => []).add(i);
+    }
+  }
+
+  void _rebuildHoldingIndex() {
+    _holdingIndex.clear();
+    for (var i = 0; i < _holdings.length; i++) {
+      _holdingIndex[_holdings[i].symbol] = i;
+    }
+  }
+
   void replacePositions(List<Position> positions) {
     _positions
       ..clear()
       ..addAll(positions);
+    _rebuildPositionIndex();
     notifyListeners();
   }
 
@@ -1022,6 +1105,7 @@ class TradingStore extends ChangeNotifier {
     _holdings
       ..clear()
       ..addAll(holdings);
+    _rebuildHoldingIndex();
     notifyListeners();
   }
 

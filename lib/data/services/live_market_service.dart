@@ -17,9 +17,9 @@ class LiveMarketService {
   final BackendApiService _api;
   final void Function(bool isError, String message)? onError;
 
-  final _stockController = StreamController<List<Stock>>.broadcast();
-  final _moversController =
-      StreamController<Map<String, List<Stock>>>.broadcast();
+  final _stockController        = StreamController<List<Stock>>.broadcast();
+  final _moversController       = StreamController<Map<String, List<Stock>>>.broadcast();
+  final _notificationController = StreamController<Map<String, dynamic>>.broadcast();
 
   final Map<String, Stock> _latestMap = {};
   // Start with all known symbols — MCX commodities included.
@@ -37,6 +37,7 @@ class LiveMarketService {
   StreamSubscription? _wsSub;
   Timer? _reconnectTimer;
   Timer? _moversDebounce;
+  Timer? _tickFlushTimer;
   int _reconnectAttempt = 0;
   final Map<String, int> _lastSeqBySymbol = {};
   final Map<String, double> _lastEmittedLtpBySymbol = {};
@@ -48,8 +49,10 @@ class LiveMarketService {
   List<Stock> get latestStocks => _latestMap.values.toList(growable: false);
 
   Stream<List<Stock>> get stockUpdates => _stockController.stream;
-  Stream<Map<String, List<Stock>>> get moversUpdates =>
-      _moversController.stream;
+  Stream<Map<String, List<Stock>>> get moversUpdates => _moversController.stream;
+  Stream<Map<String, dynamic>> get notificationStream => _notificationController.stream;
+
+  String? _registeredUserId;
 
   Future<void> start() async {
     _started = true;
@@ -72,6 +75,8 @@ class LiveMarketService {
     _reconnectTimer = null;
     _moversDebounce?.cancel();
     _moversDebounce = null;
+    _tickFlushTimer?.cancel();
+    _tickFlushTimer = null;
     _wsSub?.cancel();
     _wsSub = null;
     _channel?.sink.close();
@@ -81,8 +86,22 @@ class LiveMarketService {
   void dispose() {
     _disposed = true;
     stop();
-    if (!_stockController.isClosed) _stockController.close();
-    if (!_moversController.isClosed) _moversController.close();
+    if (!_stockController.isClosed)        _stockController.close();
+    if (!_moversController.isClosed)       _moversController.close();
+    if (!_notificationController.isClosed) _notificationController.close();
+  }
+
+  /// Register this client's userId with the backend WebSocket so the server
+  /// can push per-user notifications in real-time.
+  void registerUser(String userId) {
+    _registeredUserId = userId;
+    _sendUserRegister();
+  }
+
+  void _sendUserRegister() {
+    final channel = _channel;
+    if (channel == null || _registeredUserId == null) return;
+    channel.sink.add(jsonEncode({'type': 'register_user', 'userId': _registeredUserId}));
   }
 
   Future<void> _bootstrapSnapshot() async {
@@ -117,6 +136,7 @@ class LiveMarketService {
         cancelOnError: true,
       );
       _sendSubscribe();
+      _sendUserRegister(); // re-register after reconnect
       _setError(false, '');
       _reconnectAttempt = 0;
     } catch (e) {
@@ -158,9 +178,17 @@ class LiveMarketService {
         if (lastLtp == stock.currentPrice) return;
         _lastEmittedLtpBySymbol[stock.symbol] = stock.currentPrice;
         _latestMap[stock.symbol] = stock;
-        _emitStocks();
+        _scheduleTick();
         _scheduleMovers();
         _setError(false, '');
+        return;
+      }
+      if (type == 'notification') {
+        final data = m['data'] as Map<String, dynamic>?;
+        if (data != null && !_notificationController.isClosed) {
+          _notificationController.add(data);
+        }
+        return;
       }
     } catch (e) {
       _onWsError(
@@ -178,6 +206,13 @@ class LiveMarketService {
         ? 1
         : (_reconnectAttempt <= 5 ? 2 : 5);
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), _connectWs);
+  }
+
+  void _scheduleTick() {
+    _tickFlushTimer ??= Timer(const Duration(milliseconds: 50), () {
+      _tickFlushTimer = null;
+      _emitStocks();
+    });
   }
 
   void _emitStocks() {

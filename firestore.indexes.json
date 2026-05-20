@@ -63,6 +63,14 @@
         { "fieldPath": "status",    "order": "ASCENDING"  },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "holdings",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "productType", "order": "ASCENDING" },
+        { "fieldPath": "exchange",    "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

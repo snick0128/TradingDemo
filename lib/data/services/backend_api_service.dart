@@ -20,6 +20,10 @@ class BackendApiService {
 
   final String baseUrl;
 
+  // Singleton HTTP client — reuses TCP connections across all orders and
+  // market data requests, avoiding per-request TLS handshake overhead.
+  static final http.Client _client = http.Client();
+
   // ── In-memory cache ─────────────────────────────────────────────────────────
 
   static final Map<String, _CacheEntry> _cache = {};
@@ -65,7 +69,7 @@ class BackendApiService {
 
     print('[BackendAPI] GET: $uri (attempt ${attempt + 1})');
     final request = () async {
-      final response = await http
+      final response = await _client
           .get(uri, headers: _headers)
           .timeout(_getTimeout);
       print('[BackendAPI] Response: ${response.statusCode} for $path');
@@ -105,11 +109,9 @@ class BackendApiService {
   ) async {
     final uri = Uri.parse('$baseUrl$path');
     try {
-      final response = await http
+      final response = await _client
           .post(uri, headers: _headers, body: jsonEncode(body))
-          .timeout(
-            const Duration(seconds: 30),
-          ); // increased from 15s — Render cold starts + Firestore reads
+          .timeout(const Duration(seconds: 10)); // warm server — no cold-start risk
       return _parse(response);
     } on BackendException {
       rethrow; // 4xx/5xx — pass the real error message through
@@ -410,6 +412,106 @@ class BackendApiService {
   Future<Map<String, dynamic>> getIPOById(String id) async {
     final res = await _get('/ipos/$id');
     return res['data'] as Map<String, dynamic>;
+  }
+
+  // ── FCM Notifications ────────────────────────────────────────────────────────
+
+  /// Broadcast a push notification to all subscribed users via "all_users" topic.
+  Future<Map<String, dynamic>> broadcastNotification({
+    required String title,
+    required String message,
+    Map<String, String>? data,
+  }) => _post('/admin/notifications/broadcast', {
+    'title': title,
+    'message': message,
+    if (data != null) 'data': data,
+  });
+
+  /// Send a push notification to a specific FCM token (one device).
+  Future<Map<String, dynamic>> sendNotificationToToken({
+    required String fcmToken,
+    required String title,
+    required String message,
+    Map<String, String>? data,
+  }) => _post('/admin/notifications/send-to-user', {
+    'fcmToken': fcmToken,
+    'title': title,
+    'message': message,
+    if (data != null) 'data': data,
+  });
+
+  /// Send a push notification to multiple FCM tokens (batch, max 500).
+  Future<Map<String, dynamic>> sendNotificationToTokens({
+    required List<String> tokens,
+    required String title,
+    required String message,
+    Map<String, String>? data,
+  }) => _post('/admin/notifications/send-to-tokens', {
+    'tokens': tokens,
+    'title': title,
+    'message': message,
+    if (data != null) 'data': data,
+  });
+
+  // ── Platform settings ────────────────────────────────────────────────────────
+
+  /// Fetch admin-controlled platform RMS and leverage settings.
+  Future<Map<String, dynamic>> getRmsSettings() async {
+    final res = await _get('/admin/config/rms-settings', ttl: _mediumTtl);
+    return res['data'] as Map<String, dynamic>;
+  }
+
+  /// Update platform RMS settings (admin only).
+  Future<void> updateRmsSettings(Map<String, dynamic> settings) async {
+    await _post('/admin/config/rms-settings', settings);
+    invalidate('/admin/config/rms-settings');
+  }
+
+  /// Fetch support contact configuration.
+  Future<Map<String, dynamic>> getSupportConfig() async {
+    final res = await _get('/admin/config/support', ttl: _longTtl);
+    return res['data'] as Map<String, dynamic>;
+  }
+
+  /// Update support contact config (admin only).
+  Future<void> updateSupportConfig(Map<String, dynamic> config) async {
+    await _post('/admin/config/support', config);
+    invalidate('/admin/config/support');
+  }
+
+  // ── In-app Notifications ─────────────────────────────────────────────────────
+
+  /// Fetch paginated notifications for a user.
+  Future<List<Map<String, dynamic>>> getUserNotifications(
+    String userId, {
+    int limit = 50,
+    String? startAfter,
+  }) async {
+    var path = '/notifications/$userId?limit=$limit';
+    if (startAfter != null) path += '&startAfter=$startAfter';
+    final res = await _get(path, ttl: _shortTtl);
+    return List<Map<String, dynamic>>.from(res['data'] as List);
+  }
+
+  /// Mark a single notification as read.
+  Future<void> markNotificationRead(String userId, String notifId) =>
+      _post('/notifications/$userId/$notifId/read', {});
+
+  /// Mark all notifications as read for a user.
+  Future<void> markAllNotificationsRead(String userId) =>
+      _post('/notifications/$userId/read-all', {});
+
+  // ── Admin password change ────────────────────────────────────────────────────
+
+  /// Change admin password via Firebase Admin SDK on the backend.
+  Future<void> changeAdminPassword({
+    required String uid,
+    required String newPassword,
+  }) async {
+    await _post('/admin/change-password', {
+      'uid': uid,
+      'newPassword': newPassword,
+    });
   }
 }
 

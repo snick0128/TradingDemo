@@ -183,8 +183,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       _localResults = local;
     });
 
-    // Remote enrichment — 350ms debounce to avoid spamming the API
-    _debounce = Timer(const Duration(milliseconds: 350), () => _fetchRemote(q));
+    // Remote enrichment — 150ms debounce (fast feel, avoids per-keystroke spam)
+    _debounce = Timer(const Duration(milliseconds: 150), () => _fetchRemote(q));
   }
 
   Future<void> _fetchRemote(String q) async {
@@ -214,6 +214,19 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 
       final parsed = results.map(_RemoteResult.fromJson).toList();
       _searchCache[cacheKey] = parsed;
+
+      // Cache results in local trie so subsequent keystrokes are instant
+      SearchIndex.instance.ingestRemoteResults(
+        parsed.map((r) => {
+          'symbol': r.tradingSymbol,
+          'exchange': r.exchange,
+          'type': r.instrumentType,
+          'displayName': r.displaySymbol,
+          'name': r.name,
+          if (r.ltp != null) 'ltp': r.ltp,
+          if (r.percentChange != null) 'percentChange': r.percentChange,
+        }).toList(),
+      );
 
       setState(() {
         _remoteResults = parsed;

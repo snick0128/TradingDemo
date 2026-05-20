@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../config/admin_auth_config.dart';
 import '../../domain/auth/app_user_profile.dart';
+import '../../services/notification_service.dart';
 import 'firestore_service.dart';
 
 class AuthService {
@@ -290,6 +293,21 @@ class AuthService {
     return _loadProfile(firebaseUser);
   }
 
+  /// Save FCM token to users/{uid}.fcmTokens array (merge, no duplicates).
+  /// Called after successful login so every device/browser gets push delivery.
+  Future<void> _saveFcmToken(String uid) async {
+    try {
+      final token = await NotificationService.instance.getToken();
+      if (token == null || token.isEmpty) return;
+      await _firestore.raw.doc('users/$uid').update({
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'fcmTokenUpdatedAt': Timestamp.now(),
+      });
+    } catch (_) {
+      // Non-fatal — app works without saved token
+    }
+  }
+
   Future<AppUserProfile> _loadProfile(User firebaseUser) async {
     final doc = await _firestore.raw
         .doc('users/${firebaseUser.uid}')
@@ -323,10 +341,15 @@ class AuthService {
       data = doc.data()!;
     }
 
-    return AppUserProfile.fromMap(
+    final profile = AppUserProfile.fromMap(
       firebaseUser.uid,
       data,
       fallbackEmail: firebaseUser.email ?? '',
     );
+
+    // Save FCM token after every sign-in so push notifications reach this device.
+    unawaited(_saveFcmToken(firebaseUser.uid));
+
+    return profile;
   }
 }

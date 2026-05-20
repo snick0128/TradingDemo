@@ -52,17 +52,6 @@ class DashboardScreen extends StatelessWidget {
       );
     }
 
-    // ── Loading state: waiting for first data ─────────────────────────────────
-    if (store.watchlist.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Dashboard')),
-        backgroundColor: AppColors.background,
-        body: const BackendLoadingWidget(
-          message: 'Connecting to market data server...',
-        ),
-      );
-    }
-
     final hour = DateTime.now().hour;
     final greeting = hour < 12
         ? 'Good morning'

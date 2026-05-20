@@ -925,12 +925,29 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                     color: Color(0xFF111111),
                   ),
                 ),
-                Text(
-                  '₹${widget.stock.currentPrice.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF666666),
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      'LTP ₹${widget.stock.currentPrice.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF888888),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isMarket
+                          ? 'Exec ₹${(_isBuy ? widget.stock.currentPrice * 1.0002 : widget.stock.currentPrice * 0.9998).toStringAsFixed(2)}'
+                          : '',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _isBuy
+                            ? const Color(0xFF00A020)
+                            : const Color(0xFFCC2200),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1020,10 +1037,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   // ── Product ────────────────────────────────────────────────────────────────
   // On SELL, product type is irrelevant — you're exiting an existing position.
-  // Only show product selector on BUY.
-
   Widget _buildProductRow() {
-    if (!_isBuy) return const SizedBox.shrink();
+    // Hide for F&O (already NRML by default) — show for both equity BUY and SELL
+    if (_isFuturesOrOptions) return const SizedBox.shrink();
 
     final misLev = _getLeverageForProduct(ProductType.mis);
     final nrmlLev = _getLeverageForProduct(ProductType.nrml);

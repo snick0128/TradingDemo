@@ -1,13 +1,16 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../../models/platform_settings.dart';
+import '../../state/trading_scope.dart';
 import '../../theme.dart';
 import '../../widgets/shared_widgets.dart';
 
 class _FaqItem {
   final String question;
   final String answer;
-
   const _FaqItem({required this.question, required this.answer});
 }
 
@@ -18,9 +21,9 @@ const _faqs = [
         'Tap on any stock in your watchlist, then tap BUY or SELL. Select "Market" as the order variety and enter the quantity. Tap the submit button to place the order.',
   ),
   _FaqItem(
-    question: 'What is the difference between CNC and MIS?',
+    question: 'What is the difference between CNC and Intraday?',
     answer:
-        'CNC (Cash and Carry) is for delivery-based equity trades held overnight. MIS (Margin Intraday Square-off) is for intraday trades that are automatically squared off at 3:20 PM.',
+        'CNC (Cash and Carry) is for delivery-based equity trades held overnight. Intraday trades are automatically squared off before market close if not exited manually.',
   ),
   _FaqItem(
     question: 'How do I add funds to my account?',
@@ -42,11 +45,15 @@ const _faqs = [
     answer:
         'F&O trades are charged at ₹20 per executed order, regardless of the trade size. Additional charges like STT, exchange fees, and GST apply.',
   ),
+  _FaqItem(
+    question: 'What happens to my Intraday positions at end of day?',
+    answer:
+        'All Intraday positions will be automatically squared off before market closing if not exited manually. Intraday leveraged positions may also be exited early if losses exceed your available margin.',
+  ),
 ];
 
 class HelpSupportScreen extends StatefulWidget {
   const HelpSupportScreen({super.key});
-
   @override
   State<HelpSupportScreen> createState() => _HelpSupportScreenState();
 }
@@ -54,8 +61,15 @@ class HelpSupportScreen extends StatefulWidget {
 class _HelpSupportScreenState extends State<HelpSupportScreen> {
   final Set<int> _expanded = {};
 
+  void _openUrl(String url) {
+    html.window.open(url, '_blank');
+  }
+
   @override
   Widget build(BuildContext context) {
+    final store   = TradingScope.of(context);
+    final support = store.supportConfig;
+
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
@@ -77,11 +91,8 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                     children: [
                       InkWell(
                         onTap: () => setState(() {
-                          if (isExpanded) {
-                            _expanded.remove(e.key);
-                          } else {
-                            _expanded.add(e.key);
-                          }
+                          if (isExpanded) _expanded.remove(e.key);
+                          else            _expanded.add(e.key);
                         }),
                         child: Padding(
                           padding: const EdgeInsets.all(16),
@@ -90,16 +101,11 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                               Expanded(
                                 child: Text(
                                   e.value.question,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14,
-                                  ),
+                                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                                 ),
                               ),
                               Icon(
-                                isExpanded
-                                    ? LucideIcons.chevronUp
-                                    : LucideIcons.chevronDown,
+                                isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
                                 size: 18,
                                 color: AppColors.textSecondary,
                               ),
@@ -114,11 +120,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                           color: AppColors.surfaceAlt.withOpacity(0.5),
                           child: Text(
                             e.value.answer,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textSecondary,
-                              height: 1.5,
-                            ),
+                            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.5),
                           ),
                         ),
                       if (e.key < _faqs.length - 1) const Divider(height: 1),
@@ -127,45 +129,66 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                 }).toList(),
               ),
             ),
-            const SizedBox(height: 24),
 
-            Text('Contact Us', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            CustomCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  _contactTile(
-                    icon: LucideIcons.mail,
-                    title: 'Email Support',
-                    subtitle: 'support@boxtradingpro.com',
-                    onTap: () {},
-                  ),
-                  const Divider(height: 1),
-                  _contactTile(
-                    icon: LucideIcons.phone,
-                    title: 'Phone Support',
-                    subtitle: '+91 1800-XXX-XXXX (Mon–Fri, 9AM–6PM)',
-                    onTap: () {},
-                  ),
-                  const Divider(height: 1),
-                  _contactTile(
-                    icon: LucideIcons.messageCircle,
-                    title: 'Live Chat',
-                    subtitle: 'Chat with our support team',
-                    onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Live chat coming soon!')),
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  _contactTile(
-                    icon: LucideIcons.fileText,
-                    title: 'Raise a Ticket',
-                    subtitle: 'Submit a support request',
-                    onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Ticket system coming soon!'),
+            if (support.enabled) ...[
+              const SizedBox(height: 24),
+              Text('Contact Us', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              CustomCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    if (support.whatsappNumber.isNotEmpty)
+                      _contactTile(
+                        icon: LucideIcons.messageCircle,
+                        title: 'WhatsApp Support',
+                        subtitle: '+${support.whatsappNumber}',
+                        onTap: () => _openUrl(
+                          'https://wa.me/${support.whatsappNumber}'
+                          '?text=${Uri.encodeComponent(support.messageTemplate)}',
+                        ),
                       ),
+                    if (support.whatsappNumber.isNotEmpty && support.phoneNumber.isNotEmpty)
+                      const Divider(height: 1),
+                    if (support.phoneNumber.isNotEmpty)
+                      _contactTile(
+                        icon: LucideIcons.phone,
+                        title: 'Phone Support',
+                        subtitle: support.phoneNumber,
+                        onTap: () => _openUrl('tel:${support.phoneNumber}'),
+                      ),
+                    if (support.phoneNumber.isNotEmpty && support.email.isNotEmpty)
+                      const Divider(height: 1),
+                    if (support.email.isNotEmpty)
+                      _contactTile(
+                        icon: LucideIcons.mail,
+                        title: 'Email Support',
+                        subtitle: support.email,
+                        onTap: () => _openUrl('mailto:${support.email}'),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.warning.withOpacity(0.25)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(LucideIcons.info, size: 16, color: AppColors.warning),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Intraday leveraged positions may be automatically squared off if losses exceed available margin. '
+                      'Positions using leverage are subject to RMS auto square-off on margin exhaustion.',
+                      style: TextStyle(fontSize: 12, color: AppColors.warning, height: 1.4),
                     ),
                   ),
                 ],
@@ -185,16 +208,9 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
   }) {
     return ListTile(
       leading: Icon(icon, color: AppColors.primary, size: 20),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-      trailing: const Icon(
-        Icons.chevron_right,
-        color: AppColors.textSecondary,
-        size: 20,
-      ),
+      trailing: const Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 20),
       onTap: onTap,
     );
   }

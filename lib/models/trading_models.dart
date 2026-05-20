@@ -371,6 +371,7 @@ class Position {
   final OrderType side;
   final DateTime openedAt;
   final String exchange;
+  final double marginUsed;
 
   Position({
     required this.symbol,
@@ -382,6 +383,7 @@ class Position {
     required this.side,
     required this.openedAt,
     this.exchange = 'NSE',
+    this.marginUsed = 0.0,
   });
 
   double get investedValue => quantity * avgPrice;
@@ -402,6 +404,7 @@ class Position {
     OrderType? side,
     DateTime? openedAt,
     String? exchange,
+    double? marginUsed,
   }) {
     return Position(
       symbol: symbol ?? this.symbol,
@@ -413,6 +416,7 @@ class Position {
       side: side ?? this.side,
       openedAt: openedAt ?? this.openedAt,
       exchange: exchange ?? this.exchange,
+      marginUsed: marginUsed ?? this.marginUsed,
     );
   }
 }

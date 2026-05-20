@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
@@ -254,14 +253,14 @@ class _MisWarningBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.warning.withOpacity(0.08),
+      color: AppColors.warning.withValues(alpha: 0.08),
       child: Row(
         children: [
           Icon(LucideIcons.clock, size: 13, color: AppColors.warning),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '⚠ Auto square-off at 3:20 PM for MIS positions',
+              '⚠ All Intraday positions will be auto squared-off before market close.',
               style: TextStyle(
                 fontSize: 12,
                 color: AppColors.warning,
@@ -485,6 +484,11 @@ class _PositionCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    // RMS risk row — only shown for Intraday (MIS) positions
+                    if (p.product == ProductType.mis && p.marginUsed > 0) ...[
+                      const SizedBox(height: 6),
+                      _RmsRiskRow(position: p),
+                    ],
                     const SizedBox(height: 6),
                     // Bottom row: avg + product badge + EXIT button
                     Row(
@@ -509,7 +513,7 @@ class _PositionCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            p.product.name.toUpperCase(),
+                            p.product == ProductType.mis ? 'INTRADAY' : p.product.name.toUpperCase(),
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
@@ -561,6 +565,81 @@ class _PositionCard extends StatelessWidget {
           ],
         ),
       ), // IntrinsicHeight
+    );
+  }
+}
+
+// ─── RMS Risk Row ─────────────────────────────────────────────────────────────
+
+class _RmsRiskRow extends StatelessWidget {
+  final Position position;
+  const _RmsRiskRow({required this.position});
+
+  @override
+  Widget build(BuildContext context) {
+    final p          = position;
+    final usedMargin = p.marginUsed;
+    final pnl        = p.unrealizedPnl;
+    final loss       = pnl < 0 ? pnl.abs() : 0.0;
+    final riskPct    = usedMargin > 0 ? (loss / usedMargin * 100).clamp(0.0, 100.0) : 0.0;
+
+    final Color barColor;
+    final Color textColor;
+    final String label;
+    if (riskPct >= 80) {
+      barColor  = const Color(0xFFD50000);
+      textColor = const Color(0xFFD50000);
+      label     = 'DANGER';
+    } else if (riskPct >= 50) {
+      barColor  = const Color(0xFFF57F17);
+      textColor = const Color(0xFFF57F17);
+      label     = 'WARNING';
+    } else {
+      barColor  = const Color(0xFF00C853);
+      textColor = const Color(0xFF2E7D32);
+      label     = 'SAFE';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Margin: ₹${usedMargin.toStringAsFixed(0)}',
+              style: const TextStyle(fontSize: 10, color: Color(0xFF757575)),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Risk: ${riskPct.toStringAsFixed(1)}%',
+              style: TextStyle(fontSize: 10, color: textColor, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: barColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: barColor.withValues(alpha: 0.4)),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: barColor),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 3),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: LinearProgressIndicator(
+            value: riskPct / 100,
+            minHeight: 3,
+            backgroundColor: const Color(0xFFE0E0E0),
+            valueColor: AlwaysStoppedAnimation<Color>(barColor),
+          ),
+        ),
+      ],
     );
   }
 }

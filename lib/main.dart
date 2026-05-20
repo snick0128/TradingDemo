@@ -9,6 +9,7 @@ import 'app/app_router.dart';
 import 'firebase_options.dart';
 import 'app/app_scope.dart';
 import 'config/backend_config.dart';
+import 'models/platform_settings.dart';
 import 'data/providers/backend_price_provider.dart';
 import 'data/services/auth_service.dart';
 import 'data/services/backend_api_service.dart';
@@ -223,6 +224,12 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     // the authStateChanges listener both call _bindUserRealtime for the same uid.
     if (_boundUserId == userId) return;
     _boundUserId = userId;
+
+    // Register user with WebSocket for real-time notification push
+    _tradingStore.registerLiveUser(userId);
+
+    // Load platform settings (leverage config + support config) on user bind
+    _loadPlatformSettings();
 
     _userSub?.cancel();
     _userSub = _firestoreService?.raw
@@ -471,7 +478,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final date = updatedAt is Timestamp
                   ? updatedAt.toDate()
                   : updatedAt is int
-                  ? DateTime.fromMillisecondsSinceEpoch(updatedAt as int)
+                  ? DateTime.fromMillisecondsSinceEpoch(updatedAt)
                   : DateTime.now();
 
               if ((productType == 'CNC' || productType == 'NRML') &&
@@ -505,6 +512,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                     side: isShort ? OrderType.sell : OrderType.buy,
                     openedAt: date,
                     exchange: posExchange,
+                    marginUsed: (data['marginUsed'] as num?)?.toDouble() ?? 0.0,
                   ),
                 );
               }
@@ -517,6 +525,20 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
             // Non-fatal: holdings stream error
           },
         );
+  }
+
+  Future<void> _loadPlatformSettings() async {
+    final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+    try {
+      final results = await Future.wait([
+        api.getRmsSettings(),
+        api.getSupportConfig(),
+      ]);
+      _tradingStore.updateRmsSettings(PlatformRmsSettings.fromMap(results[0]));
+      _tradingStore.updateSupportConfig(SupportConfig.fromMap(results[1]));
+    } catch (_) {
+      // Non-fatal — defaults remain in effect
+    }
   }
 
   OrderStatus _mapOrderStatus(String status) {

@@ -7,6 +7,7 @@ import '../../app/app_scope.dart';
 import '../../models/trading_models.dart';
 import '../../theme.dart';
 import '../../state/security_scope.dart';
+import 'admin_change_password_screen.dart';
 import 'admin_stats_screen.dart';
 import 'admin_orders_screen.dart';
 import 'admin_users_screen.dart';
@@ -14,6 +15,7 @@ import 'admin_analytics_screen.dart';
 import 'leverage_control_screen.dart';
 import 'market_settings_screen.dart';
 import 'admin_ipo_orders_screen.dart';
+import 'platform_settings_screen.dart';
 
 // ── Breakpoint ────────────────────────────────────────────────────────────────
 const _kWebBreakpoint = 768.0;
@@ -21,12 +23,14 @@ const _kWebBreakpoint = 768.0;
 // ── Nav destinations ──────────────────────────────────────────────────────────
 const _kDestinations = [
   (LucideIcons.layoutDashboard, 'Dashboard'),
-  (LucideIcons.barChart2, 'Analytics'),
-  (LucideIcons.users, 'Users'),
-  (LucideIcons.activity, 'Orders'),
-  (LucideIcons.zap, 'Leverage'),
-  (LucideIcons.receipt, 'IPO'),
-  (LucideIcons.clock, 'Market'),
+  (LucideIcons.barChart2,       'Analytics'),
+  (LucideIcons.users,           'Users'),
+  (LucideIcons.activity,        'Orders'),
+  (LucideIcons.zap,             'Leverage'),
+  (LucideIcons.receipt,         'IPO'),
+  (LucideIcons.clock,           'Market'),
+  (LucideIcons.settings,        'Platform'),
+  (LucideIcons.keyRound,        'Password'),
 ];
 
 class AdminShell extends StatefulWidget {
@@ -46,6 +50,8 @@ class _AdminShellState extends State<AdminShell> {
     LeverageControlScreen(),
     AdminIpoOrdersScreen(),
     MarketSettingsScreen(),
+    PlatformSettingsScreen(),
+    AdminChangePasswordScreen(),
   ];
 
   @override

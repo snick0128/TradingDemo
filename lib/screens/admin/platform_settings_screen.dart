@@ -24,11 +24,14 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   // RMS fields
   final _intradayLevCtrl    = TextEditingController();
   final _shortSellLevCtrl   = TextEditingController();
+  final _nrmlBuyLevCtrl     = TextEditingController();
+  final _nrmlSellLevCtrl    = TextEditingController();
   final _rmsThresholdCtrl   = TextEditingController();
-  bool _enableShortSelling           = true;
-  bool _allowEquityIntradayShortSell = true;
-  bool _enableAutoSquareOff          = true;
-  bool _enableRealtimeRms            = true;
+  bool _enableShortSelling              = true;
+  bool _allowEquityIntradayShortSell    = true;
+  bool _blockOvernightEquityShortSell   = true;
+  bool _enableAutoSquareOff             = true;
+  bool _enableRealtimeRms               = true;
 
   // Support fields
   final _whatsappCtrl  = TextEditingController();
@@ -47,6 +50,8 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   void dispose() {
     _intradayLevCtrl.dispose();
     _shortSellLevCtrl.dispose();
+    _nrmlBuyLevCtrl.dispose();
+    _nrmlSellLevCtrl.dispose();
     _rmsThresholdCtrl.dispose();
     _whatsappCtrl.dispose();
     _phoneCtrl.dispose();
@@ -68,11 +73,14 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
 
       _intradayLevCtrl.text  = rms.intradayLeverage.toStringAsFixed(0);
       _shortSellLevCtrl.text = rms.shortSellLeverage.toStringAsFixed(0);
+      _nrmlBuyLevCtrl.text   = rms.nrmlBuyLeverage.toStringAsFixed(0);
+      _nrmlSellLevCtrl.text  = rms.nrmlSellLeverage.toStringAsFixed(0);
       _rmsThresholdCtrl.text = rms.rmsLossThresholdPercent.toStringAsFixed(0);
-      _enableShortSelling           = rms.enableShortSelling;
-      _allowEquityIntradayShortSell = rms.allowEquityIntradayShortSell;
-      _enableAutoSquareOff          = rms.enableAutoSquareOff;
-      _enableRealtimeRms            = rms.enableRealtimeRms;
+      _enableShortSelling              = rms.enableShortSelling;
+      _allowEquityIntradayShortSell    = rms.allowEquityIntradayShortSell;
+      _blockOvernightEquityShortSell   = rms.blockOvernightEquityShortSell;
+      _enableAutoSquareOff             = rms.enableAutoSquareOff;
+      _enableRealtimeRms               = rms.enableRealtimeRms;
 
       _whatsappCtrl.text = supp.whatsappNumber;
       _phoneCtrl.text    = supp.phoneNumber;
@@ -90,14 +98,17 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
     setState(() => _saving = true);
     try {
       await _api.updateRmsSettings({
-        'intradayLeverage':             double.tryParse(_intradayLevCtrl.text) ?? 5,
-        'shortSellLeverage':            double.tryParse(_shortSellLevCtrl.text) ?? 5,
-        'intradayShortSellLeverage':    double.tryParse(_shortSellLevCtrl.text) ?? 5,
-        'rmsLossThresholdPercent':      double.tryParse(_rmsThresholdCtrl.text) ?? 100,
-        'enableShortSelling':           _enableShortSelling,
-        'allowEquityIntradayShortSell': _allowEquityIntradayShortSell,
-        'enableAutoSquareOff':          _enableAutoSquareOff,
-        'enableRealtimeRms':            _enableRealtimeRms,
+        'intradayLeverage':              double.tryParse(_intradayLevCtrl.text)  ?? 5,
+        'shortSellLeverage':             double.tryParse(_shortSellLevCtrl.text) ?? 5,
+        'intradayShortSellLeverage':     double.tryParse(_shortSellLevCtrl.text) ?? 5,
+        'nrmlBuyLeverage':               double.tryParse(_nrmlBuyLevCtrl.text)   ?? 1,
+        'nrmlSellLeverage':              double.tryParse(_nrmlSellLevCtrl.text)   ?? 1,
+        'rmsLossThresholdPercent':       double.tryParse(_rmsThresholdCtrl.text) ?? 100,
+        'enableShortSelling':            _enableShortSelling,
+        'allowEquityIntradayShortSell':  _allowEquityIntradayShortSell,
+        'blockOvernightEquityShortSell': _blockOvernightEquityShortSell,
+        'enableAutoSquareOff':           _enableAutoSquareOff,
+        'enableRealtimeRms':             _enableRealtimeRms,
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -175,6 +186,15 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                     style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
                   ),
                   const SizedBox(height: 16),
+                  // ── Intraday leverage ──────────────────────────────────────
+                  const Text(
+                    'INTRADAY (MIS)',
+                    style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700,
+                      color: AppColors.textSecondary, letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -182,7 +202,7 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                           controller: _intradayLevCtrl,
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           decoration: const InputDecoration(
-                            labelText: 'Intraday BUY Leverage (x)',
+                            labelText: 'MIS BUY Leverage (x)',
                             hintText: '5',
                           ),
                         ),
@@ -193,8 +213,43 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                           controller: _shortSellLevCtrl,
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           decoration: const InputDecoration(
-                            labelText: 'Short Sell Leverage (x)',
+                            labelText: 'MIS SELL / Short Leverage (x)',
                             hintText: '5',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  // ── Overnight leverage ─────────────────────────────────────
+                  const Text(
+                    'OVERNIGHT (NRML)',
+                    style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700,
+                      color: AppColors.textSecondary, letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _nrmlBuyLevCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'NRML BUY Leverage (x)',
+                            hintText: '1 = full margin',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _nrmlSellLevCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'NRML SELL Leverage (x)',
+                            hintText: '1 = full margin',
                           ),
                         ),
                       ),
@@ -218,9 +273,19 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Allow Equity Intraday Short Sell', style: TextStyle(fontSize: 13)),
+                    title: const Text('Allow Equity Intraday Short Sell (MIS)', style: TextStyle(fontSize: 13)),
                     value: _allowEquityIntradayShortSell,
                     onChanged: (v) => setState(() => _allowEquityIntradayShortSell = v),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Block Overnight Equity Short Selling (NRML)', style: TextStyle(fontSize: 13)),
+                    subtitle: const Text(
+                      'Prevents users from holding equity short positions overnight. F&O short selling is unaffected.',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                    value: _blockOvernightEquityShortSell,
+                    onChanged: (v) => setState(() => _blockOvernightEquityShortSell = v),
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,

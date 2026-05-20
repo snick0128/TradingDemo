@@ -16,6 +16,8 @@ class _Category {
   final bool perLotMode;
   final double defaultMisValue;
   final double defaultNrmlValue;
+  /// If true, admin can toggle overnight short-sell blocking for this category
+  final bool allowOvernightShortSellBlock;
 
   const _Category({
     required this.key,
@@ -23,6 +25,7 @@ class _Category {
     this.perLotMode = false,
     required this.defaultMisValue,
     required this.defaultNrmlValue,
+    this.allowOvernightShortSellBlock = false,
   });
 }
 
@@ -33,7 +36,7 @@ const _kCategories = <_Category>[
   _Category(key: 'nse_option_buying',  displayName: 'NSE OPTION BUYING',  defaultMisValue: 10,    defaultNrmlValue: 2),
   _Category(key: 'nse_option_selling', displayName: 'NSE OPTION SELLING', perLotMode: true,  defaultMisValue: 7500,  defaultNrmlValue: 20000),
   _Category(key: 'nse_futures',        displayName: 'NSE FUTURES',        defaultMisValue: 500,   defaultNrmlValue: 50),
-  _Category(key: 'nse_spot',           displayName: 'NSE SPOT',           defaultMisValue: 20,    defaultNrmlValue: 10),
+  _Category(key: 'nse_spot',           displayName: 'NSE SPOT',           defaultMisValue: 20,    defaultNrmlValue: 10,  allowOvernightShortSellBlock: true),
 ];
 
 // ─── Preset options ───────────────────────────────────────────────────────────

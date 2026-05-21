@@ -372,6 +372,11 @@ class Position {
   final DateTime openedAt;
   final String exchange;
   final double marginUsed;
+  /// Angel One instrument token. Empty when not yet persisted in Firestore.
+  /// When non-empty, used as the primary position-index key instead of
+  /// exchange:symbol — guarantees uniqueness across expiries, strikes, and
+  /// option types for the same underlying.
+  final String token;
 
   Position({
     required this.symbol,
@@ -384,6 +389,7 @@ class Position {
     required this.openedAt,
     this.exchange = 'NSE',
     this.marginUsed = 0.0,
+    this.token = '',
   });
 
   double get investedValue => quantity * avgPrice;
@@ -405,6 +411,7 @@ class Position {
     DateTime? openedAt,
     String? exchange,
     double? marginUsed,
+    String? token,
   }) {
     return Position(
       symbol: symbol ?? this.symbol,
@@ -417,6 +424,7 @@ class Position {
       openedAt: openedAt ?? this.openedAt,
       exchange: exchange ?? this.exchange,
       marginUsed: marginUsed ?? this.marginUsed,
+      token: token ?? this.token,
     );
   }
 }

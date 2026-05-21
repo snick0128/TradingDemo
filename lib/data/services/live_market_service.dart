@@ -38,9 +38,24 @@ class LiveMarketService {
   Timer? _reconnectTimer;
   Timer? _moversDebounce;
   Timer? _tickFlushTimer;
+  Timer? _heartbeatTimer;
+  Timer? _feedHealthTimer;
+  DateTime? _lastPongTime;
+  static const _pingInterval       = Duration(seconds: 20);
+  static const _pingTimeout        = Duration(seconds: 45);
+  static const _feedHealthInterval = Duration(seconds: 60);
+  static const _feedHealthTimeout  = Duration(seconds: 120);
+  // Exponential backoff table: 1 → 2 → 4 → 8 → 16 → 30s
+  static const _reconnectDelays    = [1, 2, 4, 8, 16, 30];
   int _reconnectAttempt = 0;
-  final Map<String, int> _lastSeqBySymbol = {};
-  final Map<String, double> _lastEmittedLtpBySymbol = {};
+  final Map<String, int>    _lastSeqBySymbol          = {};
+  final Map<String, double> _lastEmittedLtpBySymbol   = {};
+  // Millisecond timestamp of the last tick per symbol — used to reject
+  // out-of-order ticks that arrive after a newer one (common on reconnects).
+  final Map<String, int>    _lastTickTsBySymbol        = {};
+  // Same map tracks feed-health: if a symbol that was recently active goes
+  // silent for >_feedHealthTimeout we force a re-subscribe to prod the server.
+  final Map<String, int>    _lastTickFeedTsBySymbol    = {};
   bool _started = false;
   bool _hasError = false;
   bool get hasError => _hasError;
@@ -77,6 +92,10 @@ class LiveMarketService {
     _moversDebounce = null;
     _tickFlushTimer?.cancel();
     _tickFlushTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _feedHealthTimer?.cancel();
+    _feedHealthTimer = null;
     _wsSub?.cancel();
     _wsSub = null;
     _channel?.sink.close();
@@ -109,7 +128,12 @@ class LiveMarketService {
       final data = await _api.getAllMarketData();
       for (final item in data) {
         final stock = _mapToStock(item);
-        if (stock != null) _latestMap[stock.symbol] = stock;
+        if (stock == null) continue;
+        // Only seed if no fresher WS tick has already arrived.
+        // `start()` calls this before `_connectWs()` so the map is normally
+        // empty here, but the guard prevents stale REST data from overwriting
+        // a live tick if `start()` is ever called again after the WS is up.
+        _latestMap.putIfAbsent(stock.symbol, () => stock);
       }
       _emitStocks();
       _emitMovers();
@@ -137,6 +161,8 @@ class LiveMarketService {
       );
       _sendSubscribe();
       _sendUserRegister(); // re-register after reconnect
+      _startHeartbeat();
+      _startFeedHealthWatchdog();
       _setError(false, '');
       _reconnectAttempt = 0;
     } catch (e) {
@@ -144,10 +170,58 @@ class LiveMarketService {
     }
   }
 
+  /// Sends a ping every [_pingInterval] and reconnects if no pong arrives
+  /// within [_pingTimeout]. Catches silent TCP freezes that don't emit a
+  /// close/error event (e.g. load-balancer idle-timeout, mobile NAT expiry).
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _lastPongTime = DateTime.now();
+    _heartbeatTimer = Timer.periodic(_pingInterval, (_) {
+      final channel = _channel;
+      if (channel == null || _disposed || !_started) return;
+      if (DateTime.now().difference(_lastPongTime!) > _pingTimeout) {
+        _onWsError('Market feed heartbeat timeout. Reconnecting…');
+        return;
+      }
+      channel.sink.add(jsonEncode({'type': 'ping'}));
+    });
+  }
+
+  /// Watches for symbols that were recently active (ticked within the last
+  /// _feedHealthTimeout window) but have gone silent. A TCP-level ping/pong
+  /// only proves the socket is alive; this proves market data is flowing.
+  /// When silence is detected, a re-subscribe is sent to prod the server into
+  /// re-fanning ticks for those symbols (handles silent broker-feed stalls).
+  void _startFeedHealthWatchdog() {
+    _feedHealthTimer?.cancel();
+    _feedHealthTimer = Timer.periodic(_feedHealthInterval, (_) {
+      if (_disposed || !_started || _channel == null) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final staleSymbols = <String>[];
+      for (final entry in _lastTickFeedTsBySymbol.entries) {
+        final age = now - entry.value;
+        // Only flag as stale if the symbol WAS active recently (within 5min)
+        // but has been silent for >_feedHealthTimeout. Ignores after-hours
+        // symbols that never tick during a session.
+        if (age > _feedHealthTimeout.inMilliseconds &&
+            age < const Duration(minutes: 5).inMilliseconds * 2) {
+          staleSymbols.add(entry.key);
+        }
+      }
+      if (staleSymbols.isNotEmpty && _subscriptions.isNotEmpty) {
+        _sendSubscribe(); // re-subscribe all — cheapest server-side refresh
+      }
+    });
+  }
+
   void _onWsMessage(dynamic message) {
     try {
       final m = jsonDecode(message as String) as Map<String, dynamic>;
       final type = m['type']?.toString();
+      if (type == 'pong') {
+        _lastPongTime = DateTime.now();
+        return;
+      }
       if (type == 'snapshot') {
         final rows =
             (m['data'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
@@ -162,13 +236,21 @@ class LiveMarketService {
       }
       if (type == 'tick') {
         final symbol = (m['symbol'] as String? ?? '').toUpperCase();
+        // Sequence-number dedup: reject retransmitted or reordered messages.
         final seq = (m['seq'] as num?)?.toInt() ?? 0;
         if (symbol.isNotEmpty && seq > 0) {
           final lastSeq = _lastSeqBySymbol[symbol] ?? 0;
-          if (seq <= lastSeq) {
-            return;
-          }
+          if (seq <= lastSeq) return;
           _lastSeqBySymbol[symbol] = seq;
+        }
+        // Timestamp dedup: second guard for out-of-order ticks on reconnect
+        // bursts where seq numbers reset (server restart) but stale ticks
+        // arrive from a buffered WS pipeline.
+        final ts = (m['ts'] as num?)?.toInt() ?? 0;
+        if (ts > 0 && symbol.isNotEmpty) {
+          final lastTs = _lastTickTsBySymbol[symbol] ?? 0;
+          if (ts < lastTs) return; // strictly older — drop
+          _lastTickTsBySymbol[symbol] = ts;
         }
         final row = m['data'] as Map<String, dynamic>?;
         if (row == null) return;
@@ -177,6 +259,9 @@ class LiveMarketService {
         final lastLtp = _lastEmittedLtpBySymbol[stock.symbol] ?? 0;
         if (lastLtp == stock.currentPrice) return;
         _lastEmittedLtpBySymbol[stock.symbol] = stock.currentPrice;
+        // Update feed-health tracking so the watchdog knows this symbol is live.
+        _lastTickFeedTsBySymbol[stock.symbol] =
+            ts > 0 ? ts : DateTime.now().millisecondsSinceEpoch;
         _latestMap[stock.symbol] = stock;
         _scheduleTick();
         _scheduleMovers();
@@ -202,9 +287,8 @@ class LiveMarketService {
     if (!_started || _disposed) return;
     _reconnectTimer?.cancel();
     _reconnectAttempt += 1;
-    final delaySeconds = _reconnectAttempt <= 2
-        ? 1
-        : (_reconnectAttempt <= 5 ? 2 : 5);
+    final delaySeconds =
+        _reconnectDelays[(_reconnectAttempt - 1).clamp(0, _reconnectDelays.length - 1)];
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), _connectWs);
   }
 

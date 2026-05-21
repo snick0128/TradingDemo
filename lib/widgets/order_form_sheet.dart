@@ -9,6 +9,7 @@ import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
 import '../data/services/market_settings_service.dart';
 import '../models/market_settings.dart';
+import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import 'app_dialog.dart';
@@ -88,12 +89,12 @@ const _nseFnoLotSizes = {
   'BAJAJFINSV': 500,
 };
 
-// Default leverage per exchange/product — mirrors backend DEFAULT_LEVERAGE
-// NRML (Overnight) can now have leverage > 1 if admin configures it.
-const _defaultLeverage = {
-  'NSE': {'MIS': 5, 'NRML': 1},
-  'MCX': {'MIS': 10, 'NRML': 1},
-  'BSE': {'MIS': 5, 'NRML': 1},
+// Absolute last-resort hardcoded leverage — only used when both category
+// lookup AND admin global settings are unavailable.
+const _fallbackLeverage = {
+  'NSE': {'MIS': {'buy': 5.0, 'sell': 5.0}, 'NRML': {'buy': 1.0, 'sell': 1.0}},
+  'MCX': {'MIS': {'buy': 10.0, 'sell': 10.0}, 'NRML': {'buy': 1.0, 'sell': 1.0}},
+  'BSE': {'MIS': {'buy': 5.0, 'sell': 5.0}, 'NRML': {'buy': 1.0, 'sell': 1.0}},
 };
 
 class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
@@ -109,8 +110,12 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   StreamSubscription<MarketSettings>? _settingsSub;
   MarketSettings _marketSettings = MarketSettings.defaults;
 
-  // Admin-configured leverage loaded from Firestore
+  // Admin-configured leverage — real-time stream from category_leverage collection
   Map<String, Map<String, dynamic>> _categoryLeverageMap = {};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _leverageSub;
+
+  // Global admin defaults — cached from TradingStore via didChangeDependencies
+  PlatformRmsSettings _rmsSettings = PlatformRmsSettings.defaults;
 
   @override
   void initState() {
@@ -125,107 +130,56 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     _settingsSub = _settingsService.stream.listen((s) {
       if (mounted) setState(() => _marketSettings = s);
     });
-    _loadCategoryLeverage();
+    _subscribeCategoryLeverage();
   }
 
-  Future<void> _loadCategoryLeverage() async {
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('category_leverage')
-          .get();
-      if (!mounted) return;
-      final map = <String, Map<String, dynamic>>{};
-      for (final doc in snap.docs) {
-        map[doc.id] = doc.data();
-      }
-      setState(() => _categoryLeverageMap = map);
-    } catch (_) {
-      // Silently fall back to hardcoded defaults
-    }
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Sync admin global leverage defaults from the trading store.
+    // These are the fallback when no category rule matches.
+    _rmsSettings = TradingScope.of(context).rmsSettings;
+  }
+
+  void _subscribeCategoryLeverage() {
+    _leverageSub?.cancel();
+    _leverageSub = FirebaseFirestore.instance
+        .collection('category_leverage')
+        .snapshots()
+        .listen((snap) {
+          if (!mounted) return;
+          final map = <String, Map<String, dynamic>>{};
+          for (final doc in snap.docs) {
+            map[doc.id] = Map<String, dynamic>.from(doc.data());
+          }
+          setState(() => _categoryLeverageMap = map);
+        }, onError: (_) {});
   }
 
   /// Resolves which category_leverage document applies to this stock.
-  /// Mirrors the backend _resolveCategoryKey logic.
+  /// Exactly mirrors the backend _resolveCategoryKey logic so lookups match.
   String _resolveCategoryKey() {
-    final ex = widget.stock.exchange.toUpperCase();
+    final ex  = widget.stock.exchange.toUpperCase();
     final sym = widget.stock.symbol.toUpperCase();
 
     if (ex == 'MCX') {
-      if (['GOLD', 'GOLDM', 'GOLDPETAL'].contains(sym)) return 'mcx_gold';
-      if (['SILVER', 'SILVERM'].contains(sym)) return 'mcx_silver';
-      if (['CRUDEOIL', 'NATURALGAS'].contains(sym)) return 'mcx_energy';
-      if (['COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL'].contains(sym))
-        return 'mcx_base_metals';
-      if (['COTTON', 'KAPAS'].contains(sym)) return 'mcx_agri';
-      return 'mcx_energy';
+      if (sym.endsWith('FUT')) { return 'mcx_futures'; }
+      if (sym.endsWith('CE') || sym.endsWith('PE')) {
+        return _isBuy ? 'mcx_option_buying' : 'mcx_option_selling';
+      }
+      return 'mcx_futures';
     }
 
-    const nifty50 = {
-      'RELIANCE',
-      'TCS',
-      'INFY',
-      'HDFCBANK',
-      'SBIN',
-      'BHARTIARTL',
-      'ICICIBANK',
-      'KOTAKBANK',
-      'LT',
-      'ITC',
-      'AXISBANK',
-      'ASIANPAINT',
-      'MARUTI',
-      'TITAN',
-      'NESTLEIND',
-      'ULTRACEMCO',
-      'WIPRO',
-      'ONGC',
-      'HCLTECH',
-      'POWERGRID',
-      'TECHM',
-      'NTPC',
-      'SUNPHARMA',
-      'TATAMOTORS',
-      'TATASTEEL',
-      'JSWSTEEL',
-      'M&M',
-      'ADANIENT',
-      'HDFC',
-      'BAJAJFINSV',
-    };
-    if (nifty50.contains(sym)) return 'nifty50';
+    if (ex == 'NFO' || ex == 'BFO') {
+      if (sym.endsWith('FUT')) { return 'nse_futures'; }
+      if (sym.endsWith('CE') || sym.endsWith('PE')) {
+        return _isBuy ? 'nse_option_buying' : 'nse_option_selling';
+      }
+      return 'nse_futures';
+    }
 
-    const bankNifty = {
-      'HDFCBANK',
-      'ICICIBANK',
-      'SBIN',
-      'AXISBANK',
-      'KOTAKBANK',
-      'BANKBARODA',
-      'PNB',
-      'INDUSINDBK',
-      'IDFCFIRSTB',
-      'FEDERALBNK',
-      'BANKINDIA',
-    };
-    if (bankNifty.contains(sym)) return 'banknifty';
-
-    const midcap = {
-      'BAJFINANCE',
-      'WIPRO',
-      'HINDUNILVR',
-      'MARICO',
-      'DABUR',
-      'MPHASIS',
-      'PERSISTENT',
-      'COFORGE',
-      'LTIM',
-      'INDUSTOWER',
-      'ALKEM',
-      'VOLTAS',
-    };
-    if (midcap.contains(sym)) return 'nifty_midcap';
-
-    return 'nse_equity';
+    // NSE / BSE equity spot
+    return 'nse_spot';
   }
 
   @override
@@ -233,6 +187,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     _priceController.dispose();
     _qtyController.dispose();
     _settingsSub?.cancel();
+    _leverageSub?.cancel();
     super.dispose();
   }
 
@@ -269,13 +224,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       widget.stock.instrumentType.isOption;
 
   /// Effective leverage — mirrors backend resolveLeverage with buy/sell split.
-  /// Reads admin-configured values from Firestore; falls back to hardcoded defaults.
+  /// Priority: (1) category_leverage Firestore doc → (2) admin global defaults
+  /// from trading store → (3) absolute hardcoded last-resort.
   double get _leverage => _getLeverageForProduct(_product);
 
   double _getLeverageForProduct(ProductType product) {
     final categoryKey = _resolveCategoryKey();
-    final catData =
-        _categoryLeverageMap[categoryKey] ?? _categoryLeverageMap['nse_equity'];
+    final catData = _categoryLeverageMap[categoryKey]
+                 ?? _categoryLeverageMap['nse_spot'];
 
     if (catData != null) {
       final pStr = product == ProductType.mis ? 'mis' : 'nrml';
@@ -287,13 +243,25 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       if (lev != null && lev > 0) return lev;
     }
 
-    // Fallback to hardcoded defaults
-    final ex = widget.stock.exchange.toUpperCase().isEmpty
-        ? 'NSE'
-        : widget.stock.exchange.toUpperCase();
+    // Fallback to admin-configured global defaults from trading store.
+    // BUY → intradayLeverage / nrmlBuyLeverage
+    // SELL (short) → shortSellLeverage / nrmlSellLeverage
+    if (product == ProductType.mis || product == ProductType.mtf) {
+      return _isBuy
+          ? _rmsSettings.intradayLeverage
+          : _rmsSettings.shortSellLeverage;
+    }
+    if (product == ProductType.nrml) {
+      return _isBuy
+          ? _rmsSettings.nrmlBuyLeverage
+          : _rmsSettings.nrmlSellLeverage;
+    }
+
+    // Absolute last resort
+    final ex   = widget.stock.exchange.toUpperCase().isEmpty ? 'NSE' : widget.stock.exchange.toUpperCase();
     final pStr = product == ProductType.mis ? 'MIS' : 'NRML';
-    return (_defaultLeverage[ex]?[pStr] ?? _defaultLeverage['NSE']!['MIS'])!
-        .toDouble();
+    final side = _isBuy ? 'buy' : 'sell';
+    return (_fallbackLeverage[ex]?[pStr]?[side] ?? 5.0);
   }
 
   /// Formatted leverage string — avoids trailing ".0"
@@ -321,7 +289,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   double get _estimatedCharges {
     final categoryKey = _resolveCategoryKey();
     final catData =
-        _categoryLeverageMap[categoryKey] ?? _categoryLeverageMap['nse_equity'];
+        _categoryLeverageMap[categoryKey] ?? _categoryLeverageMap['nse_spot'];
     if (catData == null) return 0.0;
 
     final pStr = _product == ProductType.mis ? 'mis' : 'nrml';
@@ -1547,6 +1515,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             // not in the live WebSocket feed (options, futures).
             lockedLtp: widget.stock.currentPrice > 0
                 ? widget.stock.currentPrice
+                : null,
+            // Token is persisted in Firestore holdings so future position
+            // lookups can use token-based indexing (globally unique per contract).
+            symbolToken: widget.stock.token.isNotEmpty
+                ? widget.stock.token
                 : null,
             clientRequestId: requestId,
           );

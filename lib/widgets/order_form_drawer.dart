@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Order, Transaction;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
@@ -42,8 +43,9 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
   StreamSubscription<MarketSettings>? _settingsSub;
   MarketSettings _marketSettings = MarketSettings.defaults;
 
-  // Admin-configured leverage/charges loaded from Firestore
+  // Admin-configured leverage/charges — real-time stream from category_leverage
   Map<String, Map<String, dynamic>> _categoryLeverageMap = {};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _leverageSub;
 
   @override
   void initState() {
@@ -53,26 +55,29 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
     _settingsSub = _settingsService.stream.listen((s) {
       if (mounted) setState(() => _marketSettings = s);
     });
-    _loadCategoryLeverage();
+    _subscribeCategoryLeverage();
   }
 
-  Future<void> _loadCategoryLeverage() async {
-    try {
-      final db = FirebaseFirestore.instance;
-      final snap = await db.collection('category_leverage').get();
-      if (!mounted) return;
-      final map = <String, Map<String, dynamic>>{};
-      for (final doc in snap.docs) {
-        map[doc.id] = doc.data();
-      }
-      setState(() => _categoryLeverageMap = map);
-    } catch (_) {}
+  void _subscribeCategoryLeverage() {
+    _leverageSub?.cancel();
+    _leverageSub = FirebaseFirestore.instance
+        .collection('category_leverage')
+        .snapshots()
+        .listen((snap) {
+          if (!mounted) return;
+          final map = <String, Map<String, dynamic>>{};
+          for (final doc in snap.docs) {
+            map[doc.id] = Map<String, dynamic>.from(doc.data());
+          }
+          setState(() => _categoryLeverageMap = map);
+        }, onError: (_) {});
   }
 
   @override
   void dispose() {
     _priceController.dispose();
     _settingsSub?.cancel();
+    _leverageSub?.cancel();
     super.dispose();
   }
 
@@ -91,51 +96,34 @@ class _OrderFormDrawerState extends State<OrderFormDrawer> {
       : widget.stock.currentPrice;
 
   /// Resolves which category_leverage document applies to this stock.
+  /// Exactly mirrors the backend _resolveCategoryKey logic.
   String _resolveCategoryKey() {
-    final ex = widget.stock.exchange.toUpperCase();
+    final ex  = widget.stock.exchange.toUpperCase();
     final sym = widget.stock.symbol.toUpperCase();
 
     if (ex == 'MCX') {
-      if (['GOLD', 'GOLDM', 'GOLDPETAL'].contains(sym)) return 'mcx_gold';
-      if (['SILVER', 'SILVERM'].contains(sym)) return 'mcx_silver';
-      if (['CRUDEOIL', 'NATURALGAS'].contains(sym)) return 'mcx_energy';
-      if (['COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL'].contains(sym))
-        return 'mcx_base_metals';
-      if (['COTTON', 'KAPAS'].contains(sym)) return 'mcx_agri';
-      return 'mcx_energy';
+      if (sym.endsWith('FUT')) { return 'mcx_futures'; }
+      if (sym.endsWith('CE') || sym.endsWith('PE')) {
+        return _isBuy ? 'mcx_option_buying' : 'mcx_option_selling';
+      }
+      return 'mcx_futures';
     }
 
-    const nifty50 = {
-      'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'SBIN', 'BHARTIARTL',
-      'ICICIBANK', 'KOTAKBANK', 'LT', 'ITC', 'AXISBANK', 'ASIANPAINT',
-      'MARUTI', 'TITAN', 'NESTLEIND', 'ULTRACEMCO', 'WIPRO', 'ONGC',
-      'HCLTECH', 'POWERGRID', 'TECHM', 'NTPC', 'SUNPHARMA', 'TATAMOTORS',
-      'TATASTEEL', 'JSWSTEEL', 'M&M', 'ADANIENT', 'HDFC', 'BAJAJFINSV',
-      'HDFC'
-    };
-    if (nifty50.contains(sym)) return 'nifty50';
+    if (ex == 'NFO' || ex == 'BFO') {
+      if (sym.endsWith('FUT')) { return 'nse_futures'; }
+      if (sym.endsWith('CE') || sym.endsWith('PE')) {
+        return _isBuy ? 'nse_option_buying' : 'nse_option_selling';
+      }
+      return 'nse_futures';
+    }
 
-    const bankNifty = {
-      'HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK',
-      'BANKBARODA', 'PNB', 'INDUSINDBK', 'IDFCFIRSTB', 'FEDERALBNK',
-      'BANKINDIA',
-    };
-    if (bankNifty.contains(sym)) return 'banknifty';
-
-    const midcap = {
-      'BAJFINANCE', 'WIPRO', 'HINDUNILVR', 'MARICO', 'DABUR',
-      'MPHASIS', 'PERSISTENT', 'COFORGE', 'LTIM', 'INDUSTOWER', 'ALKEM',
-      'VOLTAS',
-    };
-    if (midcap.contains(sym)) return 'nifty_midcap';
-
-    return 'nse_equity';
+    return 'nse_spot';
   }
 
   double get _estimatedCharges {
     final categoryKey = _resolveCategoryKey();
     final catData = _categoryLeverageMap[categoryKey] ??
-        _categoryLeverageMap['nse_equity'];
+        _categoryLeverageMap['nse_spot'];
     if (catData == null) return 0.0;
 
     final pStr = _product == ProductType.mis ? 'mis' : 'nrml';

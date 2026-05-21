@@ -67,6 +67,14 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _positionsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _holdingsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _rmsSub;
+
+  // Separate position lists from each Firestore source so they are merged
+  // rather than one stream wiping out the other's results.
+  // _positionsSub reads portfolios/{uid}/positions (TradingService MIS path).
+  // _holdingsSub reads portfolios/{uid}/holdings (backend orderEngine path).
+  List<Position> _positionsFromPositionsColl = [];
+  List<Position> _positionsFromHoldings = [];
 
   ThemeMode _themeMode = ThemeMode.light;
 
@@ -178,6 +186,27 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     );
   }
 
+  // Returns the best available unique key for a position.
+  // Token (globally unique in Angel One's instrument DB) is used when
+  // available; exchange:symbol is the fallback for positions loaded before
+  // symbolToken was persisted to Firestore.
+  static String _positionKey(Position p) =>
+      p.token.isNotEmpty ? p.token : '${p.exchange}:${p.symbol}';
+
+  // Merge positions from both Firestore sources and push to the store.
+  // Holdings-stream positions take precedence; positions-stream positions
+  // only fill in keys not already present from the holdings stream.
+  void _mergeAndReplacePositions() {
+    final holdingKeys = _positionsFromHoldings.map(_positionKey).toSet();
+    final merged = <Position>[
+      ..._positionsFromHoldings,
+      ..._positionsFromPositionsColl.where(
+        (p) => !holdingKeys.contains(_positionKey(p)),
+      ),
+    ];
+    _tradingStore.replacePositions(merged);
+  }
+
   void _toggleTheme() {
     setState(() {
       _themeMode = _themeMode == ThemeMode.light
@@ -194,6 +223,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     _positionsSub?.cancel();
     _holdingsSub?.cancel();
     _userSub?.cancel();
+    _rmsSub?.cancel();
     _adminStore.dispose();
     _tradingStore.dispose();
     _securityStore.dispose();
@@ -214,6 +244,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       _positionsSub = null;
       _holdingsSub = null;
       _userSub = null;
+      _positionsFromPositionsColl = [];
+      _positionsFromHoldings = [];
       _tradingStore.replaceOrders(const <Order>[]);
       _tradingStore.replacePositions(const <Position>[]);
       return;
@@ -414,9 +446,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                       (qty >= 0 ? 'BUY' : 'SELL');
                   final avgPrice = ((data['avg_price'] as num?) ?? 0)
                       .toDouble();
-                  final currentPrice = _tradingStore
+                  final stockLtp = _tradingStore
                       .stockBySymbol(symbol)
                       .currentPrice;
+                  final currentPrice = stockLtp > 0 ? stockLtp : avgPrice;
                   final updatedAt = data['updatedAt'];
                   final openedAt = updatedAt is Timestamp
                       ? updatedAt.toDate()
@@ -425,6 +458,13 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                   final rawExchange =
                       (data['exchange'] as String?)?.trim().toUpperCase() ??
                       'NSE';
+                  // Prefer symbolToken stored in Firestore; fall back to token
+                  // cached in the live-price universe (populated after WS tick
+                  // or search-result registration).
+                  final token =
+                      (data['symbolToken'] as String?)?.trim() ??
+                      _tradingStore.stockBySymbolOrNull(symbol)?.token ??
+                      '';
                   return Position(
                     symbol: symbol,
                     name: symbolName,
@@ -435,12 +475,14 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                     side: rawSide == 'SELL' ? OrderType.sell : OrderType.buy,
                     openedAt: openedAt,
                     exchange: rawExchange,
+                    token: token,
                   );
                 })
                 .where((p) => p.quantity > 0)
                 .toList();
 
-            _tradingStore.replacePositions(mapped);
+            _positionsFromPositionsColl = mapped;
+            _mergeAndReplacePositions();
           },
           onError: (e) {
             // Non-fatal: positions stream error
@@ -471,9 +513,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final rawSide =
                   ((data['side'] as String?) ?? 'BUY').trim().toUpperCase();
               final isShort = rawSide == 'SELL';
-              final currentPrice = _tradingStore
+              final stockLtp = _tradingStore
                   .stockBySymbol(symbol)
                   .currentPrice;
+              final currentPrice = stockLtp > 0 ? stockLtp : avgPrice;
               final updatedAt = data['updatedAt'];
               final date = updatedAt is Timestamp
                   ? updatedAt.toDate()
@@ -499,6 +542,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 final posExchange =
                     ((data['exchange'] as String?)?.trim().toUpperCase()) ??
                     'NSE';
+                final posToken =
+                    (data['symbolToken'] as String?)?.trim() ??
+                    _tradingStore.stockBySymbolOrNull(symbol)?.token ??
+                    '';
                 newPositions.add(
                   Position(
                     symbol: symbol,
@@ -513,13 +560,15 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                     openedAt: date,
                     exchange: posExchange,
                     marginUsed: (data['marginUsed'] as num?)?.toDouble() ?? 0.0,
+                    token: posToken,
                   ),
                 );
               }
             }
 
             _tradingStore.replaceHoldings(newHoldings);
-            _tradingStore.replacePositions(newPositions);
+            _positionsFromHoldings = newPositions;
+            _mergeAndReplacePositions();
           },
           onError: (e) {
             // Non-fatal: holdings stream error
@@ -539,6 +588,20 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     } catch (_) {
       // Non-fatal — defaults remain in effect
     }
+
+    // Subscribe to real-time updates from admin_config/rms_settings so that
+    // leverage changes made by the admin propagate to all open sessions
+    // without requiring a page reload.
+    _rmsSub?.cancel();
+    _rmsSub = FirebaseFirestore.instance
+        .collection('admin_config')
+        .doc('rms_settings')
+        .snapshots()
+        .listen((doc) {
+          if (!doc.exists) return;
+          final updated = PlatformRmsSettings.fromMap(doc.data()!);
+          _tradingStore.updateRmsSettings(updated);
+        }, onError: (_) {});
   }
 
   OrderStatus _mapOrderStatus(String status) {

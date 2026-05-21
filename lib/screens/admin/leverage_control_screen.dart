@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import 'package:box_trading_web/config/backend_config.dart';
+import 'package:box_trading_web/data/services/backend_api_service.dart';
+import 'package:box_trading_web/models/platform_settings.dart';
 import 'package:box_trading_web/theme.dart';
 import 'package:box_trading_web/widgets/app_dialog.dart';
 import 'package:box_trading_web/screens/admin/admin_ui.dart';
@@ -64,61 +67,72 @@ String _fmtValue(double v, bool perLotMode) =>
 
 class _MarginData {
   double misBuyValue;   // MIS leverage for BUY orders
-  double misSellValue;  // MIS leverage for SELL (short) orders
-  double nrmlValue;
+  double misSellValue;  // MIS leverage for intraday SELL (short)
+  double nrmlBuyValue;  // NRML leverage for overnight BUY
+  double nrmlSellValue; // NRML leverage for overnight SELL (short)
+  bool? blockOvernightShortSell; // null = not applicable for this category
 
   _MarginData({
     required this.misBuyValue,
     required this.misSellValue,
-    required this.nrmlValue,
+    required this.nrmlBuyValue,
+    required this.nrmlSellValue,
+    this.blockOvernightShortSell,
   });
 
   _MarginData copy() => _MarginData(
-        misBuyValue: misBuyValue,
+        misBuyValue:  misBuyValue,
         misSellValue: misSellValue,
-        nrmlValue: nrmlValue,
+        nrmlBuyValue: nrmlBuyValue,
+        nrmlSellValue: nrmlSellValue,
+        blockOvernightShortSell: blockOvernightShortSell,
       );
 
   bool equals(_MarginData o) =>
-      misBuyValue == o.misBuyValue &&
+      misBuyValue  == o.misBuyValue  &&
       misSellValue == o.misSellValue &&
-      nrmlValue == o.nrmlValue;
+      nrmlBuyValue == o.nrmlBuyValue &&
+      nrmlSellValue == o.nrmlSellValue &&
+      blockOvernightShortSell == o.blockOvernightShortSell;
 
   Map<String, dynamic> toFirestore(String key, String name, bool perLotMode) {
-    final misBuyMar  = perLotMode || misBuyValue  <= 0 ? 0.0 : double.parse((100 / misBuyValue).toStringAsFixed(4));
-    final misSellMar = perLotMode || misSellValue <= 0 ? 0.0 : double.parse((100 / misSellValue).toStringAsFixed(4));
-    final nrmlMar    = perLotMode || nrmlValue    <= 0 ? 0.0 : double.parse((100 / nrmlValue).toStringAsFixed(4));
+    final misBuyMar   = perLotMode || misBuyValue   <= 0 ? 0.0 : double.parse((100 / misBuyValue).toStringAsFixed(4));
+    final misSellMar  = perLotMode || misSellValue  <= 0 ? 0.0 : double.parse((100 / misSellValue).toStringAsFixed(4));
+    final nrmlBuyMar  = perLotMode || nrmlBuyValue  <= 0 ? 0.0 : double.parse((100 / nrmlBuyValue).toStringAsFixed(4));
+    final nrmlSellMar = perLotMode || nrmlSellValue <= 0 ? 0.0 : double.parse((100 / nrmlSellValue).toStringAsFixed(4));
     return {
       'categoryKey':  key,
       'categoryName': name,
-      'mis_value':    misBuyValue,  // legacy: treat buy as default
-      'nrml_value':   nrmlValue,
+      'mis_value':    misBuyValue,  // legacy alias
+      'nrml_value':   nrmlBuyValue, // legacy alias
       'per_lot_mode': perLotMode,
       if (perLotMode) ...{
-        'mis_per_lot':  misBuyValue,
-        'nrml_per_lot': nrmlValue,
+        'mis_per_lot':        misBuyValue,
+        'nrml_per_lot':       nrmlBuyValue,
         'mis_leverage':       0.0,
         'mis_buy_leverage':   0.0,
         'mis_sell_leverage':  0.0,
         'mis_margin':         0.0,
         'nrml_leverage':      0.0,
-        'nrml_buy_leverage':  nrmlValue,
-        'nrml_sell_leverage': nrmlValue,
+        'nrml_buy_leverage':  nrmlBuyValue,
+        'nrml_sell_leverage': nrmlSellValue,
         'nrml_margin':        0.0,
+        'mis_per_lot_sell':   misSellValue,
+        'nrml_per_lot_sell':  nrmlSellValue,
       } else ...{
         // Separate buy / sell leverage — read by backend resolveLeverage()
         'mis_buy_leverage':   misBuyValue,
         'mis_buy_margin':     misBuyMar,
         'mis_sell_leverage':  misSellValue,
         'mis_sell_margin':    misSellMar,
-        // Shared NRML (no short-selling on overnight/delivery)
-        'nrml_buy_leverage':  nrmlValue,
-        'nrml_buy_margin':    nrmlMar,
-        'nrml_sell_leverage': nrmlValue,
-        'nrml_sell_margin':   nrmlMar,
-        'nrml_leverage':      nrmlValue,
-        'nrml_margin':        nrmlMar,
-        // Legacy aliases for backward compatibility
+        // Separate NRML BUY / NRML SELL leverage
+        'nrml_buy_leverage':  nrmlBuyValue,
+        'nrml_buy_margin':    nrmlBuyMar,
+        'nrml_sell_leverage': nrmlSellValue,
+        'nrml_sell_margin':   nrmlSellMar,
+        // Legacy aliases
+        'nrml_leverage':      nrmlBuyValue,
+        'nrml_margin':        nrmlBuyMar,
         'mis_leverage':       misBuyValue,
         'mis_margin':         misBuyMar,
         'leverage':           misBuyValue,
@@ -126,6 +140,8 @@ class _MarginData {
         'mis_per_lot':        0.0,
         'nrml_per_lot':       0.0,
       },
+      if (blockOvernightShortSell != null)
+        'block_overnight_short_sell': blockOvernightShortSell,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }
@@ -146,10 +162,32 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
   bool _loading = true;
   bool _saving  = false;
 
+  // ── Global risk defaults (backend API) ────────────────────────────────────
+  final _api              = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+  final _intradayLevCtrl  = TextEditingController();
+  final _shortSellLevCtrl = TextEditingController();
+  final _nrmlBuyLevCtrl   = TextEditingController();
+  final _nrmlSellLevCtrl  = TextEditingController();
+  bool _enableShortSelling            = true;
+  bool _allowEquityIntradayShortSell  = true;
+  bool _blockOvernightEquityShortSell = true;
+  bool _globalLoading = true;
+  bool _globalSaving  = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadGlobal();
+  }
+
+  @override
+  void dispose() {
+    _intradayLevCtrl.dispose();
+    _shortSellLevCtrl.dispose();
+    _nrmlBuyLevCtrl.dispose();
+    _nrmlSellLevCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -166,16 +204,24 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
         if (cat == null) continue;
 
         if (cat.perLotMode) {
-          final mis  = (d['mis_per_lot']  as num?)?.toDouble() ??
-                       (d['mis_value']    as num?)?.toDouble() ??
-                       cat.defaultMisValue;
-          final nrml = (d['nrml_per_lot'] as num?)?.toDouble() ??
-                       (d['nrml_value']   as num?)?.toDouble() ??
-                       cat.defaultNrmlValue;
+          final misBuy  = (d['mis_per_lot']      as num?)?.toDouble() ??
+                          (d['mis_value']         as num?)?.toDouble() ??
+                          cat.defaultMisValue;
+          final misSell = (d['mis_per_lot_sell']  as num?)?.toDouble() ?? misBuy;
+          final nrmlBuy = (d['nrml_per_lot']      as num?)?.toDouble() ??
+                          (d['nrml_value']         as num?)?.toDouble() ??
+                          cat.defaultNrmlValue;
+          final nrmlSell = (d['nrml_per_lot_sell'] as num?)?.toDouble() ??
+                           (d['nrml_sell_leverage'] as num?)?.toDouble() ??
+                           nrmlBuy;
           loaded[doc.id] = _MarginData(
-            misBuyValue: mis,
-            misSellValue: mis,
-            nrmlValue: nrml,
+            misBuyValue:  misBuy,
+            misSellValue: misSell,
+            nrmlBuyValue: nrmlBuy,
+            nrmlSellValue: nrmlSell,
+            blockOvernightShortSell: cat.allowOvernightShortSellBlock
+                ? (d['block_overnight_short_sell'] as bool? ?? true)
+                : null,
           );
         } else {
           final misBuy  = (d['mis_buy_leverage']  as num?)?.toDouble() ??
@@ -183,16 +229,20 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                           (d['leverage']           as num?)?.toDouble() ??
                           (d['mis_value']          as num?)?.toDouble() ??
                           cat.defaultMisValue;
-          final misSell = (d['mis_sell_leverage'] as num?)?.toDouble() ??
-                          misBuy;
-          final nrml = (d['nrml_leverage']     as num?)?.toDouble() ??
-                       (d['nrml_buy_leverage'] as num?)?.toDouble() ??
-                       (d['nrml_value']        as num?)?.toDouble() ??
-                       cat.defaultNrmlValue;
+          final misSell = (d['mis_sell_leverage'] as num?)?.toDouble() ?? misBuy;
+          final nrmlBuy = (d['nrml_buy_leverage'] as num?)?.toDouble() ??
+                          (d['nrml_leverage']      as num?)?.toDouble() ??
+                          (d['nrml_value']         as num?)?.toDouble() ??
+                          cat.defaultNrmlValue;
+          final nrmlSell = (d['nrml_sell_leverage'] as num?)?.toDouble() ?? nrmlBuy;
           loaded[doc.id] = _MarginData(
-            misBuyValue: misBuy,
+            misBuyValue:  misBuy,
             misSellValue: misSell,
-            nrmlValue: nrml,
+            nrmlBuyValue: nrmlBuy,
+            nrmlSellValue: nrmlSell,
+            blockOvernightShortSell: cat.allowOvernightShortSellBlock
+                ? (d['block_overnight_short_sell'] as bool? ?? true)
+                : null,
           );
         }
       }
@@ -202,7 +252,9 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
         loaded.putIfAbsent(cat.key, () => _MarginData(
           misBuyValue:  cat.defaultMisValue,
           misSellValue: cat.defaultMisValue,
-          nrmlValue:    cat.defaultNrmlValue,
+          nrmlBuyValue: cat.defaultNrmlValue,
+          nrmlSellValue: cat.defaultNrmlValue,
+          blockOvernightShortSell: cat.allowOvernightShortSellBlock ? true : null,
         ));
       }
 
@@ -257,7 +309,55 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
     });
   }
 
-  // field: 'misBuy' | 'misSell' | 'nrml'
+  Future<void> _loadGlobal() async {
+    setState(() => _globalLoading = true);
+    try {
+      final data = await _api.getRmsSettings();
+      final rms  = PlatformRmsSettings.fromMap(data);
+      _intradayLevCtrl.text  = rms.intradayLeverage.toStringAsFixed(0);
+      _shortSellLevCtrl.text = rms.shortSellLeverage.toStringAsFixed(0);
+      _nrmlBuyLevCtrl.text   = rms.nrmlBuyLeverage.toStringAsFixed(0);
+      _nrmlSellLevCtrl.text  = rms.nrmlSellLeverage.toStringAsFixed(0);
+      setState(() {
+        _enableShortSelling            = rms.enableShortSelling;
+        _allowEquityIntradayShortSell  = rms.allowEquityIntradayShortSell;
+        _blockOvernightEquityShortSell = rms.blockOvernightEquityShortSell;
+      });
+    } catch (e) {
+      debugPrint('[LeverageScreen] Global load error: $e');
+      _intradayLevCtrl.text  = '5';
+      _shortSellLevCtrl.text = '5';
+      _nrmlBuyLevCtrl.text   = '1';
+      _nrmlSellLevCtrl.text  = '1';
+    } finally {
+      if (mounted) setState(() => _globalLoading = false);
+    }
+  }
+
+  Future<void> _saveGlobal() async {
+    if (_globalSaving) return;
+    setState(() => _globalSaving = true);
+    try {
+      final shortSell = double.tryParse(_shortSellLevCtrl.text) ?? 5;
+      await _api.updateRmsSettings({
+        'intradayLeverage':              double.tryParse(_intradayLevCtrl.text) ?? 5,
+        'shortSellLeverage':             shortSell,
+        'intradayShortSellLeverage':     shortSell,
+        'nrmlBuyLeverage':               double.tryParse(_nrmlBuyLevCtrl.text)  ?? 1,
+        'nrmlSellLeverage':              double.tryParse(_nrmlSellLevCtrl.text)  ?? 1,
+        'enableShortSelling':            _enableShortSelling,
+        'allowEquityIntradayShortSell':  _allowEquityIntradayShortSell,
+        'blockOvernightEquityShortSell': _blockOvernightEquityShortSell,
+      });
+      if (mounted) AppToast.success(context, 'Global risk defaults saved.');
+    } catch (e) {
+      if (mounted) AppToast.error(context, 'Save failed. Please try again.');
+    } finally {
+      if (mounted) setState(() => _globalSaving = false);
+    }
+  }
+
+  // field: 'misBuy' | 'misSell' | 'nrmlBuy' | 'nrmlSell'
   void _openEdit(BuildContext ctx, _Category cat, String field) {
     final data = _draft[cat.key]!;
     final double current;
@@ -265,11 +365,15 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
     switch (field) {
       case 'misSell':
         current = data.misSellValue;
-        label   = 'Intraday SELL (Short)';
+        label   = 'Short Sell Intraday (MIS)';
         break;
-      case 'nrml':
-        current = data.nrmlValue;
-        label   = 'Holding (NRML)';
+      case 'nrmlBuy':
+        current = data.nrmlBuyValue;
+        label   = 'Overnight BUY (NRML)';
+        break;
+      case 'nrmlSell':
+        current = data.nrmlSellValue;
+        label   = 'Short Sell Overnight (NRML)';
         break;
       case 'misBuy':
       default:
@@ -299,8 +403,11 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
               case 'misSell':
                 copy.misSellValue = val;
                 break;
-              case 'nrml':
-                copy.nrmlValue = val;
+              case 'nrmlBuy':
+                copy.nrmlBuyValue = val;
+                break;
+              case 'nrmlSell':
+                copy.nrmlSellValue = val;
                 break;
               default:
                 copy.misBuyValue = val;
@@ -323,10 +430,10 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
               padding: EdgeInsets.zero,
               children: [
                 AdminHeader(
-                  title: 'Intraday & Holding Margin',
-                  subtitle: 'Set leverage / margin per trading category. '
-                      'Tap any cell to pick a preset or enter a custom value. '
-                      'Changes apply to all new orders immediately.',
+                  title: 'Leverage & Margin Control',
+                  subtitle: 'Set Buy / Short Sell leverage per category. '
+                      'SHORT SELL column applies to new short positions only — exit sells never require margin. '
+                      'Tap any cell to change. Changes apply to all new orders immediately.',
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -361,13 +468,41 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                     height: 200,
                     child: Center(child: CircularProgressIndicator()),
                   )
-                else
+                else ...[
                   _MarginTable(
                     categories: _kCategories,
                     draft: _draft,
                     saved: _saved,
                     onEdit: (cat, field) => _openEdit(context, cat, field),
                   ),
+                  const SizedBox(height: 24),
+                  _GlobalRiskSection(
+                    loading:       _globalLoading,
+                    saving:        _globalSaving,
+                    intradayCtrl:  _intradayLevCtrl,
+                    shortSellCtrl: _shortSellLevCtrl,
+                    nrmlBuyCtrl:   _nrmlBuyLevCtrl,
+                    nrmlSellCtrl:  _nrmlSellLevCtrl,
+                    enableShortSelling:            _enableShortSelling,
+                    allowEquityIntradayShortSell:  _allowEquityIntradayShortSell,
+                    blockOvernightEquityShortSell: _blockOvernightEquityShortSell,
+                    onToggleShortSelling: (v) => setState(() => _enableShortSelling = v),
+                    onToggleEquityMis:    (v) => setState(() => _allowEquityIntradayShortSell = v),
+                    onToggleEquityNrml:   (v) => setState(() => _blockOvernightEquityShortSell = v),
+                    onSave: _saveGlobal,
+                  ),
+                  const SizedBox(height: 24),
+                  _OvernightRestrictionsCard(
+                    draft: _draft,
+                    onToggle: (catKey, val) {
+                      setState(() {
+                        final copy = _draft[catKey]!.copy();
+                        copy.blockOvernightShortSell = val;
+                        _draft[catKey] = copy;
+                      });
+                    },
+                  ),
+                ],
 
                 const SizedBox(height: 24),
               ],
@@ -437,13 +572,137 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
   }
 }
 
+// ─── Overnight restrictions card ─────────────────────────────────────────────
+
+class _OvernightRestrictionsCard extends StatelessWidget {
+  final Map<String, _MarginData> draft;
+  final void Function(String catKey, bool val) onToggle;
+
+  const _OvernightRestrictionsCard({
+    required this.draft,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final blockableCats = _kCategories.where((c) => c.allowOvernightShortSellBlock);
+    if (blockableCats.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE4E4E4)),
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7B1522).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  LucideIcons.shieldOff,
+                  size: 18,
+                  color: Color(0xFF7B1522),
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Overnight Short-Selling Restrictions',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1A1A1A),
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'When blocked, NRML SELL orders are rejected. Intraday (MIS) short selling is unaffected.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: Color(0xFFEEEEEE)),
+          const SizedBox(height: 12),
+          ...blockableCats.map((cat) {
+            final data = draft[cat.key];
+            final isBlocked = data?.blockOvernightShortSell ?? true;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          cat.displayName,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF1A1A1A),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          isBlocked
+                              ? 'NRML SELL blocked — equity short selling not allowed overnight'
+                              : 'NRML SELL allowed — overnight short selling is enabled',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isBlocked
+                                ? const Color(0xFF7B1522)
+                                : const Color(0xFF2E7D32),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: isBlocked,
+                    onChanged: (val) => onToggle(cat.key, val),
+                    activeColor: const Color(0xFF7B1522),
+                    inactiveThumbColor: const Color(0xFF2E7D32),
+                    inactiveTrackColor: const Color(0xFF2E7D32).withOpacity(0.3),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
 // ─── Table widget ─────────────────────────────────────────────────────────────
 
 class _MarginTable extends StatelessWidget {
   final List<_Category> categories;
   final Map<String, _MarginData> draft;
   final Map<String, _MarginData> saved;
-  // field: 'misBuy' | 'misSell' | 'nrml'
+  // field: 'misBuy' | 'misSell' | 'nrmlBuy' | 'nrmlSell'
   final void Function(_Category, String field) onEdit;
 
   const _MarginTable({
@@ -456,7 +715,8 @@ class _MarginTable extends StatelessWidget {
   static const _kGreen        = Color(0xFF2E7D32);
   static const _kDarkNavy     = Color(0xFF1A2035);
   static const _kDeepRed      = Color(0xFF7B1522);
-  static const _kDeepOlive    = Color(0xFF3E4A1E);
+  static const _kNrmlBuy      = Color(0xFF1A4035);  // dark teal — overnight buy
+  static const _kNrmlSell     = Color(0xFF4A2E1E);  // dark brown — overnight short
   static const _kRowOdd       = Color(0xFFF7F7F7);
   static const _kRowEven      = Colors.white;
   static const _kDivider      = Color(0xFFE4E4E4);
@@ -479,6 +739,50 @@ class _MarginTable extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
+          // ── Column group labels ──────────────────────────────────────────
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Expanded(flex: 5, child: SizedBox()),
+                Expanded(
+                  flex: 6,
+                  child: Container(
+                    color: _kDarkNavy.withOpacity(0.85),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    alignment: Alignment.center,
+                    child: const Text(
+                      'INTRADAY (MIS)',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white70,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 6,
+                  child: Container(
+                    color: _kNrmlBuy.withOpacity(0.85),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    alignment: Alignment.center,
+                    child: const Text(
+                      'OVERNIGHT (NRML)',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white70,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+
+              ],
+            ),
+          ),
           // ── Header ──────────────────────────────────────────────────────
           IntrinsicHeight(
             child: Row(
@@ -488,12 +792,12 @@ class _MarginTable extends StatelessWidget {
                   flex: 5,
                   child: Container(
                     color: _kGreen,
-                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
                     alignment: Alignment.centerLeft,
                     child: const Text(
                       'EXCHANGE',
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                         letterSpacing: 0.8,
@@ -505,17 +809,16 @@ class _MarginTable extends StatelessWidget {
                   flex: 3,
                   child: Container(
                     color: _kDarkNavy,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     alignment: Alignment.center,
                     child: const Text(
-                      'INTRADAY\nBUY',
+                      'BUY',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                         letterSpacing: 0.4,
-                        height: 1.4,
                       ),
                     ),
                   ),
@@ -524,17 +827,17 @@ class _MarginTable extends StatelessWidget {
                   flex: 3,
                   child: Container(
                     color: _kDeepRed,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     alignment: Alignment.center,
                     child: const Text(
-                      'INTRADAY\nSELL',
+                      'SHORT\nSELL',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 9,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
-                        letterSpacing: 0.4,
-                        height: 1.4,
+                        letterSpacing: 0.3,
+                        height: 1.2,
                       ),
                     ),
                   ),
@@ -542,18 +845,36 @@ class _MarginTable extends StatelessWidget {
                 Expanded(
                   flex: 3,
                   child: Container(
-                    color: _kDeepOlive,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    color: _kNrmlBuy,
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     alignment: Alignment.center,
                     child: const Text(
-                      'HOLDING\n(NRML)',
+                      'BUY',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                         letterSpacing: 0.4,
-                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Container(
+                    color: _kNrmlSell,
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    alignment: Alignment.center,
+                    child: const Text(
+                      'SHORT\nSELL',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 0.3,
+                        height: 1.2,
                       ),
                     ),
                   ),
@@ -566,9 +887,11 @@ class _MarginTable extends StatelessWidget {
           ...List.generate(categories.length, (i) {
             final cat  = categories[i];
             final data = draft[cat.key] ?? _MarginData(
-              misBuyValue:  cat.defaultMisValue,
-              misSellValue: cat.defaultMisValue,
-              nrmlValue:    cat.defaultNrmlValue,
+              misBuyValue:   cat.defaultMisValue,
+              misSellValue:  cat.defaultMisValue,
+              nrmlBuyValue:  cat.defaultNrmlValue,
+              nrmlSellValue: cat.defaultNrmlValue,
+              blockOvernightShortSell: cat.allowOvernightShortSellBlock ? true : null,
             );
             final savedData = saved[cat.key];
             final isDirty   = savedData != null && !data.equals(savedData);
@@ -588,14 +911,14 @@ class _MarginTable extends StatelessWidget {
                       flex: 5,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 14),
+                          horizontal: 16, vertical: 12),
                         child: Row(
                           children: [
                             Expanded(
                               child: Text(
                                 cat.displayName,
                                 style: const TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 12,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF1A1A1A),
                                 ),
@@ -633,15 +956,27 @@ class _MarginTable extends StatelessWidget {
                         onTap: () => onEdit(cat, 'misSell'),
                       ),
                     ),
-                    // Holding (NRML)
+                    // NRML BUY (overnight)
                     Expanded(
                       flex: 3,
                       child: _ValueCell(
-                        value: data.nrmlValue,
+                        value: data.nrmlBuyValue,
                         perLotMode: cat.perLotMode,
                         rowBg: rowBg,
-                        onTap: () => onEdit(cat, 'nrml'),
+                        onTap: () => onEdit(cat, 'nrmlBuy'),
                       ),
+                    ),
+                    // NRML SELL (overnight short)
+                    Expanded(
+                      flex: 3,
+                      child: data.blockOvernightShortSell == true
+                          ? _BlockedCell(rowBg: rowBg)
+                          : _ValueCell(
+                              value: data.nrmlSellValue,
+                              perLotMode: cat.perLotMode,
+                              rowBg: rowBg,
+                              onTap: () => onEdit(cat, 'nrmlSell'),
+                            ),
                     ),
                   ],
                 ),
@@ -678,7 +1013,7 @@ class _ValueCell extends StatelessWidget {
           color: rowBg,
           border: const Border(left: BorderSide(color: Color(0xFFE4E4E4))),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -687,7 +1022,7 @@ class _ValueCell extends StatelessWidget {
                 _fmtValue(value, perLotMode),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: FontWeight.w500,
                   color: Color(0xFF222222),
                 ),
@@ -695,10 +1030,39 @@ class _ValueCell extends StatelessWidget {
             ),
             Icon(
               LucideIcons.pencil,
-              size: 12,
+              size: 11,
               color: Colors.grey[400],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Blocked cell (overnight short blocked) ──────────────────────────────────
+
+class _BlockedCell extends StatelessWidget {
+  final Color rowBg;
+  const _BlockedCell({required this.rowBg});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF7B1522).withOpacity(0.05),
+        border: const Border(left: BorderSide(color: Color(0xFFE4E4E4))),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      alignment: Alignment.center,
+      child: const Text(
+        'BLOCKED',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF7B1522),
+          letterSpacing: 0.5,
         ),
       ),
     );
@@ -908,7 +1272,7 @@ class _EditSheetState extends State<_EditSheet> {
                 if (showMarginHint) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'Margin required: ${(100 / customVal!).toStringAsFixed(2)}%',
+                    'Margin required: ${(100 / customVal).toStringAsFixed(2)}%',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppColors.primary,
@@ -946,6 +1310,225 @@ class _EditSheetState extends State<_EditSheet> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Global risk defaults section ────────────────────────────────────────────
+
+class _GlobalRiskSection extends StatelessWidget {
+  final bool loading;
+  final bool saving;
+  final TextEditingController intradayCtrl;
+  final TextEditingController shortSellCtrl;
+  final TextEditingController nrmlBuyCtrl;
+  final TextEditingController nrmlSellCtrl;
+  final bool enableShortSelling;
+  final bool allowEquityIntradayShortSell;
+  final bool blockOvernightEquityShortSell;
+  final ValueChanged<bool> onToggleShortSelling;
+  final ValueChanged<bool> onToggleEquityMis;
+  final ValueChanged<bool> onToggleEquityNrml;
+  final VoidCallback onSave;
+
+  const _GlobalRiskSection({
+    required this.loading,
+    required this.saving,
+    required this.intradayCtrl,
+    required this.shortSellCtrl,
+    required this.nrmlBuyCtrl,
+    required this.nrmlSellCtrl,
+    required this.enableShortSelling,
+    required this.allowEquityIntradayShortSell,
+    required this.blockOvernightEquityShortSell,
+    required this.onToggleShortSelling,
+    required this.onToggleEquityMis,
+    required this.onToggleEquityNrml,
+    required this.onSave,
+  });
+
+  static const _kDivider = Color(0xFFEEEEEE);
+  static const _kLabel   = TextStyle(
+    fontSize: 11, fontWeight: FontWeight.w700,
+    color: Color(0xFF666666), letterSpacing: 0.5,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE4E4E4)),
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header ──────────────────────────────────────────────────────
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(LucideIcons.sliders, size: 18, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Global Leverage Defaults',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1A1A1A)),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Fallback when no category rule matches. Separate Buy / Short Sell leverage for Intraday and Overnight. '
+                      'Also controls platform-wide short selling policy.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          if (loading) ...[
+            const SizedBox(height: 24),
+            const Center(child: CircularProgressIndicator()),
+            const SizedBox(height: 8),
+          ] else ...[
+            const SizedBox(height: 16),
+            const Divider(height: 1, color: _kDivider),
+            const SizedBox(height: 16),
+
+            // ── Intraday BUY (MIS) ───────────────────────────────────────
+            const Text('INTRADAY BUY (MIS)', style: _kLabel),
+            const SizedBox(height: 8),
+            TextField(
+              controller: intradayCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Intraday Buy Leverage (x)',
+                hintText: '5',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Short Selling Leverage ────────────────────────────────────
+            const Text('SHORT SELLING LEVERAGE', style: _kLabel),
+            const SizedBox(height: 4),
+            const Text(
+              'Applied when opening a new SHORT position. Exit sells do not require margin.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF888888)),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: shortSellCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Short Sell Intraday (MIS)',
+                      hintText: '5',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: nrmlSellCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Short Sell Overnight (NRML)',
+                      hintText: '1 = full margin',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── Overnight BUY (NRML) ─────────────────────────────────────
+            const Text('OVERNIGHT BUY (NRML)', style: _kLabel),
+            const SizedBox(height: 8),
+            TextField(
+              controller: nrmlBuyCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Overnight Buy Leverage (x)',
+                hintText: '1 = full margin',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Divider(height: 1, color: _kDivider),
+            const SizedBox(height: 8),
+
+            // ── Short selling policy ─────────────────────────────────────
+            const Text('SHORT SELLING POLICY', style: _kLabel),
+            const SizedBox(height: 4),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Enable Short Selling (platform-wide)', style: TextStyle(fontSize: 13)),
+              value: enableShortSelling,
+              onChanged: onToggleShortSelling,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Allow Equity Intraday Short Sell (MIS)', style: TextStyle(fontSize: 13)),
+              value: allowEquityIntradayShortSell,
+              onChanged: onToggleEquityMis,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Block Overnight Equity Short Selling (NRML)', style: TextStyle(fontSize: 13)),
+              subtitle: const Text(
+                'Prevents users from holding equity short positions overnight. F&O short selling is unaffected.',
+                style: TextStyle(fontSize: 11),
+              ),
+              value: blockOvernightEquityShortSell,
+              onChanged: onToggleEquityNrml,
+            ),
+            const SizedBox(height: 12),
+
+            // ── Save ─────────────────────────────────────────────────────
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton.icon(
+                onPressed: saving ? null : onSave,
+                icon: saving
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(LucideIcons.save, size: 14),
+                label: const Text('Save Global Settings'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

@@ -217,15 +217,19 @@ class TradingStore extends ChangeNotifier {
         _marketDataService.recordDirection(stock.symbol, oldPrice, newLtp);
       }
 
-      // Update open positions with new price (O(1) via index map)
-      final posIndices = _positionIndex[stock.symbol];
+      // Token-based lookup preferred (globally unique per contract); falls back
+      // to exchange:symbol for positions loaded before the token was persisted.
+      final posIndices =
+          (stock.token.isNotEmpty ? _positionTokenIndex[stock.token] : null) ??
+          _positionIndex['${stock.exchange}:${stock.symbol}'];
       if (posIndices != null) {
         for (final i in posIndices) {
           _positions[i] = _positions[i].copyWith(currentPrice: newLtp);
         }
       }
 
-      // Update holdings with new price (O(1) via index map)
+      // Update holdings with new price (O(1) via index map).
+      // Holdings don't carry exchange, so symbol-only key is used here.
       final holdingIdx = _holdingIndex[stock.symbol];
       if (holdingIdx != null) {
         _holdings[holdingIdx] = _holdings[holdingIdx].copyWith(currentPrice: newLtp);
@@ -282,8 +286,13 @@ class TradingStore extends ChangeNotifier {
   final List<Transaction> _transactions;
 
   // O(1) index maps for tick-driven price updates — rebuilt on every replace.
-  final Map<String, List<int>> _positionIndex = {}; // symbol → indices (multiple products)
-  final Map<String, int> _holdingIndex = {};        // symbol → index (unique per symbol)
+  // _positionIndex    : "exchange:symbol" → indices  (always populated)
+  // _positionTokenIndex: token           → indices  (populated only when position.token != '')
+  // Lookup uses token first (globally unique per contract) then falls back
+  // to exchange:symbol, so positions without a stored token still receive updates.
+  final Map<String, List<int>> _positionIndex      = {};
+  final Map<String, List<int>> _positionTokenIndex = {};
+  final Map<String, int> _holdingIndex = {}; // symbol → index (unique per symbol)
   User _currentUser;
 
   double _balance;
@@ -407,17 +416,23 @@ class TradingStore extends ChangeNotifier {
         _watchlist.where((s) => s.symbol.toUpperCase() == upper).firstOrNull;
   }
 
+  /// Last non-zero LTP received from the live feed for [symbol].
+  /// Returns 0 if no valid tick has ever been received.
+  /// Survives reconnects and watchlist changes — never reset to 0 once set.
+  double lastValidLtp(String symbol) => _lastLtpBySymbol[symbol] ?? 0;
+
   Stock stockBySymbol(String symbol) {
-    return stockBySymbolOrNull(symbol) ??
-        // Never fall back to _watchlist.first — return a placeholder with the
-        // correct symbol so the detail screen shows the right name/symbol.
-        Stock(
-          symbol: symbol,
-          name: symbol,
-          currentPrice: 0,
-          changePercentage: 0,
-          sector: '',
-        );
+    final found = stockBySymbolOrNull(symbol);
+    if (found != null) return found;
+    // Not in universe — use last known LTP if available so callers don't see
+    // a stale 0 after a brief disconnect or watchlist navigation.
+    return Stock(
+      symbol: symbol,
+      name: symbol,
+      currentPrice: _lastLtpBySymbol[symbol] ?? 0,
+      changePercentage: 0,
+      sector: '',
+    );
   }
 
   /// Register a stock from a search result so the detail screen can access
@@ -521,10 +536,12 @@ class TradingStore extends ChangeNotifier {
   }
 
   /// Returns the required margin for an order using admin-configured leverage.
-  /// - MIS/MTF: tradeValue / intradayLeverage  (admin-controlled, default 5x)
-  /// - NRML: 100% of trade value
-  /// - CNC/Overnight (carry-forward): 100% of trade value
-  /// - SELL exits: 0 (no margin needed); SELL short-opens: margin required
+  /// - MIS/MTF BUY:  tradeValue / intradayLeverage
+  /// - MIS/MTF SHORT: tradeValue / shortSellLeverage
+  /// - NRML BUY:     tradeValue / nrmlBuyLeverage  (default 1x = full value)
+  /// - NRML SHORT:   tradeValue / nrmlSellLeverage (default 1x = full value)
+  /// - CNC/Overnight: 100% of trade value
+  /// - SELL exits:    0 (no margin needed)
   double requiredMargin(
     int quantity,
     double price,
@@ -535,10 +552,18 @@ class TradingStore extends ChangeNotifier {
     if (isSell && !opensShort) return 0; // Exit orders never require margin
     final fullValue = quantity * price;
     if (product == ProductType.mis || product == ProductType.mtf) {
-      final leverage = isSell ? _rmsSettings.shortSellLeverage : _rmsSettings.intradayLeverage;
+      final leverage = isSell
+          ? _rmsSettings.shortSellLeverage
+          : _rmsSettings.intradayLeverage;
       return fullValue / leverage;
     }
-    return fullValue; // nrml, overnight
+    if (product == ProductType.nrml) {
+      final leverage = isSell
+          ? _rmsSettings.nrmlSellLeverage
+          : _rmsSettings.nrmlBuyLeverage;
+      return fullValue / leverage;
+    }
+    return fullValue; // CNC/overnight: full value
   }
 
   OrderResult placeOrder({
@@ -1081,8 +1106,15 @@ class TradingStore extends ChangeNotifier {
 
   void _rebuildPositionIndex() {
     _positionIndex.clear();
+    _positionTokenIndex.clear();
     for (var i = 0; i < _positions.length; i++) {
-      _positionIndex.putIfAbsent(_positions[i].symbol, () => []).add(i);
+      final p = _positions[i];
+      _positionIndex
+          .putIfAbsent('${p.exchange}:${p.symbol}', () => [])
+          .add(i);
+      if (p.token.isNotEmpty) {
+        _positionTokenIndex.putIfAbsent(p.token, () => []).add(i);
+      }
     }
   }
 

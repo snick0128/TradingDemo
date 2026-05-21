@@ -214,6 +214,7 @@ class BackendApiService {
     // can price the order instead of throwing "Live price unavailable".
     double? lockedLtp,
     String? clientRequestId,
+    String? symbolToken,
   }) async {
     final result = await _post('/orders', {
       'userId': userId,
@@ -224,6 +225,7 @@ class BackendApiService {
       'exchange': exchange,
       if (lockedLtp != null && lockedLtp > 0) 'lockedLtp': lockedLtp,
       if (clientRequestId != null) 'clientRequestId': clientRequestId,
+      if (symbolToken != null && symbolToken.isNotEmpty) 'symbolToken': symbolToken,
     });
     // Invalidate stale portfolio/order caches after a successful order
     invalidate('/orders');

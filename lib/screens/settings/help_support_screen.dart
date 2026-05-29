@@ -3,7 +3,6 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
-import '../../models/platform_settings.dart';
 import '../../state/trading_scope.dart';
 import '../../theme.dart';
 import '../../widgets/shared_widgets.dart';
@@ -70,11 +69,22 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
     final store   = TradingScope.of(context);
     final support = store.supportConfig;
 
+    final hasWhatsapp = support.whatsappNumber.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
         title: const Text('Help & Support'),
       ),
+      floatingActionButton: hasWhatsapp
+          ? _WhatsAppFab(
+              number:  support.whatsappNumber,
+              message: support.messageTemplate.isNotEmpty
+                  ? support.messageTemplate
+                  : 'Hello, I need help with my Trade Kosh account.',
+              openUrl: _openUrl,
+            )
+          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -214,4 +224,137 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
       onTap: onTap,
     );
   }
+}
+
+// ─── Floating WhatsApp Button ─────────────────────────────────────────────────
+
+class _WhatsAppFab extends StatefulWidget {
+  final String number;
+  final String message;
+  final void Function(String) openUrl;
+
+  const _WhatsAppFab({
+    required this.number,
+    required this.message,
+    required this.openUrl,
+  });
+
+  @override
+  State<_WhatsAppFab> createState() => _WhatsAppFabState();
+}
+
+class _WhatsAppFabState extends State<_WhatsAppFab>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+
+  static const _whatsappGreen = Color(0xFF25D366);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut);
+    // Delay the pop-in so it doesn't fight the page entrance animation.
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onTap() {
+    final url =
+        'https://wa.me/${widget.number}'
+        '?text=${Uri.encodeComponent(widget.message)}';
+    widget.openUrl(url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(
+      scale: _scale,
+      child: FloatingActionButton.extended(
+        onPressed: _onTap,
+        backgroundColor: _whatsappGreen,
+        foregroundColor: Colors.white,
+        elevation: 4,
+        icon: const _WhatsAppIcon(),
+        label: const Text(
+          'Chat on WhatsApp',
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+        ),
+      ),
+    );
+  }
+}
+
+// Draws the WhatsApp speech-bubble logo using a CustomPainter so we don't need
+// any image assets or third-party icon packages.
+class _WhatsAppIcon extends StatelessWidget {
+  const _WhatsAppIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size(22, 22),
+      painter: _WhatsAppIconPainter(),
+    );
+  }
+}
+
+class _WhatsAppIconPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r  = size.width * 0.46;
+
+    // Outer circle
+    canvas.drawCircle(Offset(cx, cy), r, paint);
+
+    // Speech-bubble tail (small triangle at bottom-left)
+    final tailPath = Path()
+      ..moveTo(cx - r * 0.55, cy + r * 0.70)
+      ..lineTo(cx - r * 1.05, cy + r * 1.10)
+      ..lineTo(cx - r * 0.15, cy + r * 0.85)
+      ..close();
+    canvas.drawPath(tailPath, paint);
+
+    // Phone handset drawn in the WhatsApp green inside the white circle
+    final phonePaint = Paint()
+      ..color = const Color(0xFF25D366)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.width * 0.12
+      ..strokeCap = StrokeCap.round;
+
+    // A simplified phone icon path centred in the circle
+    final phonePath = Path();
+    final ps = size.width * 0.14; // scale unit
+    final px = cx - ps * 0.6;
+    final py = cy - ps * 1.0;
+    phonePath
+      ..moveTo(px,           py + ps * 0.4)
+      ..quadraticBezierTo(px - ps * 0.3, py, px + ps * 0.5, py - ps * 0.1)
+      ..lineTo(px + ps * 1.1, py + ps * 0.6)
+      ..quadraticBezierTo(px + ps * 1.4, py + ps * 0.9, px + ps * 1.0, py + ps * 1.2)
+      ..lineTo(px + ps * 0.8, py + ps * 1.5)
+      ..quadraticBezierTo(px + ps * 0.4, py + ps * 2.0, px + ps * 0.0, py + ps * 1.8)
+      ..lineTo(px - ps * 0.5, py + ps * 1.4);
+    canvas.drawPath(phonePath, phonePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

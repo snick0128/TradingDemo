@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -42,50 +43,142 @@ class AuthService {
   }
 
   /// Sign in with Google. Creates a Firestore user doc on first sign-in.
+  ///
+  /// On Web: uses Firebase's native OAuth popup (no client ID needed — Firebase
+  ///         reads credentials from the project configuration automatically).
+  /// On Mobile: uses the google_sign_in package to handle the native flow.
   Future<AppUserProfile> signInWithGoogle({
     String expectedRole = 'user',
   }) async {
-    final googleUser = await GoogleSignIn(
-      clientId: '421918726497-web.apps.googleusercontent.com',
-    ).signIn();
-    if (googleUser == null) throw Exception('Google sign-in cancelled.');
+    debugPrint('[Auth] signInWithGoogle: platform=web:$kIsWeb role=$expectedRole');
 
-    final googleAuth = await googleUser.authentication;
-    final credential = GoogleAuthProvider.credential(
-      accessToken: googleAuth.accessToken,
-      idToken: googleAuth.idToken,
-    );
+    UserCredential userCredential;
 
-    final userCredential = await _auth.signInWithCredential(credential);
+    if (kIsWeb) {
+      // Web: Firebase handles OAuth entirely — no clientId required.
+      // signInWithPopup opens Google's OAuth consent screen in a popup window.
+      debugPrint('[Auth] Web: using signInWithPopup');
+      try {
+        final provider = GoogleAuthProvider();
+        provider.setCustomParameters({'prompt': 'select_account'});
+        userCredential = await _auth.signInWithPopup(provider);
+      } on FirebaseAuthException catch (e) {
+        debugPrint('[Auth] signInWithPopup failed: ${e.code} ${e.message}');
+        if (e.code == 'popup-closed-by-user' ||
+            e.code == 'cancelled-popup-request') {
+          throw Exception('Google sign-in was cancelled.');
+        }
+        if (e.code == 'popup-blocked') {
+          throw Exception(
+            'Google sign-in popup was blocked by your browser. '
+            'Please allow popups for this site and try again.',
+          );
+        }
+        throw Exception('Google sign-in failed: ${e.message}');
+      }
+    } else {
+      // Mobile (Android / iOS): use the google_sign_in package.
+      debugPrint('[Auth] Mobile: using GoogleSignIn package');
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+
+      GoogleSignInAccount? googleUser;
+      try {
+        googleUser = await googleSignIn.signIn();
+      } catch (e) {
+        debugPrint('[Auth] GoogleSignIn.signIn() threw: $e');
+        throw Exception('Google sign-in error: $e');
+      }
+
+      if (googleUser == null) {
+        debugPrint('[Auth] User cancelled Google sign-in');
+        throw Exception('Google sign-in cancelled.');
+      }
+
+      debugPrint('[Auth] GoogleSignIn success: email=${googleUser.email}');
+
+      GoogleSignInAuthentication googleAuth;
+      try {
+        googleAuth = await googleUser.authentication;
+      } catch (e) {
+        debugPrint('[Auth] Failed to get Google auth tokens: $e');
+        throw Exception('Failed to get Google authentication tokens: $e');
+      }
+
+      if (googleAuth.idToken == null) {
+        debugPrint('[Auth] Google idToken is null');
+        throw Exception(
+          'Google sign-in failed: missing ID token. '
+          'Ensure SHA-1/SHA-256 fingerprints are registered in Firebase Console.',
+        );
+      }
+
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken:     googleAuth.idToken,
+      );
+
+      try {
+        userCredential = await _auth.signInWithCredential(credential);
+      } on FirebaseAuthException catch (e) {
+        debugPrint('[Auth] signInWithCredential failed: ${e.code} ${e.message}');
+        throw Exception('Google sign-in failed: ${e.message}');
+      }
+    }
+
     final firebaseUser = userCredential.user;
-    if (firebaseUser == null) throw Exception('Google sign-in failed.');
+    if (firebaseUser == null) {
+      debugPrint('[Auth] signIn succeeded but user is null');
+      throw Exception('Google sign-in failed: user is null after credential sign-in.');
+    }
 
-    // Force a token refresh and small delay for Firestore sync on Web
+    debugPrint('[Auth] Firebase user: uid=${firebaseUser.uid} email=${firebaseUser.email}');
+
+    // Force token refresh so Firestore SDK has a valid auth token immediately.
     try {
-      await firebaseUser.getIdToken(true).timeout(const Duration(seconds: 5));
-    } catch (_) {}
-    await Future.delayed(const Duration(milliseconds: 400));
+      await firebaseUser.getIdToken(true).timeout(const Duration(seconds: 8));
+      debugPrint('[Auth] Token refresh successful');
+    } catch (e) {
+      debugPrint('[Auth] Token refresh failed (non-fatal): $e');
+    }
 
-    // Check if user doc exists; create it on first sign-in
-    final doc = await _firestore.raw.doc('users/${firebaseUser.uid}').get();
-    if (!doc.exists) {
-      await _firestore.raw.doc('users/${firebaseUser.uid}').set({
-        'uid': firebaseUser.uid,
-        'name': firebaseUser.displayName ?? 'User',
-        'email': firebaseUser.email ?? '',
-        'role': expectedRole,
-        'balance': 0.0,
-        'available_balance': 0.0,
-        'tradingEnabled': true,
-        'createdAt': Timestamp.now(),
-      });
+    // Small delay for web Firestore SDK to propagate the new auth state.
+    if (kIsWeb) await Future.delayed(const Duration(milliseconds: 400));
+
+    // Create Firestore user doc on first sign-in (idempotent set).
+    try {
+      final doc = await _firestore.raw
+          .doc('users/${firebaseUser.uid}')
+          .get()
+          .timeout(const Duration(seconds: 8));
+
+      if (!doc.exists) {
+        debugPrint('[Auth] First sign-in — creating Firestore user doc');
+        await _firestore.raw.doc('users/${firebaseUser.uid}').set({
+          'uid':               firebaseUser.uid,
+          'name':              firebaseUser.displayName ?? 'User',
+          'email':             firebaseUser.email ?? '',
+          'role':              expectedRole,
+          'balance':           0.0,
+          'available_balance': 0.0,
+          'tradingEnabled':    true,
+          'createdAt':         Timestamp.now(),
+          'signInProvider':    'google',
+        }).timeout(const Duration(seconds: 10));
+      }
+    } catch (e) {
+      debugPrint('[Auth] Firestore user doc check/create failed: $e');
+      // Non-fatal for existing users — _loadProfile will handle missing docs.
     }
 
     final profile = await _loadProfile(firebaseUser);
+    debugPrint('[Auth] Profile loaded: role=${profile.role}');
+
     if (profile.role != expectedRole) {
       await _auth.signOut();
       throw Exception(
-        'This Google account is not registered as a $expectedRole.',
+        'This Google account (${firebaseUser.email}) is registered as a '
+        '"${profile.role}" account, not a "$expectedRole" account. '
+        'Please use the correct portal.',
       );
     }
     return profile;
@@ -221,19 +314,45 @@ class AuthService {
     String password, {
     required String expectedRole,
   }) async {
-    final credential = await _auth.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
+    debugPrint('[Auth] _loginWithExpectedRole email=$email role=$expectedRole');
+    UserCredential credential;
+    try {
+      credential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+    } on FirebaseAuthException catch (e) {
+      debugPrint('[Auth] signInWithEmailAndPassword failed: ${e.code}');
+      switch (e.code) {
+        case 'user-not-found':
+          throw Exception('No account found with this email address.');
+        case 'wrong-password':
+        case 'invalid-credential':
+        case 'INVALID_LOGIN_CREDENTIALS':
+          throw Exception('Incorrect email or password.');
+        case 'user-disabled':
+          throw Exception('This account has been disabled. Contact support.');
+        case 'too-many-requests':
+          throw Exception('Too many failed attempts. Please try again later.');
+        case 'network-request-failed':
+          throw Exception('Network error. Please check your internet connection.');
+        default:
+          throw Exception('Login failed: ${e.message}');
+      }
+    }
+
     final firebaseUser = credential.user;
     if (firebaseUser == null) {
-      throw Exception('Authentication failed.');
+      throw Exception('Authentication failed: user is null.');
     }
 
     final profile = await _loadProfile(firebaseUser);
     if (profile.role != expectedRole) {
       await _auth.signOut();
-      throw Exception('Role mismatch for this portal.');
+      throw Exception(
+        'This account is registered as a "${profile.role}" — '
+        'please use the correct portal.',
+      );
     }
     return profile;
   }
@@ -309,34 +428,56 @@ class AuthService {
   }
 
   Future<AppUserProfile> _loadProfile(User firebaseUser) async {
-    final doc = await _firestore.raw
-        .doc('users/${firebaseUser.uid}')
-        .get()
-        .timeout(
-          const Duration(seconds: 8),
-          onTimeout: () {
-            throw Exception('Profile fetch timed out. Check your connection.');
-          },
-        );
+    debugPrint('[Auth] _loadProfile uid=${firebaseUser.uid}');
+
+    DocumentSnapshot<Map<String, dynamic>>? doc;
+
+    // Retry up to 3 times for transient network failures (common on first sign-in).
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        doc = await _firestore.raw
+            .doc('users/${firebaseUser.uid}')
+            .get()
+            .timeout(const Duration(seconds: 10));
+        break;
+      } catch (e) {
+        debugPrint('[Auth] _loadProfile attempt $attempt failed: $e');
+        if (attempt == 3) {
+          throw Exception(
+            'Could not load your profile after $attempt attempts. '
+            'Check your internet connection and try again.',
+          );
+        }
+        await Future.delayed(Duration(milliseconds: 500 * attempt));
+      }
+    }
 
     Map<String, dynamic> data;
 
-    if (!doc.exists || doc.data() == null) {
-      // Auto-create profile if missing (e.g. account created via Firebase Console)
+    if (doc == null || !doc.exists || doc.data() == null) {
+      debugPrint('[Auth] User doc missing — auto-creating for uid=${firebaseUser.uid}');
       data = {
-        'uid': firebaseUser.uid,
-        'name':
-            firebaseUser.displayName ??
-            firebaseUser.email?.split('@').first ??
-            'User',
-        'email': firebaseUser.email ?? '',
-        'role': 'user',
-        'balance': 0.0,
+        'uid':               firebaseUser.uid,
+        'name':              firebaseUser.displayName ??
+                             firebaseUser.email?.split('@').first ??
+                             'User',
+        'email':             firebaseUser.email ?? '',
+        'role':              'user',
+        'balance':           0.0,
         'available_balance': 0.0,
-        'tradingEnabled': true,
-        'createdAt': Timestamp.now(),
+        'tradingEnabled':    true,
+        'createdAt':         Timestamp.now(),
       };
-      await _firestore.raw.doc('users/${firebaseUser.uid}').set(data);
+      try {
+        await _firestore.raw
+            .doc('users/${firebaseUser.uid}')
+            .set(data)
+            .timeout(const Duration(seconds: 10));
+        debugPrint('[Auth] User doc created successfully');
+      } catch (e) {
+        debugPrint('[Auth] Failed to create user doc: $e');
+        // Non-fatal — return profile with default data so the user can proceed.
+      }
     } else {
       data = doc.data()!;
     }
@@ -346,6 +487,8 @@ class AuthService {
       data,
       fallbackEmail: firebaseUser.email ?? '',
     );
+
+    debugPrint('[Auth] Profile loaded: name=${profile.name} role=${profile.role}');
 
     // Save FCM token after every sign-in so push notifications reach this device.
     unawaited(_saveFcmToken(firebaseUser.uid));

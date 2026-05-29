@@ -3,6 +3,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../theme.dart';
 import '../../widgets/shared_widgets.dart';
+import '../../widgets/tk_logo.dart';
 
 class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key});
@@ -19,21 +20,7 @@ class AboutScreen extends StatelessWidget {
             CustomCard(
               child: Column(
                 children: [
-                  Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.accent],
-                      ),
-                    ),
-                    child: const Icon(
-                      LucideIcons.candlestickChart,
-                      size: 36,
-                      color: Colors.white,
-                    ),
-                  ),
+                  const TkLogo(size: 72),
                   const SizedBox(height: 16),
                   Text(
                     'Trade Kosh',

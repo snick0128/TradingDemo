@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../theme.dart';
+import '../../widgets/tk_logo.dart';
 import '../../state/security_scope.dart';
 import '../../state/trading_scope.dart';
 import '../main_shell.dart';
@@ -361,11 +362,7 @@ class _BrandingPanel extends StatelessWidget {
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
-                      LucideIcons.candlestickChart,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                    child: const TkLogo.flat(size: 24),
                   ),
                   const SizedBox(width: 12),
                   const Text(
@@ -466,11 +463,7 @@ class _MobileBrandingHeader extends StatelessWidget {
                   color: Colors.white.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(
-                  LucideIcons.candlestickChart,
-                  color: Colors.white,
-                  size: 20,
-                ),
+                child: const TkLogo.flat(size: 20),
               ),
               const SizedBox(width: 10),
               const Text(

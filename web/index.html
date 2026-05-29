@@ -1,17 +1,116 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
-  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="Trade Kosh — Professional trading platform">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+
+  <!-- ── Primary SEO ──────────────────────────────────────────────────────── -->
+  <title>Trade Kosh - Zero Brokerage Trading Platform for Stocks, F&amp;O, MCX and ETFs</title>
+  <meta name="description" content="Trade Kosh is a modern trading platform offering Stocks, Futures &amp; Options, MCX Commodities, Real-Time Charts, Portfolio Tracking, Risk Management and Advanced Trading Tools.">
+  <meta name="keywords" content="trade kosh, paper trading, stock trading, futures options, F&O, MCX commodities, NSE BSE, intraday trading, portfolio tracking, real-time charts, options chain, zero brokerage, India stocks">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Trade Kosh">
+  <link rel="canonical" href="https://tradekosh.com/">
+
+  <!-- ── Open Graph ────────────────────────────────────────────────────────── -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Trade Kosh">
+  <meta property="og:title" content="Trade Kosh - Zero Brokerage Trading Platform for Stocks, F&amp;O, MCX and ETFs">
+  <meta property="og:description" content="Trade Kosh is a modern trading platform offering Stocks, Futures &amp; Options, MCX Commodities, Real-Time Charts, Portfolio Tracking, Risk Management and Advanced Trading Tools.">
+  <meta property="og:url" content="https://tradekosh.com/">
+  <meta property="og:image" content="https://tradekosh.com/icons/Icon-512.png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:locale" content="en_IN">
+
+  <!-- ── Twitter Card ──────────────────────────────────────────────────────── -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Trade Kosh - Zero Brokerage Trading Platform">
+  <meta name="twitter:description" content="Stocks, F&amp;O, MCX Commodities, Real-Time Charts, Portfolio Tracking and Advanced Trading Tools.">
+  <meta name="twitter:image" content="https://tradekosh.com/icons/Icon-512.png">
+
+  <!-- ── PWA / Mobile ──────────────────────────────────────────────────────── -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Trade Kosh">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="icon" type="image/png" href="favicon.png"/>
-  <title>Trade Kosh</title>
+  <meta name="theme-color" content="#2962FF">
+  <meta name="msapplication-TileColor" content="#2962FF">
+
+  <!-- ── Icons ────────────────────────────────────────────────────────────── -->
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/Icon-192.png">
   <link rel="manifest" href="manifest.json">
+
+  <!-- ── Structured Data — Organisation ───────────────────────────────────── -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "Trade Kosh",
+    "url": "https://tradekosh.com/",
+    "logo": "https://tradekosh.com/icons/Icon-512.png",
+    "description": "Trade Kosh is a modern trading platform offering Stocks, Futures & Options, MCX Commodities, Real-Time Charts, Portfolio Tracking, Risk Management and Advanced Trading Tools.",
+    "sameAs": [],
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "customer support",
+      "availableLanguage": ["English", "Hindi"]
+    }
+  }
+  </script>
+
+  <!-- ── Structured Data — WebSite with SearchAction ─────────────────────── -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "Trade Kosh",
+    "url": "https://tradekosh.com/",
+    "description": "Zero brokerage trading platform for Indian Stocks, F&O, MCX and ETFs with real-time charts, portfolio tracking and advanced risk management.",
+    "potentialAction": {
+      "@type": "SearchAction",
+      "target": {
+        "@type": "EntryPoint",
+        "urlTemplate": "https://tradekosh.com/app/dashboard?q={search_term_string}"
+      },
+      "query-input": "required name=search_term_string"
+    }
+  }
+  </script>
+
+  <!-- ── Structured Data — WebApplication ─────────────────────────────────── -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Trade Kosh",
+    "url": "https://tradekosh.com/",
+    "applicationCategory": "FinanceApplication",
+    "operatingSystem": "Web, Android, iOS",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "INR"
+    },
+    "featureList": [
+      "Real-time stock market data",
+      "Futures and Options trading",
+      "MCX commodities trading",
+      "Portfolio tracking and management",
+      "Advanced charting with technical indicators",
+      "Risk management system",
+      "NSE and BSE market data",
+      "Options chain analysis",
+      "Paper trading simulation"
+    ]
+  }
+  </script>
+
+  <!-- ── Web Splash (shown while Flutter engine boots) ───────────────────── -->
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #FAFAFA; }
@@ -21,47 +120,62 @@
       align-items: center; justify-content: center;
       background: #FAFAFA;
       z-index: 9999;
-      transition: opacity 0.4s ease;
+      transition: opacity 0.35s ease;
     }
     #splash.hidden { opacity: 0; pointer-events: none; }
     .splash-logo {
-      width: 56px; height: 56px;
+      width: 64px; height: 64px;
       background: linear-gradient(135deg, #1A3A6B, #387ED1);
-      border-radius: 16px;
+      border-radius: 18px;
       display: flex; align-items: center; justify-content: center;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
+      box-shadow: 0 8px 24px rgba(41,98,255,0.22);
     }
-    .splash-logo svg { width: 28px; height: 28px; fill: none; stroke: white; stroke-width: 2; }
+    .splash-logo svg { width: 32px; height: 32px; fill: none; stroke: white; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .splash-title {
-      color: #111111; font-size: 22px; font-weight: 700;
+      color: #111111; font-size: 24px; font-weight: 700;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      letter-spacing: -0.3px; margin-bottom: 32px;
+      letter-spacing: -0.4px; margin-bottom: 6px;
+    }
+    .splash-sub {
+      color: #666666; font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      margin-bottom: 36px;
     }
     .splash-spinner {
-      width: 28px; height: 28px;
+      width: 26px; height: 26px;
       border: 2.5px solid rgba(41,98,255,0.15);
       border-top-color: #2962FF;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: spin 0.75s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+  <!-- Single branded splash — visible only while Flutter engine initialises.
+       The Flutter SplashScreen route is transparent so there is no double-splash. -->
   <div id="splash">
     <div class="splash-logo">
-      <svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      <!-- Candlestick chart icon — matches the app icon -->
+      <svg viewBox="0 0 24 24">
+        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+        <polyline points="16 7 22 7 22 13"/>
+      </svg>
     </div>
     <div class="splash-title">Trade Kosh</div>
+    <div class="splash-sub">Professional Trading Platform</div>
     <div class="splash-spinner"></div>
   </div>
+
   <script>
-    // Hide splash once Flutter is ready
     window.addEventListener('flutter-first-frame', function() {
       var splash = document.getElementById('splash');
       if (splash) {
         splash.classList.add('hidden');
-        setTimeout(function() { splash.remove(); }, 500);
+        setTimeout(function() {
+          if (splash.parentNode) splash.parentNode.removeChild(splash);
+        }, 400);
       }
     });
   </script>

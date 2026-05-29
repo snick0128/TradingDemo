@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../theme.dart';
 import '../../state/security_scope.dart';
+import '../../widgets/tk_logo.dart';
 
 class PinSetupScreen extends StatefulWidget {
   const PinSetupScreen({super.key});
@@ -320,11 +321,7 @@ class _PinBrandingPanel extends StatelessWidget {
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
-                      LucideIcons.candlestickChart,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                    child: const TkLogo.flat(size: 24),
                   ),
                   const SizedBox(width: 12),
                   const Text(
@@ -401,19 +398,7 @@ class _MobilePinHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  LucideIcons.candlestickChart,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
+              const TkLogo.flat(size: 20),
               const SizedBox(width: 10),
               const Text(
                 'Trade Kosh',

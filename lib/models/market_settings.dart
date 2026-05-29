@@ -134,6 +134,19 @@ class MarketSettings {
     return null; // allowed
   }
 
+  /// Returns true if the current IST time is within the admin-configured
+  /// market hours for the given exchange (weekdays only).
+  bool isTimeOpen(String exchange) {
+    final seg = forExchange(exchange);
+    final ist = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    final isWeekday =
+        ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
+    if (!isWeekday) return false;
+    final nowMin = ist.hour * 60 + ist.minute;
+    return nowMin >= _parseTime(seg.marketOpen) &&
+        nowMin < _parseTime(seg.marketClose);
+  }
+
   static int _parseTime(String hhmm) {
     final parts = hhmm.split(':');
     if (parts.length < 2) return 0;

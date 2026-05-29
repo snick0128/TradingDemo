@@ -83,6 +83,8 @@ class AdminStore extends ChangeNotifier {
   }) : _tradingService = tradingService,
        _firestoreService = firestoreService,
        _users = <User>[],
+       _rawOrders = <AdminOrderRecord>[],
+       _rawPendingRequests = <AdminOrderRecord>[],
        _masterOrderBook = <AdminOrderRecord>[],
        _auditLog = [],
        _stockEnabled = {}, // populated from Firestore stocks collection
@@ -93,6 +95,7 @@ class AdminStore extends ChangeNotifier {
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _usersSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _orderRequestsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _auditSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _broadcastSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _stocksSub;
@@ -101,6 +104,11 @@ class AdminStore extends ChangeNotifier {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _configSub;
 
   List<User> _users;
+  // _rawOrders = executed/failed/pending orders from 'orders' collection
+  // _rawPendingRequests = QUEUED/PROCESSING entries from 'order_requests' not yet in orders
+  // _masterOrderBook = merged, deduplicated, sorted view rebuilt from both
+  List<AdminOrderRecord> _rawOrders;
+  List<AdminOrderRecord> _rawPendingRequests;
   List<AdminOrderRecord> _masterOrderBook;
   List<AuditLogEntry> _auditLog;
   final Map<String, bool> _stockEnabled;
@@ -598,6 +606,18 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
+  /// Rebuilds _masterOrderBook by merging _rawOrders (from 'orders' collection)
+  /// with _rawPendingRequests (QUEUED/PROCESSING from 'order_requests').
+  /// Orders take precedence — pending requests only appear if no matching order
+  /// with the same ID exists yet.
+  void _rebuildMasterOrderBook() {
+    final ids = _rawOrders.map((o) => o.id).toSet();
+    _masterOrderBook = [
+      ..._rawOrders,
+      ..._rawPendingRequests.where((r) => !ids.contains(r.id)),
+    ]..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+  }
+
   void _bindFirebaseStreams() {
     if (_streamsBound) return;
     final tradingService = _tradingService;
@@ -619,12 +639,33 @@ class AdminStore extends ChangeNotifier {
 
     _ordersSub = tradingService.ordersStream().listen(
       (snapshot) {
-        _masterOrderBook = snapshot.docs.map(_mapOrderDoc).toList()
-          ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+        _rawOrders = snapshot.docs.map(_mapOrderDoc).toList();
+        _rebuildMasterOrderBook();
         notifyListeners();
       },
       onError: (e, _) => _notifyError(
         'Unable to load orders. Check your connection and try again.',
+      ),
+    );
+
+    // Also stream order_requests for orders that are queued/processing but not
+    // yet written to 'orders' collection. This fixes the "only SBIN" issue where
+    // orders placed via placeOrder() stay in order_requests until processed.
+    _orderRequestsSub = tradingService.orderRequestsAdminStream().listen(
+      (snapshot) {
+        _rawPendingRequests = snapshot.docs
+            .where((doc) {
+              final status =
+                  ((doc.data()['status'] as String?) ?? '').toUpperCase();
+              return status == 'QUEUED' || status == 'PROCESSING';
+            })
+            .map(_mapOrderDoc)
+            .toList();
+        _rebuildMasterOrderBook();
+        notifyListeners();
+      },
+      onError: (e, _) => _notifyError(
+        'Unable to load pending orders. Check your connection and try again.',
       ),
     );
 
@@ -736,6 +777,7 @@ class AdminStore extends ChangeNotifier {
   void _unbindFirebaseStreams() {
     _usersSub?.cancel();
     _ordersSub?.cancel();
+    _orderRequestsSub?.cancel();
     _auditSub?.cancel();
     _broadcastSub?.cancel();
     _stocksSub?.cancel();
@@ -745,6 +787,7 @@ class AdminStore extends ChangeNotifier {
 
     _usersSub = null;
     _ordersSub = null;
+    _orderRequestsSub = null;
     _auditSub = null;
     _broadcastSub = null;
     _stocksSub = null;
@@ -864,8 +907,10 @@ class AdminStore extends ChangeNotifier {
   OrderStatus _orderStatusFromDb(String? raw) {
     switch ((raw ?? '').trim().toUpperCase()) {
       case 'APPROVED':
+      case 'COMPLETED':
         return OrderStatus.approved;
       case 'REJECTED':
+      case 'FAILED':
         return OrderStatus.rejected;
       case 'CANCELLED':
         return OrderStatus.cancelled;
@@ -874,6 +919,8 @@ class AdminStore extends ChangeNotifier {
       case 'PARTIALLY_EXECUTED':
         return OrderStatus.partiallyExecuted;
       case 'PENDING':
+      case 'QUEUED':
+      case 'PROCESSING':
       default:
         return OrderStatus.pending;
     }

@@ -1,13 +1,15 @@
 {
-    "name": "Trade Kosh",
+    "name": "Trade Kosh - Zero Brokerage Trading Platform",
     "short_name": "Trade Kosh",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#387ED1",
-    "theme_color": "#387ED1",
-    "description": "Professional-grade trading platform for Indian equity, F&O, and more.",
+    "background_color": "#FAFAFA",
+    "theme_color": "#2962FF",
+    "description": "Trade Kosh is a modern trading platform for Stocks, Futures & Options, MCX Commodities with Real-Time Charts, Portfolio Tracking and Risk Management.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
+    "categories": ["finance", "business"],
+    "lang": "en-IN",
     "icons": [
         {
             "src": "icons/Icon-192.png",

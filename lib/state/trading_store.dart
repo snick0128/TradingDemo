@@ -370,13 +370,30 @@ class TradingStore extends ChangeNotifier {
   double get payOut => _transactions
       .where((tx) => !tx.isDeposit && tx.title.contains('Withdrawal'))
       .fold(0.0, (sum, tx) => sum + tx.amount);
-  double get usedMargin =>
-      _transactions
-          .where((tx) => !tx.isDeposit && tx.title.contains('Margin blocked'))
-          .fold(0.0, (sum, tx) => sum + tx.amount) -
-      _transactions
-          .where((tx) => tx.isDeposit && tx.title.contains('Margin released'))
-          .fold(0.0, (sum, tx) => sum + tx.amount);
+  /// Used margin — single source of truth for live and offline paths.
+  ///
+  /// Live backend (Firebase): sum of `marginUsed` on every open MIS/NRML
+  /// position loaded from Firestore. This is the margin the backend actually
+  /// blocked, so it always matches the balance deduction.
+  ///
+  /// Offline / mock path: computed from local mock transaction log (legacy).
+  double get usedMargin {
+    if (_usingLiveBackend) {
+      // Derive from positions written by the backend — never from local state.
+      return _positions
+          .where((p) =>
+              p.product == ProductType.mis ||
+              p.product == ProductType.nrml)
+          .fold(0.0, (sum, p) => sum + p.marginUsed);
+    }
+    // Mock / offline path: use transaction log.
+    return _transactions
+        .where((tx) => !tx.isDeposit && tx.title.contains('Margin blocked'))
+        .fold(0.0, (sum, tx) => sum + tx.amount) -
+    _transactions
+        .where((tx) => tx.isDeposit && tx.title.contains('Margin released'))
+        .fold(0.0, (sum, tx) => sum + tx.amount);
+  }
 
   double get totalInvestment =>
       _portfolio.fold(0, (sum, item) => sum + item.investedValue);

@@ -4,6 +4,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../app/app_scope.dart';
 import '../../theme.dart';
+import '../../widgets/tk_logo.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -460,11 +461,7 @@ class _RegisterBrandingPanel extends StatelessWidget {
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
-                      LucideIcons.candlestickChart,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                    child: const TkLogo.flat(size: 24),
                   ),
                   const SizedBox(width: 12),
                   const Text(
@@ -556,19 +553,7 @@ class _MobileRegisterHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  LucideIcons.candlestickChart,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
+              const TkLogo.flat(size: 20),
               const SizedBox(width: 10),
               const Text(
                 'Trade Kosh',

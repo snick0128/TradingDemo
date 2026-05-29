@@ -372,10 +372,17 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         }
         return;
       } catch (e) {
-        if (attempt < 1) continue; // one background retry with backoff
+        // 400 means the backend could not resolve a token for this instrument
+        // (e.g. ETF with missing token). Retrying won't help — skip straight to
+        // the unavailable state with a clear message.
+        final isClientError = e is BackendException && (e.statusCode ?? 0) < 500 && (e.statusCode ?? 0) >= 400;
+        if (attempt < 1 && !isClientError) continue; // one retry for server errors only
         if (gen != _loadGeneration || !mounted) return;
+        final displayError = isClientError
+            ? 'Chart data unavailable for this instrument.'
+            : e.toString();
         setState(() {
-          _seriesError = e.toString();
+          _seriesError = displayError;
           _loadingSeries = false;
           _chartStage = _series != null || _prevSeries != null
               ? 'stale'

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
 
-import '../../main.dart';
 import '../../state/trading_scope.dart';
 import '../../theme.dart';
 import '../../widgets/shared_widgets.dart';
@@ -18,7 +16,6 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(
@@ -30,28 +27,6 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Theme toggle
-            Text('Theme', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            CustomCard(
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                secondary: Icon(
-                  isDark ? LucideIcons.moon : LucideIcons.sun,
-                  color: isDark ? AppColors.accent : AppColors.warning,
-                ),
-                title: Text(isDark ? 'Dark Mode' : 'Light Mode'),
-                subtitle: Text(
-                  isDark ? 'Switch to light theme' : 'Switch to dark theme',
-                ),
-                value: isDark,
-                onChanged: (_) {
-                  ThemeController.of(context)?.onThemeToggle();
-                },
-              ),
-            ),
-            const SizedBox(height: 24),
-
             // Font size
             Text('Font Size', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),

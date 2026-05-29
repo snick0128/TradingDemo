@@ -4,7 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/backend_error_widget.dart';
-import 'holdings_screen.dart';
 import 'positions_screen.dart';
 import 'realised_pnl_screen.dart';
 
@@ -30,7 +29,7 @@ class PortfolioScreen extends StatelessWidget {
         store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice);
 
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Column(
@@ -51,7 +50,6 @@ class PortfolioScreen extends StatelessWidget {
           bottom: const TabBar(
             isScrollable: false,
             tabs: [
-              Tab(text: 'Holdings'),
               Tab(text: 'Positions'),
               Tab(text: 'P&L'),
             ],
@@ -59,7 +57,6 @@ class PortfolioScreen extends StatelessWidget {
         ),
         body: const TabBarView(
           children: [
-            HoldingsScreen(showAppBar: false),
             PositionsScreen(showAppBar: false),
             RealisedPnlScreen(showAppBar: false),
           ],

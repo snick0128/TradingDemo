@@ -1,6 +1,8 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
@@ -39,7 +41,7 @@ OptionsChain _buildChain(Stock stock, DateTime expiry) {
       : _basePriceFor(stock.symbol);
   final step = _strikeStepFor(stock.symbol, underlying);
   final atmStrike = (underlying / step).round() * step;
-  final strikes = List<double>.generate(9, (i) => atmStrike + (i - 4) * step);
+  final strikes = List<double>.generate(25, (i) => atmStrike + (i - 12) * step);
   final daysToExpiry = expiry.difference(DateTime.now()).inDays.clamp(1, 90);
 
   final strikesData = strikes.map((s) {
@@ -297,8 +299,9 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
         _chainCache['$symbol-$expiryStr'] = null;
         setState(() {
           _isLoadingChain = false;
-          // Only set error when we also have no mock fallback (stock is valid)
-          _error = null; // always fall back to mock, never show error
+          _error = BackendConfig.useLiveBackend
+              ? e.toString().replaceAll('Exception:', '').trim()
+              : null;
         });
       }
     }
@@ -331,67 +334,64 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       }
     }
 
-    final mockFallbackStock = Stock(
-      symbol: symbol,
-      name: symbol,
-      currentPrice: underlyingLtp,
-      changePercentage: 0,
-      sector: '',
-      exchange: _resolvedExchange,
-    );
-    final mockFallbackChain = _buildChain(mockFallbackStock, expiry);
-    final daysToExpiry = expiry.difference(DateTime.now()).inDays.clamp(1, 90);
-    final timeValue =
-        ((underlyingLtp * 0.012) * (daysToExpiry / 30)).clamp(0.5, double.infinity);
-    final ivBase = _resolvedExchange == 'NFO' ? 16.0 : 20.0;
-
-    OptionData mockCe(double strike) {
-      final intrinsic = (underlyingLtp - strike).clamp(0, double.infinity);
-      final decay = ((strike - atmStrike).abs() / step).clamp(0.0, 6.0);
-      final tv = (timeValue * (1 - decay * 0.12)).clamp(0.5, timeValue);
-      final ltp = (intrinsic + tv).clamp(0.05, underlyingLtp * 0.35);
-      final oi = (250000 + (6 - decay) * 42000).round();
-      return OptionData(
-        ltp: ltp,
-        oi: oi,
-        changeInOi: ((4 - decay) * 900).round(),
-        iv: ivBase + decay * 1.2,
-        volume: (oi * 0.32).round(),
-        delta: strike <= atmStrike ? 0.58 : 0.34,
-        gamma: 0.002,
-        theta: -8.5,
-        vega: 12.0,
-        bid: (ltp - 0.5).clamp(0.05, double.infinity),
-        ask: ltp + 0.5,
+    OptionStrike getMockStrike(double strike) {
+      final mockFallbackStock = Stock(
+        symbol: symbol,
+        name: symbol,
+        currentPrice: underlyingLtp,
+        changePercentage: 0,
+        sector: '',
+        exchange: _resolvedExchange,
       );
-    }
+      final mockFallbackChain = _buildChain(mockFallbackStock, expiry);
+      final daysToExpiry = expiry.difference(DateTime.now()).inDays.clamp(1, 90);
+      final timeValue =
+          ((underlyingLtp * 0.012) * (daysToExpiry / 30)).clamp(0.5, double.infinity);
+      final ivBase = _resolvedExchange == 'NFO' ? 16.0 : 20.0;
 
-    OptionData mockPe(double strike) {
-      final intrinsic = (strike - underlyingLtp).clamp(0, double.infinity);
-      final decay = ((strike - atmStrike).abs() / step).clamp(0.0, 6.0);
-      final tv = (timeValue * (1 - decay * 0.12)).clamp(0.5, timeValue);
-      final ltp = (intrinsic + tv).clamp(0.05, underlyingLtp * 0.35);
-      final oi = (250000 * 0.94 + (6 - decay) * 39480).round();
-      return OptionData(
-        ltp: ltp,
-        oi: oi,
-        changeInOi: ((3.5 - decay) * 850).round(),
-        iv: ivBase + 0.7 + decay,
-        volume: (oi * 0.28).round(),
-        delta: strike >= atmStrike ? -0.58 : -0.34,
-        gamma: 0.002,
-        theta: -8.0,
-        vega: 11.5,
-        bid: (ltp - 0.5).clamp(0.05, double.infinity),
-        ask: ltp + 0.5,
-      );
-    }
+      OptionData mockCe(double strike) {
+        final intrinsic = (underlyingLtp - strike).clamp(0, double.infinity);
+        final decay = ((strike - atmStrike).abs() / step).clamp(0.0, 6.0);
+        final tv = (timeValue * (1 - decay * 0.12)).clamp(0.5, timeValue);
+        final ltp = (intrinsic + tv).clamp(0.05, underlyingLtp * 0.35);
+        final oi = (250000 + (6 - decay) * 42000).round();
+        return OptionData(
+          ltp: ltp,
+          oi: oi,
+          changeInOi: ((4 - decay) * 900).round(),
+          iv: ivBase + decay * 1.2,
+          volume: (oi * 0.32).round(),
+          delta: strike <= atmStrike ? 0.58 : 0.34,
+          gamma: 0.002,
+          theta: -8.5,
+          vega: 12.0,
+          bid: (ltp - 0.5).clamp(0.05, double.infinity),
+          ask: ltp + 0.5,
+        );
+      }
 
-    final strikesData = apiStrikes.map<OptionStrike>((s) {
-      final m = s as Map<String, dynamic>;
-      final strike = (m['strike'] as num).toDouble();
+      OptionData mockPe(double strike) {
+        final intrinsic = (strike - underlyingLtp).clamp(0, double.infinity);
+        final decay = ((strike - atmStrike).abs() / step).clamp(0.0, 6.0);
+        final tv = (timeValue * (1 - decay * 0.12)).clamp(0.5, timeValue);
+        final ltp = (intrinsic + tv).clamp(0.05, underlyingLtp * 0.35);
+        final oi = (250000 * 0.94 + (6 - decay) * 39480).round();
+        return OptionData(
+          ltp: ltp,
+          oi: oi,
+          changeInOi: ((3.5 - decay) * 850).round(),
+          iv: ivBase + 0.7 + decay,
+          volume: (oi * 0.28).round(),
+          delta: strike >= atmStrike ? -0.58 : -0.34,
+          gamma: 0.002,
+          theta: -8.0,
+          vega: 11.5,
+          bid: (ltp - 0.5).clamp(0.05, double.infinity),
+          ask: ltp + 0.5,
+        );
+      }
 
-      final mockStrike = mockFallbackChain.strikes.firstWhere(
+      return mockFallbackChain.strikes.firstWhere(
         (ms) => ms.strike == strike,
         orElse: () => OptionStrike(
           strike: strike,
@@ -400,13 +400,20 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
           pe: mockPe(strike),
         ),
       );
+    };
 
-      final ceLtp = (m['ceLtp'] as num?)?.toDouble() ?? mockStrike.ce.ltp;
-      final ceOi = (m['ceOi'] as num?)?.toInt() ?? mockStrike.ce.oi;
-      final ceIv = (m['ceIv'] as num?)?.toDouble() ?? mockStrike.ce.iv;
-      final peLtp = (m['peLtp'] as num?)?.toDouble() ?? mockStrike.pe.ltp;
-      final peOi = (m['peOi'] as num?)?.toInt() ?? mockStrike.pe.oi;
-      final peIv = (m['peIv'] as num?)?.toDouble() ?? mockStrike.pe.iv;
+    final strikesData = apiStrikes.map<OptionStrike>((s) {
+      final m = s as Map<String, dynamic>;
+      final strike = (m['strike'] as num).toDouble();
+
+      final mockStrike = !BackendConfig.useLiveBackend ? getMockStrike(strike) : null;
+
+      final ceLtp = (m['ceLtp'] as num?)?.toDouble() ?? (mockStrike?.ce.ltp ?? 0.0);
+      final ceOi = (m['ceOi'] as num?)?.toInt() ?? (mockStrike?.ce.oi ?? 0);
+      final ceIv = (m['ceIv'] as num?)?.toDouble() ?? (mockStrike?.ce.iv ?? 0.0);
+      final peLtp = (m['peLtp'] as num?)?.toDouble() ?? (mockStrike?.pe.ltp ?? 0.0);
+      final peOi = (m['peOi'] as num?)?.toInt() ?? (mockStrike?.pe.oi ?? 0);
+      final peIv = (m['peIv'] as num?)?.toDouble() ?? (mockStrike?.pe.iv ?? 0.0);
 
       return OptionStrike(
         strike: strike,
@@ -416,26 +423,26 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
         ce: OptionData(
           ltp: ceLtp,
           oi: ceOi,
-          changeInOi: mockStrike.ce.changeInOi,
+          changeInOi: mockStrike?.ce.changeInOi ?? 0,
           iv: ceIv,
-          volume: mockStrike.ce.volume,
-          delta: mockStrike.ce.delta,
-          gamma: mockStrike.ce.gamma,
-          theta: mockStrike.ce.theta,
-          vega: mockStrike.ce.vega,
+          volume: mockStrike?.ce.volume ?? 0,
+          delta: mockStrike?.ce.delta ?? (strike <= atmStrike ? 0.58 : 0.34),
+          gamma: mockStrike?.ce.gamma ?? 0.002,
+          theta: mockStrike?.ce.theta ?? -8.5,
+          vega: mockStrike?.ce.vega ?? 12.0,
           bid: (ceLtp - 0.5).clamp(0.05, double.infinity),
           ask: ceLtp + 0.5,
         ),
         pe: OptionData(
           ltp: peLtp,
           oi: peOi,
-          changeInOi: mockStrike.pe.changeInOi,
+          changeInOi: mockStrike?.pe.changeInOi ?? 0,
           iv: peIv,
-          volume: mockStrike.pe.volume,
-          delta: mockStrike.pe.delta,
-          gamma: mockStrike.pe.gamma,
-          theta: mockStrike.pe.theta,
-          vega: mockStrike.pe.vega,
+          volume: mockStrike?.pe.volume ?? 0,
+          delta: mockStrike?.pe.delta ?? (strike >= atmStrike ? -0.58 : -0.34),
+          gamma: mockStrike?.pe.gamma ?? 0.002,
+          theta: mockStrike?.pe.theta ?? -8.0,
+          vega: mockStrike?.pe.vega ?? 11.5,
           bid: (peLtp - 0.5).clamp(0.05, double.infinity),
           ask: peLtp + 0.5,
         ),
@@ -477,7 +484,9 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
     final stock = store.stockBySymbol(_selectedSymbol);
     final expiryStr = DateFormat('yyyy-MM-dd').format(_selectedExpiry);
     final cachedChain = _chainCache['$_selectedSymbol-$expiryStr'];
-    final chain = cachedChain ?? _buildChain(stock, _selectedExpiry);
+    final chain = BackendConfig.useLiveBackend
+        ? cachedChain
+        : (cachedChain ?? _buildChain(stock, _selectedExpiry));
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -531,7 +540,9 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
                   ? _buildSkeletonLoader()
                   : _error != null
                       ? _buildErrorState()
-                      : _buildChainBody(stock, chain),
+                      : chain == null
+                          ? _buildEmptyState()
+                          : _buildChainBody(stock, chain),
             ),
           ],
         ),
@@ -771,7 +782,18 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
     int spotIndex = sortedStrikes.indexWhere((s) => s.strike > underlying);
     if (spotIndex == -1) spotIndex = sortedStrikes.length;
 
-    final itemCount = sortedStrikes.length + 1; // +1 for spot row
+    // Limit to top 6 and bottom 6 from the spot price
+    final belowSpot = sortedStrikes.sublist(
+      math.max(0, spotIndex - 6),
+      spotIndex,
+    );
+    final aboveSpot = sortedStrikes.sublist(
+      spotIndex,
+      math.min(sortedStrikes.length, spotIndex + 6),
+    );
+
+    final newSpotIndex = belowSpot.length;
+    final itemCount = belowSpot.length + aboveSpot.length + 1; // +1 for spot row
 
     return ListView.builder(
       physics: const ClampingScrollPhysics(),
@@ -779,15 +801,15 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       itemCount: itemCount,
       itemBuilder: (context, index) {
         // Insert spot price row at the right position
-        if (index == spotIndex) {
+        if (index == newSpotIndex) {
           return _SpotPriceRow(
             price: underlying,
             symbol: _selectedSymbol,
             stock: stock,
           );
         }
-        final strikeIdx = index > spotIndex ? index - 1 : index;
-        final s = sortedStrikes[strikeIdx];
+        final strikeIdx = index > newSpotIndex ? index - newSpotIndex - 1 : index;
+        final s = index > newSpotIndex ? aboveSpot[strikeIdx] : belowSpot[strikeIdx];
         return _StrikeRow(
           strike: s,
           callItm: s.strike < underlying,

@@ -4,7 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/pricing/price_provider.dart';
+import '../../models/market_settings.dart';
 import 'firestore_service.dart';
+import 'market_settings_service.dart';
 
 /// Production-grade execution engine.
 ///
@@ -49,13 +51,24 @@ class TradingService {
   TradingService({
     required FirestoreService firestore,
     required PriceProvider priceProvider,
+    MarketSettingsService? marketSettingsService,
   }) : _firestore = firestore,
-       _priceProvider = priceProvider;
+       _priceProvider = priceProvider {
+    _settingsSub =
+        (marketSettingsService ?? MarketSettingsService(db: firestore.raw))
+            .stream
+            .listen((s) => _cachedSettings = s);
+  }
 
   final FirestoreService _firestore;
   final PriceProvider _priceProvider;
   final _uuid = const Uuid();
   static const int _defaultMaxFillQtyPerTick = 250;
+
+  MarketSettings _cachedSettings = MarketSettings.defaults;
+  StreamSubscription<MarketSettings>? _settingsSub;
+
+  void dispose() => _settingsSub?.cancel();
 
   /// Retry wrapper for Firestore operations that may hit internal assertion failures.
   /// Uses exponential backoff with up to 3 attempts.
@@ -128,13 +141,21 @@ class TradingService {
   Stream<QuerySnapshot<Map<String, dynamic>>> ordersStream() => _firestore.raw
       .collection('orders')
       .orderBy('createdAt', descending: true)
-      .limit(100)
+      .limit(500)
       .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> orderRequestsStream() =>
       _firestore.raw
           .collection('order_requests')
           .where('status', isEqualTo: 'QUEUED')
+          .snapshots();
+
+  /// Admin-only: all order requests ordered by creation time (no status filter).
+  Stream<QuerySnapshot<Map<String, dynamic>>> orderRequestsAdminStream() =>
+      _firestore.raw
+          .collection('order_requests')
+          .orderBy('createdAt', descending: true)
+          .limit(500)
           .snapshots();
 
   /// Live trade feed for admin — denormalized, no joins needed.
@@ -167,6 +188,7 @@ class TradingService {
     String variety = 'MARKET',
     String product = 'MIS',
     String validity = 'DAY',
+    String exchange = 'NSE',
     double? price,
     double? triggerPrice,
     required String clientOrderId,
@@ -225,6 +247,7 @@ class TradingService {
           'variety': orderVariety,
           'product': orderProduct,
           'validity': orderValidity,
+          'exchange': exchange.toUpperCase(),
           'price': price,
           'triggerPrice': triggerPrice,
           'status': 'QUEUED',
@@ -499,6 +522,8 @@ class TradingService {
     final orderValidity = _normalizeValidity(
       (requestData['validity'] as String?) ?? 'DAY',
     );
+    final orderExchange =
+        (requestData['exchange'] as String?)?.trim().toUpperCase() ?? 'NSE';
     final price = requestData['price'] is num
         ? (requestData['price'] as num).toDouble()
         : null;
@@ -579,7 +604,7 @@ class TradingService {
       executionPrice = price ?? trigger;
       if (!shouldExecute) pendingReason = 'TRIGGER_WAIT';
     } else if (orderVariety == 'AMO') {
-      shouldExecute = _isMarketHours(DateTime.now());
+      shouldExecute = _cachedSettings.isTimeOpen(orderExchange);
       executionPrice = currentPrice;
       if (!shouldExecute) pendingReason = 'MARKET_CLOSED';
     }
@@ -641,6 +666,7 @@ class TradingService {
             variety: orderVariety,
             product: orderProduct,
             validity: orderValidity,
+            exchange: orderExchange,
             pendingReason: pendingReason,
             serverTs: serverTs,
           );
@@ -1257,6 +1283,7 @@ class TradingService {
     required String variety,
     required String product,
     required String validity,
+    String exchange = 'NSE',
     String? pendingReason,
     required Object serverTs,
   }) {
@@ -1271,6 +1298,7 @@ class TradingService {
       'variety': variety,
       'product': product,
       'validity': validity,
+      'exchange': exchange,
       'filled_qty': 0,
       'remaining_qty': qty,
       'status': 'PENDING',
@@ -1320,6 +1348,8 @@ class TradingService {
         final userId = orderData['userId'] as String;
         final limitPrice = _double(orderData['price']);
         final triggerPrice = _double(orderData['triggerPrice']);
+        final exchange =
+            (orderData['exchange'] as String?)?.toUpperCase() ?? 'NSE';
         if (remainingQty <= 0) return;
 
         bool shouldExecute = false;
@@ -1342,7 +1372,7 @@ class TradingService {
         } else if (variety == 'MARKET' || variety == 'ICEBERG') {
           shouldExecute = true;
         } else if (variety == 'AMO') {
-          shouldExecute = _isMarketHours(DateTime.now());
+          shouldExecute = _cachedSettings.isTimeOpen(exchange);
         }
 
         if (!shouldExecute) {
@@ -1678,20 +1708,6 @@ class TradingService {
         throw Exception('Trigger price is required for SL orders.');
       }
     }
-  }
-
-  /// Returns true if the current time is within NSE market hours (09:15–15:30 IST).
-  bool _isMarketHours(DateTime now) {
-    // Convert to IST (UTC+5:30)
-    final ist = now.toUtc().add(const Duration(hours: 5, minutes: 30));
-    final openMinutes = 9 * 60 + 15; // 09:15
-    final closeMinutes = 15 * 60 + 30; // 15:30
-    final currentMinutes = ist.hour * 60 + ist.minute;
-    final isWeekday =
-        ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
-    return isWeekday &&
-        currentMinutes >= openMinutes &&
-        currentMinutes <= closeMinutes;
   }
 
   double _balance(Map<String, dynamic> data) {

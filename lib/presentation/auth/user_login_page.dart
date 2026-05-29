@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../app/app_scope.dart';
+import '../../widgets/tk_logo.dart';
 import '../../screens/auth/register_screen.dart';
 import '../../theme.dart';
 
@@ -433,19 +434,7 @@ class _BrandingPanel extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      LucideIcons.candlestickChart,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
+                  const TkLogo.flat(size: 24),
                   const SizedBox(width: 12),
                   const Text(
                     'Trade Kosh',
@@ -538,19 +527,7 @@ class _MobileBrandingHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  LucideIcons.candlestickChart,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
+              const TkLogo.flat(size: 20),
               const SizedBox(width: 10),
               const Text(
                 'Trade Kosh',

@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
-import '../main.dart';
 import '../state/security_scope.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -14,7 +13,6 @@ import '../models/trading_models.dart';
 import 'settings_hub_screen.dart';
 import 'settings/about_screen.dart';
 import 'settings/app_permissions_screen.dart';
-import 'settings/appearance_settings_screen.dart';
 import 'settings/help_support_screen.dart';
 import 'settings/linked_accounts_screen.dart';
 import 'settings/security_settings_screen.dart';
@@ -271,15 +269,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             subtitle: const Text('Price movement and trigger notifications'),
             value: _priceAlerts,
             onChanged: (value) => setState(() => _priceAlerts = value),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Appearance'),
-            subtitle: const Text('Dark Mode (BETA)'),
-            value: Theme.of(context).brightness == Brightness.dark,
-            onChanged: (value) {
-              ThemeController.of(context)?.onThemeToggle();
-            },
           ),
         ],
       ),

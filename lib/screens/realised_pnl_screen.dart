@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
@@ -84,7 +83,11 @@ class RealisedPnlScreen extends StatelessWidget {
             ),
           );
 
-    if (!showAppBar) return Scaffold(body: body);
+    // Do NOT wrap in Scaffold when embedded inside another Scaffold (e.g.
+    // TabBarView in PortfolioScreen). Nested Scaffolds cause Flutter's
+    // box.dart constraint assertions to fire on Expanded / double.infinity
+    // children. The parent Scaffold already provides bounded constraints.
+    if (!showAppBar) return body;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Realised P&L')),
@@ -95,7 +98,7 @@ class RealisedPnlScreen extends StatelessWidget {
   Widget _buildEmptyState() {
     return const Center(
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(LucideIcons.clipboardList, size: 48, color: AppColors.border),
           SizedBox(height: 16),

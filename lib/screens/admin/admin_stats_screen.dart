@@ -265,7 +265,7 @@ class _SidePanelState extends State<_SidePanel>
       children: [
         TabBar(
           controller: _tab,
-          tabs: const [Tab(text: 'Live Feed'), Tab(text: '⚠ Anomalies')],
+          tabs: const [Tab(text: 'Live Feed'), Tab(text: 'Live Trades')],
           labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
           unselectedLabelStyle: const TextStyle(fontSize: 11),
         ),
@@ -275,7 +275,7 @@ class _SidePanelState extends State<_SidePanel>
             controller: _tab,
             children: [
               _LiveFeed(store: widget.store),
-              _AnomalyPanel(store: widget.store),
+              _LiveTradesPanel(store: widget.store),
             ],
           ),
         ),
@@ -443,50 +443,21 @@ class _FeedTile extends StatelessWidget {
   }
 }
 
-// ── Anomaly Panel ──────────────────────────────────────────────────────────────
+// ── Live Trades Panel — shows open/unsettled positions ─────────────────────────
 
-class _AnomalyPanel extends StatelessWidget {
+class _LiveTradesPanel extends StatelessWidget {
   final AdminStore store;
-  const _AnomalyPanel({required this.store});
+  const _LiveTradesPanel({required this.store});
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final cutoff = now.subtract(const Duration(minutes: 1));
-    final recentOrders = store.masterOrderBook.where((o) => o.dateTime.isAfter(cutoff)).toList();
+    final liveTrades = store.masterOrderBook
+        .where((o) =>
+            o.status == OrderStatus.pending ||
+            o.status == OrderStatus.partiallyExecuted)
+        .toList();
 
-    final userCounts = <String, int>{};
-    final userVolumes = <String, double>{};
-    for (final o in recentOrders) {
-      userCounts[o.userId] = (userCounts[o.userId] ?? 0) + 1;
-      userVolumes[o.userId] = (userVolumes[o.userId] ?? 0) + o.quantity * o.price;
-    }
-
-    final anomalies = <_Anomaly>[];
-    for (final e in userCounts.entries) {
-      if (e.value > 10) {
-        anomalies.add(_Anomaly(e.key, '${e.value} trades in 1 min', true));
-      } else if (e.value > 5) {
-        anomalies.add(_Anomaly(e.key, '${e.value} trades in 1 min', false));
-      }
-    }
-    for (final e in userVolumes.entries) {
-      if (e.value > 1000000) {
-        anomalies.add(_Anomaly(
-          e.key,
-          'Volume ₹${(e.value / 100000).toStringAsFixed(1)}L in 1 min',
-          true,
-        ));
-      }
-    }
-    // Check for high-value single orders
-    for (final o in recentOrders) {
-      if (o.quantity * o.price > 5000000) {
-        anomalies.add(_Anomaly(o.userId, 'Large order: ${o.symbol} ₹${(o.quantity * o.price / 100000).toStringAsFixed(1)}L', true));
-      }
-    }
-
-    if (anomalies.isEmpty) {
+    if (liveTrades.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -498,11 +469,15 @@ class _AnomalyPanel extends StatelessWidget {
                 color: AppColors.success.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_circle_outline, color: AppColors.success, size: 24),
+              child: const Icon(
+                Icons.check_circle_outline,
+                color: AppColors.success,
+                size: 24,
+              ),
             ),
             const SizedBox(height: 10),
             const Text(
-              'No anomalies',
+              'No open trades',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
@@ -511,7 +486,7 @@ class _AnomalyPanel extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             const Text(
-              'All trading activity looks normal.',
+              'All trades have been settled.',
               style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
           ],
@@ -519,71 +494,168 @@ class _AnomalyPanel extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.all(10),
-      itemCount: anomalies.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (_, i) {
-        final a = anomalies[i];
-        final color = a.isHigh ? AppColors.danger : AppColors.warning;
-        final short = a.userId.substring(0, a.userId.length.clamp(0, 7));
-        return Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(0.25)),
-          ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
-              Icon(
-                a.isHigh ? Icons.warning_rounded : Icons.info_outline,
-                color: color,
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '$short…',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                    ),
-                    Text(
-                      a.message,
-                      style: TextStyle(fontSize: 10, color: color),
-                    ),
-                  ],
-                ),
-              ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(3),
+                width: 7,
+                height: 7,
+                decoration: const BoxDecoration(
+                  color: AppColors.warning,
+                  shape: BoxShape.circle,
                 ),
-                child: Text(
-                  a.isHigh ? 'HIGH' : 'MED',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    color: color,
-                  ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Unsettled / Pending',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
                 ),
+              ),
+              const Spacer(),
+              Text(
+                '${liveTrades.length} open',
+                style: const TextStyle(fontSize: 10, color: AppColors.warning),
               ),
             ],
           ),
-        );
-      },
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView.builder(
+            itemCount: liveTrades.length,
+            itemBuilder: (_, i) => _LiveTradeTile(order: liveTrades[i]),
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _Anomaly {
-  final String userId, message;
-  final bool isHigh;
-  const _Anomaly(this.userId, this.message, this.isHigh);
+class _LiveTradeTile extends StatelessWidget {
+  final AdminOrderRecord order;
+  const _LiveTradeTile({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final isBuy = order.type == OrderType.buy;
+    final sideColor = isBuy ? AppColors.success : AppColors.danger;
+    final total = order.quantity * order.price;
+    final isPartial = order.status == OrderStatus.partiallyExecuted;
+    final statusColor = isPartial ? AppColors.warning : AppColors.warning;
+    final statusLabel = isPartial ? 'PARTIAL' : 'PENDING';
+    final time = DateFormat('HH:mm:ss').format(order.dateTime);
+    final uid = order.userClientId.isNotEmpty
+        ? order.userClientId
+        : order.userId.substring(0, order.userId.length.clamp(0, 6));
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: AppColors.border.withOpacity(0.4)),
+          left: BorderSide(color: statusColor, width: 2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            decoration: BoxDecoration(
+              color: sideColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              isBuy ? 'BUY' : 'SELL',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                color: sideColor,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.symbol,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Text(
+                  uid,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                total > 0 ? '₹${_fmt(total)}' : '${order.quantity} qty',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      statusLabel,
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w800,
+                        color: statusColor,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    time,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _fmt(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
+    if (v >= 100000) return '${(v / 100000).toStringAsFixed(1)}L';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(0);
+  }
 }
 
 // ── Order Table ────────────────────────────────────────────────────────────────

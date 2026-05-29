@@ -1,8 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import '../../app/app_scope.dart';
+import '../../domain/auth/auth_session.dart';
 import '../../theme.dart';
 
+/// Routing-only splash — shown briefly while the auth session resolves.
+///
+/// The web/index.html already shows the branded loading screen while Flutter
+/// initialises (JS download + engine boot). Showing a second Flutter splash
+/// after that creates an unacceptable double-splash experience.
+///
+/// Solution: this screen is invisible (same background as the web splash so
+/// the transition is seamless) and navigates to /app/login as soon as the
+/// [AuthSession] finishes loading. GoRouter's redirect then sends already-
+/// authenticated users straight to /app/dashboard automatically.
+///
+/// Max safety fallback: navigate after 3 seconds in case the auth listener
+/// never fires (network offline scenario).
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -10,30 +24,40 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _fadeCtrl;
-  late final Animation<double> _fade;
+class _SplashScreenState extends State<SplashScreen> {
+  AuthSession? _session;
 
   @override
-  void initState() {
-    super.initState();
-    _fadeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    )..forward();
-    _fade = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_session != null) return; // only bind once
 
-    // After 2 seconds, navigate to login via GoRouter.
-    // GoRouter's redirect automatically sends already-authenticated users
-    // straight to /app/dashboard — no manual auth check needed here.
-    Future.delayed(const Duration(seconds: 2), _navigate);
+    // Try to get AuthSession from AppScope if Firebase is configured.
+    final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    if (scope?.notifier != null) {
+      _session = scope!.notifier;
+      if (!_session!.isLoading) {
+        // Auth already resolved (e.g. fast page reload with cached session).
+        WidgetsBinding.instance.addPostFrameCallback((_) => _navigate());
+      } else {
+        _session!.addListener(_onAuthResolved);
+      }
+    } else {
+      // Firebase not configured — navigate after one frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _navigate());
+    }
+
+    // Safety fallback: navigate after 3 s even if auth never resolves
+    // (e.g. offline, Firestore unreachable on first open).
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _navigate();
+    });
   }
 
-  @override
-  void dispose() {
-    _fadeCtrl.dispose();
-    super.dispose();
+  void _onAuthResolved() {
+    if (_session == null || _session!.isLoading) return;
+    _session!.removeListener(_onAuthResolved);
+    if (mounted) _navigate();
   }
 
   void _navigate() {
@@ -42,57 +66,18 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   @override
+  void dispose() {
+    _session?.removeListener(_onAuthResolved);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Transparent scaffold — background matches the web HTML splash (#FAFAFA)
+    // so the transition from web splash → Flutter is seamless (no flash).
+    return const Scaffold(
       backgroundColor: AppColors.background,
-      body: FadeTransition(
-        opacity: _fade,
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: const Icon(
-                  LucideIcons.barChart2,
-                  size: 44,
-                  color: AppColors.primary,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Trade Kosh',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Professional Trading Platform',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 48),
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppColors.primary.withOpacity(0.5),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      body: SizedBox.expand(),
     );
   }
 }

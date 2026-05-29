@@ -26,7 +26,7 @@ class SettingsHubScreen extends StatelessWidget {
           _SettingsTile(
             icon: LucideIcons.palette,
             title: 'Appearance',
-            subtitle: 'Dark mode, theme colors, font size',
+            subtitle: 'Font size and display preferences',
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(

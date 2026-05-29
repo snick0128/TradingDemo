@@ -345,11 +345,13 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     final series = _series;
     if (series == null) return const SizedBox();
 
-    final chartData = _chartType == ChartType.heikinAshi
+    // Validate raw candles before passing to chart builder
+    final rawData = _chartType == ChartType.heikinAshi
         ? TradingChartService.toHeikinAshi(series.data)
         : series.data;
+    final chartData = _validateCandles(rawData);
 
-    if (chartData.isEmpty || (chartData.length <= 1 && chartData.first.close <= 0)) {
+    if (chartData.isEmpty) {
       return const Center(
         child: Text(
           'No data available',
@@ -561,6 +563,35 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
 
 
+  // ── Candle validation ────────────────────────────────────────────────────────
+
+  /// Returns a clean, sorted, de-duplicated list with invalid/future candles
+  /// removed. This is the root cause of the "chart compressed to far right"
+  /// bug: a few bad timestamps pushed axisMax far into the future, then
+  /// initialZoomPosition=1.0 rendered an empty right-hand gap.
+  List<TradingCandle> _validateCandles(List<TradingCandle> raw) {
+    // Allow timestamps up to 1 hour in the future (clock skew tolerance)
+    final cutoff = DateTime.now().toUtc().add(const Duration(hours: 1));
+
+    var valid = raw.where((c) {
+      if (c.time.isAfter(cutoff)) return false;          // future timestamp
+      if (c.close <= 0 || c.open <= 0) return false;     // zero price
+      if (c.high < c.low) return false;                  // inverted range
+      if (c.high < c.close || c.high < c.open) return false; // high violated
+      if (c.low > c.close || c.low > c.open) return false;   // low violated
+      return true;
+    }).toList();
+
+    // Ascending sort by timestamp
+    valid.sort((a, b) => a.time.compareTo(b.time));
+
+    // Remove duplicate timestamps (keep last occurrence, which is most recent)
+    final seen = <DateTime>{};
+    valid = valid.reversed.where((c) => seen.add(c.time)).toList().reversed.toList();
+
+    return valid;
+  }
+
   Widget _buildChart(
     List<TradingCandle> chartData,
     TradingChartSeries series,
@@ -574,27 +605,43 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         ),
       );
     }
-    final closes = chartData.map((c) => c.close).toList();
+
+    // Validate and clean candle data — prevents bad timestamps from creating
+    // empty right-side gaps that compress the visible bars to one edge.
+    final data = _validateCandles(chartData);
+    if (data.isEmpty) {
+      return const Center(
+        child: Text('No valid candle data', style: TextStyle(color: _kAxisColor)),
+      );
+    }
+
+    // Debug logging
+    debugPrint('[Chart] ${widget.symbol} tf=${_timeframe.name} '
+        'raw=${chartData.length} valid=${data.length} '
+        'first=${data.first.time.toIso8601String()} '
+        'last=${data.last.time.toIso8601String()}');
+
+    final closes = data.map((c) => c.close).toList();
     final emaValues = _showEma ? TradingChartService.ema(closes, 20) : null;
     final bbValues = _showBollinger
         ? TradingChartService.bollingerBands(closes, 20, 2.0)
         : null;
 
-    // Determine if overall trend is up for line/area color
     final isUp = series.close >= series.open;
 
-    // Show ~40 of the most-recent candles (right-anchored, no empty gaps).
-    final n = chartData.length;
-    final initialZoom = n > 40 ? (40 / n).clamp(0.02, 1.0) : 1.0;
-    // Clamp X axis to data range so no empty pre/post-market gaps appear.
-    final axisMin = chartData.first.time;
-    final axisMax = chartData.last.time.add(
-      _timeframe == ChartTimeframe.m1 || _timeframe == ChartTimeframe.m5
-          ? const Duration(minutes: 5)
-          : _timeframe == ChartTimeframe.m15
-          ? const Duration(minutes: 15)
-          : const Duration(days: 1),
-    );
+    // Visible window: show the most-recent ~60 candles, right-anchored.
+    // IMPORTANT: axisMax must equal the LAST data timestamp exactly — adding
+    // any extra duration here creates the empty right-side gap that causes
+    // the compressed-to-one-side rendering bug.
+    final n = data.length;
+    final visibleCount = 60.clamp(1, n);
+    final initialZoom = (visibleCount / n).clamp(0.02, 1.0);
+    final axisMin = data.first.time;
+    final axisMax = data.last.time; // NO extra padding — prevents the empty gap
+
+    debugPrint('[Chart] ${widget.symbol} n=$n visible=$visibleCount '
+        'zoom=${initialZoom.toStringAsFixed(3)} '
+        'axisMin=${axisMin.toIso8601String()} axisMax=${axisMax.toIso8601String()}');
 
     return SfCartesianChart(
       key: ValueKey(_chartVersion),
@@ -674,9 +721,9 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
             : [],
       ),
       series: <CartesianSeries>[
-        ..._buildMainSeries(chartData, series),
-        if (emaValues != null) ..._buildEmaSeries(chartData, emaValues),
-        if (bbValues != null) ..._buildBollingerSeries(chartData, bbValues),
+        ..._buildMainSeries(data, series),
+        if (emaValues != null) ..._buildEmaSeries(data, emaValues),
+        if (bbValues != null) ..._buildBollingerSeries(data, bbValues),
         if (compareSeries != null) _buildCompareSeries(compareSeries),
       ],
     );

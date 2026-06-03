@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../config/backend_config.dart';
@@ -45,18 +46,25 @@ class BackendApiService {
   Map<String, String> get _headers => {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
+    // Gzip compression — reduces payload size by ~70% for large JSON responses
+    // (instrument lists, options chains). The http.Client decompresses transparently.
+    'Accept-Encoding': 'gzip, deflate',
   };
 
-  // Render free-tier cold starts can take up to 40s. Use 35s as the cap
-  // so requests survive a cold start without flooding the UI with errors.
-  static const _getTimeout = Duration(seconds: 35);
+  // Render free-tier cold starts can take up to 40s. Use 35s as the cap for
+  // order/portfolio requests so they survive a cold start. Search uses its own
+  // shorter timeout (see _searchTimeout) to give fast feedback instead of hanging.
+  static const _getTimeout    = Duration(seconds: 35);
+  static const _searchTimeout = Duration(seconds: 8);
 
   Future<Map<String, dynamic>> _get(
     String path, {
     Duration? ttl,
+    Duration? timeout,
     int attempt = 0,
   }) async {
-    final effectiveTtl = ttl ?? _shortTtl;
+    final effectiveTtl     = ttl ?? _shortTtl;
+    final effectiveTimeout = timeout ?? _getTimeout;
     final now = DateTime.now();
     final cached = _cache[path];
     if (cached != null && now.isBefore(cached.expiry)) {
@@ -67,12 +75,12 @@ class BackendApiService {
     final pending = _inFlightGets[path];
     if (pending != null) return pending;
 
-    print('[BackendAPI] GET: $uri (attempt ${attempt + 1})');
+    debugPrint('[BackendAPI] GET: $path (attempt ${attempt + 1}, timeout=${effectiveTimeout.inSeconds}s)');
     final request = () async {
       final response = await _client
           .get(uri, headers: _headers)
-          .timeout(_getTimeout);
-      print('[BackendAPI] Response: ${response.statusCode} for $path');
+          .timeout(effectiveTimeout);
+      debugPrint('[BackendAPI] ${response.statusCode} $path');
       final result = _parse(response);
       _cache[path] = _CacheEntry(data: result, expiry: now.add(effectiveTtl));
       return result;
@@ -84,17 +92,24 @@ class BackendApiService {
     } on BackendException {
       rethrow; // 4xx/5xx — pass the real backend error through
     } on TimeoutException {
-      if (cached != null) return cached.data; // stale-while-revalidate
-      // One automatic retry for timeouts — covers Render cold starts
-      if (attempt == 0) {
+      if (cached != null) {
+        debugPrint('[BackendAPI] Timeout on $path — serving stale cache');
+        return cached.data; // stale-while-revalidate
+      }
+      // One automatic retry for timeouts on the long-timeout path — covers Render cold starts.
+      // Short-timeout callers (search) should NOT retry automatically — they fail fast.
+      if (attempt == 0 && effectiveTimeout == _getTimeout) {
         _inFlightGets.remove(path);
-        return _get(path, ttl: ttl, attempt: 1);
+        return _get(path, ttl: ttl, timeout: timeout, attempt: 1);
       }
       throw BackendException(
-        'Server is waking up — please wait a moment and try again.',
+        'Server is waking up — please try again in a moment.',
       );
     } catch (e) {
-      if (cached != null) return cached.data; // stale-while-revalidate
+      if (cached != null) {
+        debugPrint('[BackendAPI] Network error on $path — serving stale cache');
+        return cached.data; // stale-while-revalidate
+      }
       throw BackendException(
         'Could not reach the server. Please check your connection and try again.',
       );
@@ -313,7 +328,10 @@ class BackendApiService {
   }
 
   /// Universal search across all exchanges and segments.
-  /// Returns enriched results with LTP and change data.
+  ///
+  /// Uses an 8-second timeout (vs 35s for order/portfolio calls) so that
+  /// search fails fast on Render cold starts and the UI can show a retry
+  /// prompt immediately instead of freezing for 35 seconds.
   Future<List<Map<String, dynamic>>> searchUniversal(
     String query, {
     String? exchange,
@@ -325,7 +343,7 @@ class BackendApiService {
     if (exchange != null && exchange != 'ALL') {
       path += '&exchange=${Uri.encodeComponent(exchange)}';
     }
-    final res = await _get(path, ttl: _mediumTtl);
+    final res = await _get(path, ttl: _mediumTtl, timeout: _searchTimeout);
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 

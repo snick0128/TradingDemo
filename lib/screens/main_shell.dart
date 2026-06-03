@@ -8,6 +8,7 @@ import '../state/security_scope.dart';
 import '../state/security_store.dart';
 import '../widgets/shared_widgets.dart';
 import 'dashboard_screen.dart';
+import 'ipo_screen.dart';
 import 'orders_screen.dart';
 import 'portfolio_screen.dart';
 import 'wallet_screen.dart';
@@ -65,6 +66,7 @@ class _MainShellState extends State<MainShell> {
     OrdersScreen(),
     PortfolioScreen(),
     WalletScreen(),
+    IPOScreen(showAppBar: false),
     ProfileScreen(),
   ];
 
@@ -145,6 +147,10 @@ class _MainShellState extends State<MainShell> {
                           label: Text('Wallet'),
                         ),
                         NavigationRailDestination(
+                          icon: Icon(LucideIcons.barChart2),
+                          label: Text('IPO'),
+                        ),
+                        NavigationRailDestination(
                           icon: Icon(LucideIcons.user),
                           label: Text('Profile'),
                         ),
@@ -203,6 +209,10 @@ class _MainShellState extends State<MainShell> {
                             BottomNavigationBarItem(
                               icon: Icon(LucideIcons.wallet),
                               label: 'Wallet',
+                            ),
+                            BottomNavigationBarItem(
+                              icon: Icon(LucideIcons.barChart2),
+                              label: 'IPO',
                             ),
                             BottomNavigationBarItem(
                               icon: Icon(LucideIcons.user),

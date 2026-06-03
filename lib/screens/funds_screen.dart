@@ -5,42 +5,90 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 import 'add_funds_screen.dart';
 import 'withdraw_funds_screen.dart';
 
-// ── Indian currency formatter (full, no abbreviations) ────────────────────────
-String _formatCurrency(double value) {
+// ── Indian currency formatter ─────────────────────────────────────────────────
+String _fmt(double v) {
   final formatter = NumberFormat('#,##,##0.00', 'en_IN');
-  return '₹${formatter.format(value)}';
+  return '₹${formatter.format(v)}';
 }
 
-class FundsScreen extends StatelessWidget {
-  final bool showAppBar;
+// ── FundsScreen ───────────────────────────────────────────────────────────────
+//
+// Converted from StatelessWidget to StatefulWidget so it explicitly subscribes
+// to TradingStore via addListener(). This guarantees live updates on every
+// price tick and Firestore change regardless of TabBarView mount/unmount cycles.
+// A StatelessWidget relying on InheritedWidget can silently lose its dependency
+// subscription when the tab is scrolled out of the PageView cache range.
 
+class FundsScreen extends StatefulWidget {
+  final bool showAppBar;
   const FundsScreen({super.key, this.showAppBar = true});
 
   @override
+  State<FundsScreen> createState() => _FundsScreenState();
+}
+
+class _FundsScreenState extends State<FundsScreen>
+    with AutomaticKeepAliveClientMixin {
+  TradingStore? _store;
+
+  // Keep this tab alive inside TabBarView so the store subscription is
+  // never dropped when the user switches to another tab.
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store == store) return;
+    _store?.removeListener(_onStoreUpdate);
+    _store = store;
+    store.addListener(_onStoreUpdate);
+  }
+
+  @override
+  void dispose() {
+    _store?.removeListener(_onStoreUpdate);
+    super.dispose();
+  }
+
+  void _onStoreUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
+
+  @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final mb = store.marginBreakdown;
+    super.build(context); // required by AutomaticKeepAliveClientMixin
+
+    final store = _store ?? TradingScope.read(context);
+
+    // ── Live values (always from streaming store, never from stale cache) ──
+    final balance         = store.balance;           // free cash after margin blocked
+    final usedMargin      = store.usedMargin;        // sum of marginUsed on open positions
+    final equity          = store.equity;            // walletBalance + runningPnL
+    final runningPnl      = store.runningPnL;        // sum of unrealizedPnl on open positions
+    final availableMargin = store.availableMargin;   // max(0, equity - usedMargin)
+    final marginShortfall = store.marginShortfall;   // max(0, usedMargin - equity)
+    final walletBalance   = balance + usedMargin;    // total deposited funds
+
+    // Realized P&L: today's executed sell orders
     final now = DateTime.now();
     bool isSameDay(DateTime d) =>
         d.year == now.year && d.month == now.month && d.day == now.day;
 
-    final unrealizedPnl = store.positions.fold(
-      0.0,
-      (s, p) => s + p.unrealizedPnl,
-    );
     final realizedPnl = store.orders
-        .where(
-          (o) =>
-              o.status == OrderStatus.executed &&
-              o.type == OrderType.sell &&
-              isSameDay(o.executedAt ?? o.dateTime),
-        )
+        .where((o) =>
+            o.status == OrderStatus.executed &&
+            o.type == OrderType.sell &&
+            isSameDay(o.executedAt ?? o.dateTime))
         .fold(0.0, (sum, o) => sum + (o.pnl ?? 0.0));
-    final todayPnl = unrealizedPnl + realizedPnl;
 
     final body = Container(
       color: const Color(0xFFFAFAFA),
@@ -49,39 +97,89 @@ class FundsScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 16),
-            _buildHeroCard(context, mb),
+            _HeroCard(
+              walletBalance:   walletBalance,
+              runningPnl:      runningPnl,
+              equity:          equity,
+              usedMargin:      usedMargin,
+              availableMargin: availableMargin,
+              marginShortfall: marginShortfall,
+            ),
             const SizedBox(height: 16),
-            _buildBreakdownSection(context, mb),
+            _BreakdownSection(
+              walletBalance:   walletBalance,
+              runningPnl:      runningPnl,
+              equity:          equity,
+              usedMargin:      usedMargin,
+              availableMargin: availableMargin,
+              marginShortfall: marginShortfall,
+            ),
             const SizedBox(height: 24),
-            _buildQuickStatsRow(context, todayPnl, realizedPnl, unrealizedPnl),
+            _PnlStrip(
+              runningPnl:  runningPnl,
+              realizedPnl: realizedPnl,
+            ),
             const SizedBox(height: 80),
           ],
         ),
       ),
     );
 
-    if (!showAppBar) return body;
-
+    if (!widget.showAppBar) return body;
     return Scaffold(
       appBar: AppBar(title: const Text('Funds')),
       body: body,
     );
   }
+}
 
-  Widget _buildHeroCard(BuildContext context, MarginBreakdown mb) {
+// ── Hero card ─────────────────────────────────────────────────────────────────
+
+class _HeroCard extends StatelessWidget {
+  final double walletBalance;
+  final double runningPnl;
+  final double equity;
+  final double usedMargin;
+  final double availableMargin;
+  final double marginShortfall;
+
+  const _HeroCard({
+    required this.walletBalance,
+    required this.runningPnl,
+    required this.equity,
+    required this.usedMargin,
+    required this.availableMargin,
+    required this.marginShortfall,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasShortfall = marginShortfall > 0;
+    final pnlColor = runningPnl >= 0
+        ? const Color(0xFF00C853)
+        : const Color(0xFFFF5252);
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF1565C0), Color(0xFF1E88E5)],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
+          colors: [Color(0xFF0D2B6B), Color(0xFF1565C0)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1565C0).withOpacity(0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         children: [
+          // ── Primary: Equity ────────────────────────────────────────────
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -90,7 +188,7 @@ class FundsScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Available cash',
+                      'Equity',
                       style: GoogleFonts.inter(
                         fontSize: 12,
                         fontWeight: FontWeight.w400,
@@ -98,14 +196,13 @@ class FundsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    // FittedBox keeps the amount on one line regardless of value size
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        _formatCurrency(mb.availableCash),
+                        _fmt(equity),
                         style: GoogleFonts.inter(
-                          fontSize: 26,
+                          fontSize: 28,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
                           fontFeatures: const [FontFeature.tabularFigures()],
@@ -119,8 +216,7 @@ class FundsScreen extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _actionButton(
-                    context,
+                  _ActionButton(
                     label: 'Add Funds',
                     onTap: () => Navigator.push(
                       context,
@@ -128,33 +224,39 @@ class FundsScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _actionButton(
-                    context,
+                  _ActionButton(
                     label: 'Withdraw',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const WithdrawFundsScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const WithdrawFundsScreen()),
                     ),
                   ),
                 ],
               ),
             ],
           ),
+
           Container(
             margin: const EdgeInsets.symmetric(vertical: 16),
             height: 1,
-            color: Colors.white.withOpacity(0.2),
+            color: Colors.white.withOpacity(0.18),
           ),
+
+          // ── Secondary: Wallet Balance | Running P&L | Available Margin ─
           Row(
             children: [
               Expanded(
+                child: _HeroMetric(
+                  label: 'Wallet Balance',
+                  value: walletBalance,
+                  align: CrossAxisAlignment.start,
+                ),
+              ),
+              Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Margin used',
+                      'Running P&L',
                       style: GoogleFonts.inter(
                         fontSize: 11,
                         color: Colors.white.withOpacity(0.65),
@@ -163,13 +265,12 @@ class FundsScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     FittedBox(
                       fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
                       child: Text(
-                        _formatCurrency(mb.marginUsed),
+                        _fmt(runningPnl),
                         style: GoogleFonts.inter(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                          color: pnlColor,
                           fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
@@ -178,51 +279,107 @@ class FundsScreen extends StatelessWidget {
                 ),
               ),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'Margin available',
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: Colors.white.withOpacity(0.65),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        _formatCurrency(mb.marginAvailable),
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ),
-                  ],
+                child: _HeroMetric(
+                  label: 'Available Margin',
+                  value: availableMargin,
+                  align: CrossAxisAlignment.end,
+                  valueColor: hasShortfall ? const Color(0xFFFF5252) : null,
                 ),
               ),
             ],
           ),
+
+          // ── Shortfall warning strip (only when in shortfall) ───────────
+          if (hasShortfall) ...[
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD50000).withOpacity(0.22),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFF5252).withOpacity(0.5)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 13),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Margin Shortfall: ${_fmt(marginShortfall)} — add funds or reduce positions',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+}
 
-  Widget _actionButton(
-    BuildContext context, {
-    required String label,
-    required VoidCallback onTap,
-  }) {
+class _HeroMetric extends StatelessWidget {
+  final String label;
+  final double value;
+  final CrossAxisAlignment align;
+  final Color? valueColor;
+
+  const _HeroMetric({
+    required this.label,
+    required this.value,
+    required this.align,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: align,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            color: Colors.white.withOpacity(0.65),
+          ),
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            _fmt(value),
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: valueColor ?? Colors.white,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ActionButton({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        height: 36,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
           border: Border.all(color: Colors.white, width: 1),
           borderRadius: BorderRadius.circular(20),
@@ -231,7 +388,7 @@ class FundsScreen extends StatelessWidget {
           child: Text(
             label,
             style: GoogleFonts.inter(
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: FontWeight.w500,
               color: Colors.white,
             ),
@@ -240,8 +397,32 @@ class FundsScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildBreakdownSection(BuildContext context, MarginBreakdown mb) {
+// ── Breakdown section ─────────────────────────────────────────────────────────
+
+class _BreakdownSection extends StatelessWidget {
+  final double walletBalance;
+  final double runningPnl;
+  final double equity;
+  final double usedMargin;
+  final double availableMargin;
+  final double marginShortfall;
+
+  const _BreakdownSection({
+    required this.walletBalance,
+    required this.runningPnl,
+    required this.equity,
+    required this.usedMargin,
+    required this.availableMargin,
+    required this.marginShortfall,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasShortfall = marginShortfall > 0;
+    final pnlColor = runningPnl >= 0 ? AppColors.success : AppColors.danger;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -260,156 +441,231 @@ class FundsScreen extends StatelessWidget {
           margin: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: Colors.white,
-            border: Border.all(color: const Color(0xFFE0E0E0), width: 1),
+            border: Border.all(color: const Color(0xFFE0E0E0)),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             children: [
-              _breakdownRow(
-                'Available Cash',
-                mb.availableCash,
-                valueColor: const Color(0xFF00C853),
-              ),
-              _separator(),
-              _breakdownRow(
-                'Margin Used',
-                mb.marginUsed,
-                valueColor: mb.marginUsed > 0
-                    ? const Color(0xFFD50000)
-                    : const Color(0xFF9E9E9E),
-              ),
-              _separator(),
-              _breakdownRow('Margin Available', mb.marginAvailable),
-              _separator(),
-              _breakdownRow('Collateral Value', mb.collateralValue),
-              _separator(),
-              _breakdownRow('SPAN Margin', mb.spanMargin),
-              _separator(),
-              _breakdownRow('Exposure Margin', mb.exposureMargin),
-              _separator(),
-              _breakdownRow('Peak Margin', mb.peakMargin),
-              Container(height: 1, color: const Color(0xFFE0E0E0)),
+              _Row('Wallet Balance', walletBalance),
+              _Sep(),
+              _Row('Running P&L',   runningPnl,  color: pnlColor),
+              _Sep(),
+              // Equity total row
               Container(
-                height: 56,
+                height: 52,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFF8FBFF),
-                  borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(12),
-                    bottomRight: Radius.circular(12),
-                  ),
-                ),
+                decoration: const BoxDecoration(color: Color(0xFFF8FBFF)),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Total Margin',
+                      'Equity',
                       style: GoogleFonts.inter(
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.w600,
                         color: const Color(0xFF0D0D0D),
                       ),
                     ),
                     Text(
-                      _formatCurrency(mb.totalMargin),
+                      _fmt(equity),
                       style: GoogleFonts.inter(
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: const Color(0xFF1565C0),
+                        color: AppColors.primary,
                         fontFeatures: const [FontFeature.tabularFigures()],
                       ),
                     ),
                   ],
                 ),
               ),
+              Container(height: 1, color: const Color(0xFFE0E0E0)),
+              _Row('Used Margin',      usedMargin,      color: usedMargin > 0 ? AppColors.danger : null),
+              _Sep(),
+              _Row('Available Margin', availableMargin, color: hasShortfall ? AppColors.danger : AppColors.success),
+              if (hasShortfall) ...[
+                _Sep(),
+                _Row('Margin Shortfall', marginShortfall, color: AppColors.danger),
+              ],
             ],
+          ),
+        ),
+
+        // ── Shortfall warning card ─────────────────────────────────────
+        if (hasShortfall) ...[
+          const SizedBox(height: 12),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.danger.withOpacity(0.06),
+              border: Border.all(color: AppColors.danger.withOpacity(0.3)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, size: 15, color: AppColors.danger),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Margin Shortfall',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.danger,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _ShortfallRow('Required Margin', usedMargin),
+                const SizedBox(height: 4),
+                _ShortfallRow('Current Equity',  equity),
+                const Divider(height: 16),
+                _ShortfallRow('Shortfall', marginShortfall, bold: true, color: AppColors.danger),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ShortfallRow extends StatelessWidget {
+  final String label;
+  final double value;
+  final bool bold;
+  final Color? color;
+
+  const _ShortfallRow(this.label, this.value, {this.bold = false, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 12,
+            color: const Color(0xFF757575),
+          ),
+        ),
+        Text(
+          _fmt(value),
+          style: GoogleFonts.inter(
+            fontSize: 12,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+            color: color ?? const Color(0xFF0D0D0D),
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _breakdownRow(String label, double value, {Color? valueColor}) {
+class _Row extends StatelessWidget {
+  final String label;
+  final double value;
+  final Color? color;
+
+  const _Row(this.label, this.value, {this.color});
+
+  @override
+  Widget build(BuildContext context) {
     final isZero = value == 0;
     final effectiveColor = isZero
         ? const Color(0xFF9E9E9E)
-        : (valueColor ?? const Color(0xFF0D0D0D));
+        : (color ?? const Color(0xFF0D0D0D));
 
-    return Container(
+    return SizedBox(
       height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w400,
-              color: const Color(0xFF757575),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                color: const Color(0xFF757575),
+              ),
             ),
-          ),
-          Text(
-            _formatCurrency(value),
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: effectiveColor,
-              fontFeatures: const [FontFeature.tabularFigures()],
+            Text(
+              _fmt(value),
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: effectiveColor,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _separator() {
-    return Container(height: 1, color: const Color(0xFFF5F5F5));
-  }
+class _Sep extends StatelessWidget {
+  const _Sep();
+  @override
+  Widget build(BuildContext context) =>
+      Container(height: 1, color: const Color(0xFFF5F5F5));
+}
 
-  Widget _buildQuickStatsRow(
-    BuildContext context,
-    double todayPnl,
-    double realized,
-    double unrealized,
-  ) {
+// ── P&L strip ─────────────────────────────────────────────────────────────────
+
+class _PnlStrip extends StatelessWidget {
+  final double runningPnl;
+  final double realizedPnl;
+
+  const _PnlStrip({required this.runningPnl, required this.realizedPnl});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           Expanded(
-            child: _statColumn(label: "Today's P&L", value: todayPnl),
+            child: _PnlCell(label: 'Running P&L', value: runningPnl),
           ),
-          Container(width: 1, height: 32, color: const Color(0xFFE0E0E0)),
+          Container(width: 1, height: 36, color: const Color(0xFFE0E0E0)),
           Expanded(
-            child: _statColumn(label: 'Realized', value: realized),
-          ),
-          Container(width: 1, height: 32, color: const Color(0xFFE0E0E0)),
-          Expanded(
-            child: _statColumn(label: 'Unrealized', value: unrealized),
+            child: _PnlCell(label: 'Realized (today)', value: realizedPnl),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _statColumn({required String label, required double value}) {
-    final isPositive = value > 0;
+class _PnlCell extends StatelessWidget {
+  final String label;
+  final double value;
+
+  const _PnlCell({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos  = value > 0;
     final isZero = value == 0;
-    final color = isZero
+    final color  = isZero
         ? const Color(0xFF9E9E9E)
-        : (isPositive ? const Color(0xFF00C853) : const Color(0xFFD50000));
+        : (isPos ? const Color(0xFF00C853) : const Color(0xFFD50000));
+    final prefix = isZero ? '' : (isPos ? '+' : '-');
 
     return Column(
       children: [
         Text(
-          '${isPositive
-              ? '+'
-              : isZero
-              ? ''
-              : '-'}${_formatCurrency(value.abs())}',
+          '$prefix${_fmt(value.abs())}',
           style: GoogleFonts.inter(
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.w600,
             color: color,
             fontFeatures: const [FontFeature.tabularFigures()],
@@ -418,10 +674,7 @@ class FundsScreen extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           label,
-          style: GoogleFonts.inter(
-            fontSize: 11,
-            color: const Color(0xFF9E9E9E),
-          ),
+          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF9E9E9E)),
         ),
       ],
     );

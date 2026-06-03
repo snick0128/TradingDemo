@@ -28,10 +28,11 @@ import 'portfolio_screen.dart';
 import 'stock_detail_screen.dart';
 import 'stock_guide_screen.dart';
 
-// ─── Design tokens (spec-compliant) ──────────────────────────────────────────
+// ─── Design tokens ────────────────────────────────────────────────────────────
 const _kProfit = Color(0xFF00C853);
-const _kLoss = Color(0xFFD50000);
-const _kCta = Color(0xFF1565C0);
+const _kLoss   = Color(0xFFD50000);
+
+// ─── DashboardScreen ─────────────────────────────────────────────────────────
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -40,7 +41,6 @@ class DashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
 
-    // ── Error state: backend unreachable ──────────────────────────────────────
     if (store.backendError) {
       return Scaffold(
         appBar: AppBar(title: const Text('Dashboard')),
@@ -52,42 +52,30 @@ class DashboardScreen extends StatelessWidget {
       );
     }
 
-    final hour = DateTime.now().hour;
-    final greeting = hour < 12
-        ? 'Good morning'
-        : hour < 17
-        ? 'Good afternoon'
-        : 'Good evening';
+    final hour      = DateTime.now().hour;
+    final greeting  = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
     final firstName = store.currentUser.name.split(' ').first;
 
-    final netWorth =
-        store.holdings.fold(0.0, (s, h) => s + h.currentValue) +
-        store.positions.fold(0.0, (s, p) => s + p.quantity * p.currentPrice) +
-        store.balance;
-    final dayPnl = store.positions.fold(0.0, (s, p) => s + p.unrealizedPnl);
-    final dayPnlPct = netWorth == 0 ? 0.0 : (dayPnl / netWorth) * 100;
+    final usedMargin      = store.usedMargin;
+    final availableMargin = store.availableMargin;   // max(0, equity - usedMargin)
+    final marginShortfall = store.marginShortfall;   // max(0, usedMargin - equity)
+    // walletBalance = free cash + blocked margin = total deposited funds
+    final walletBalance = store.balance + usedMargin;
 
-    // Top movers: sort by abs changePercentage
+    // Running P&L = sum of unrealized P&L across all open positions.
+    // NOTE: labelled "Running P&L", NOT "Today's P&L" — positions opened on
+    // previous days also contribute. The % is relative to walletBalance so it
+    // correctly represents the impact on the full account, not just free cash.
+    final runningPnl    = store.runningPnL;
+    final runningPnlPct = walletBalance > 0 ? (runningPnl / walletBalance) * 100 : 0.0;
+
+    // For critical alert inside the card
+    final equity    = store.equity;
+    final safeLevel = store.rmsSettings.safeLevelRupees;
+    final isCritical = equity > 0 && equity <= safeLevel;
+
     final movers = store.watchlist.toList()
-      ..sort(
-        (a, b) => b.changePercentage.abs().compareTo(a.changePercentage.abs()),
-      );
-    final topMovers = movers.take(6).toList();
-
-    final positions = store.positions.take(3).toList();
-    final realizedPnl = store.orders
-        .where(
-          (o) =>
-              o.status == OrderStatus.executed ||
-              o.status == OrderStatus.approved,
-        )
-        .fold(0.0, (s, o) {
-          final exec = o.executedPrice ?? o.price;
-          return s +
-              (o.type == OrderType.sell
-                  ? (exec - o.price) * o.quantity
-                  : (o.price - exec) * o.quantity);
-        });
+      ..sort((a, b) => b.changePercentage.abs().compareTo(a.changePercentage.abs()));
 
     return Scaffold(
       appBar: _DashboardAppBar(
@@ -96,56 +84,60 @@ class DashboardScreen extends StatelessWidget {
       ),
       backgroundColor: AppColors.background,
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
         children: [
-          // 1. Net Worth hero card (blue gradient)
-          _NetWorthCard(
-            netWorth: netWorth,
-            dayPnl: dayPnl,
-            dayPnlPct: dayPnlPct,
-            balance: store.balance,
+
+          // ── 1. Primary balance card ────────────────────────────────────
+          _BalanceCard(
+            equity:          equity,
+            runningPnl:      runningPnl,
+            runningPct:      runningPnlPct,
+            availableMargin: availableMargin,
+            marginShortfall: marginShortfall,
+            isCritical:      isCritical,
+            safeLevel:       safeLevel,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
 
-          // 2. Indices row (NIFTY/SENSEX pills horizontal scroll)
+          // ── 2. Compact margin strip + "View Details" ───────────────────
+          _MarginStrip(
+            availableMargin: availableMargin,
+            marginShortfall: marginShortfall,
+            usedMargin:      usedMargin,
+            equity:          equity,
+            safeLevel:       safeLevel,
+          ),
+          const SizedBox(height: 20),
+
+          // ── 3. Indices scroll ──────────────────────────────────────────
           _IndicesRow(stocks: store.watchlist),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
 
-          // 3. Quick Actions row (Markets/Orders/IPO/More, 48dp circles)
+          // ── 4. Quick actions ───────────────────────────────────────────
           const _QuickActionsRow(),
           const SizedBox(height: 24),
 
-          // 4. P&L split row (Realized | Unrealized)
-          _PnlStrip(realized: realizedPnl, unrealized: dayPnl),
-          const SizedBox(height: 24),
-
-          // 5. Positions preview (max 3 cards, no "N/A")
-          if (positions.isNotEmpty) ...[
+          // ── 5. Open positions preview (max 3) ─────────────────────────
+          if (store.positions.isNotEmpty) ...[
             _SectionHeader(
-              title: 'Positions',
-              onViewAll: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const PortfolioScreen()),
-              ),
+              title: 'Open Positions',
+              onViewAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PortfolioScreen())),
             ),
             const SizedBox(height: 8),
-            _PositionsSnapshot(positions: positions),
+            _PositionsSnapshot(positions: store.positions.take(3).toList()),
             const SizedBox(height: 24),
           ],
 
-          // 7. Top Movers 2-column grid
+          // ── 6. Top movers ──────────────────────────────────────────────
           _SectionHeader(title: 'Top Movers'),
           const SizedBox(height: 8),
-          _TopMoversGrid(stocks: topMovers),
+          _TopMoversGrid(stocks: movers.take(6).toList()),
           const SizedBox(height: 24),
 
-          // 8. Quick Trade section
+          // ── 7. Quick trade ─────────────────────────────────────────────
           _SectionHeader(
             title: 'Quick Trade',
-            onViewAll: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
-            ),
+            onViewAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MarketWatchScreen())),
           ),
           const SizedBox(height: 8),
           _WatchlistPreview(stocks: store.watchlist.take(4).toList()),
@@ -160,7 +152,6 @@ class DashboardScreen extends StatelessWidget {
 class _DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String greeting;
   final int unreadCount;
-
   const _DashboardAppBar({required this.greeting, required this.unreadCount});
 
   @override
@@ -173,149 +164,968 @@ class _DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
       title: Text(greeting, style: Theme.of(context).textTheme.titleLarge),
       actions: [
         IconButton(
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const UniversalSearchScreen()),
-          ),
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const UniversalSearchScreen())),
           icon: const Icon(LucideIcons.search),
           tooltip: 'Search',
         ),
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            IconButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const NotificationsCenterScreen(),
-                ),
-              ),
-              icon: const Icon(LucideIcons.bell),
-              tooltip: 'Notifications',
-            ),
-            if (unreadCount > 0)
-              Positioned(
-                right: 6,
-                top: 6,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: const BoxDecoration(
-                    color: AppColors.danger,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(
-                      unreadCount > 9 ? '9+' : '$unreadCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
+        _NotifBell(unreadCount: unreadCount),
         const SizedBox(width: 4),
       ],
     );
   }
 }
 
-// ─── Net Worth Card ───────────────────────────────────────────────────────────
+class _NotifBell extends StatelessWidget {
+  final int unreadCount;
+  const _NotifBell({required this.unreadCount});
 
-class _NetWorthCard extends StatelessWidget {
-  final double netWorth;
-  final double dayPnl;
-  final double dayPnlPct;
-  final double balance;
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsCenterScreen())),
+          icon: const Icon(LucideIcons.bell),
+          tooltip: 'Notifications',
+        ),
+        if (unreadCount > 0)
+          Positioned(
+            right: 6,
+            top: 6,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle),
+              child: Center(
+                child: Text(
+                  unreadCount > 9 ? '9+' : '$unreadCount',
+                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
-  const _NetWorthCard({
-    required this.netWorth,
-    required this.dayPnl,
-    required this.dayPnlPct,
-    required this.balance,
+// ─── Balance Card ─────────────────────────────────────────────────────────────
+// Primary hero: Live Equity · Running P&L · Free Margin
+// Never shows more than 3 financial metrics.
+
+class _BalanceCard extends StatelessWidget {
+  final double equity;
+  final double runningPnl;
+  final double runningPct;
+  final double availableMargin;
+  final double marginShortfall;
+  final bool isCritical;
+  final double safeLevel;
+
+  const _BalanceCard({
+    required this.equity,
+    required this.runningPnl,
+    required this.runningPct,
+    required this.availableMargin,
+    required this.marginShortfall,
+    required this.isCritical,
+    required this.safeLevel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isPos = dayPnl >= 0;
+    final isPnlPos = runningPnl >= 0;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF0D2B6B), Color(0xFF1565C0)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(AppColors.heroRadius),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1565C0).withOpacity(0.30),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Available Balance',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '₹${balance.toStringAsFixed(2)}',
-            style: GoogleFonts.inter(
-              color: Colors.white,
-              fontSize: 26,
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              const Text(
-                "Today's P&L  ",
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-              _PnlChip(
-                value: dayPnl,
-                pct: dayPnlPct,
-                isPos: isPos,
-                light: true,
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text(
-                'Net Worth  ',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-              Text(
-                '₹${_fmt(netWorth)}',
-                style: GoogleFonts.inter(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+          // ── Main content ───────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Label
+                const Text(
+                  'Live Equity',
+                  style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w500, letterSpacing: 0.3),
                 ),
-              ),
-            ],
+                const SizedBox(height: 6),
+
+                // Primary number — large, tabular figures
+                Text(
+                  _fmtBalance(equity),
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // P&L + Free Margin in one row
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // Running P&L
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Running P&L', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        const SizedBox(height: 3),
+                        _PnlBadge(value: runningPnl, pct: runningPct, isPos: isPnlPos),
+                      ],
+                    ),
+
+                    const Spacer(),
+
+                    // Vertical divider
+                    Container(width: 1, height: 32, color: Colors.white.withOpacity(0.15)),
+
+                    const SizedBox(width: 16),
+
+                    // Available Margin
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Text('Available Margin', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        const SizedBox(height: 3),
+                        Text(
+                          _fmtCompact(availableMargin),
+                          style: GoogleFonts.inter(
+                            color: marginShortfall > 0 ? const Color(0xFFFF5252) : Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
+
+          // ── Critical alert banner (only when equity ≤ safe level) ─────
+          if (isCritical)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD50000).withOpacity(0.22),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                border: const Border(top: BorderSide(color: Color(0xFFD50000), width: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 15),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Auto square-off imminent — equity ≤ ₹${safeLevel.toStringAsFixed(0)}',
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            const SizedBox(height: 0),
         ],
       ),
     );
   }
 
-  String _fmt(double v) {
-    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(2)}Cr';
-    if (v >= 100000) return '${(v / 100000).toStringAsFixed(2)}L';
-    return v.toStringAsFixed(2);
+  static String _fmtBalance(double v) => _fmtRupee(v, decimals: 2);
+  static String _fmtCompact(double v)  => _fmtRupee(v, decimals: 2);
+}
+
+// ─── Shared rupee formatter (single source of truth for all financial values) ─
+// Every number on the dashboard and detail sheet uses this function.
+// Consistency: all values at the same magnitude always show the same precision.
+String _fmtRupee(double v, {int decimals = 2}) {
+  final abs = v.abs();
+  final sign = v < 0 ? '-' : '';
+  if (abs >= 10000000) return '$sign₹${(abs / 10000000).toStringAsFixed(decimals)}Cr';
+  if (abs >= 100000)   return '$sign₹${(abs / 100000).toStringAsFixed(decimals)}L';
+  return '₹${v.toStringAsFixed(decimals)}';
+}
+
+// ─── P&L Badge ────────────────────────────────────────────────────────────────
+
+class _PnlBadge extends StatelessWidget {
+  final double value;
+  final double pct;
+  final bool isPos;
+
+  const _PnlBadge({required this.value, required this.pct, required this.isPos});
+
+  @override
+  Widget build(BuildContext context) {
+    final arrow = isPos ? '▲' : '▼';
+    final sign  = isPos ? '+' : '';
+    final bg    = isPos
+        ? const Color(0xFF00C853).withOpacity(0.22)
+        : const Color(0xFFD50000).withOpacity(0.22);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+      child: Text(
+        '$arrow $sign₹${value.abs().toStringAsFixed(2)}  ($sign${pct.toStringAsFixed(2)}%)',
+        style: GoogleFonts.inter(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Margin Strip ─────────────────────────────────────────────────────────────
+// Compact 2-metric row: Free Margin | Used Margin + "View Details"
+
+class _MarginStrip extends StatelessWidget {
+  final double availableMargin;
+  final double marginShortfall;
+  final double usedMargin;
+  final double equity;
+  final double safeLevel;
+
+  const _MarginStrip({
+    required this.availableMargin,
+    required this.marginShortfall,
+    required this.usedMargin,
+    required this.equity,
+    required this.safeLevel,
+  });
+
+  void _showDetails(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _MarginDetailSheet(safeLevel: safeLevel),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPositions    = usedMargin > 0;
+    final hasShortfall    = marginShortfall > 0;
+    final isCritical      = equity > 0 && equity <= safeLevel;
+
+    final borderColor = isCritical   ? _kLoss.withOpacity(0.5)
+        : hasShortfall ? AppColors.warning.withOpacity(0.5)
+        : AppColors.border;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: borderColor,
+          width: (isCritical || hasShortfall) ? 1.5 : 1,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _showDetails(context),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                // Available Margin
+                Expanded(
+                  child: _StripMetric(
+                    label: 'Available Margin',
+                    value: _fmt(availableMargin),
+                    valueColor: isCritical || hasShortfall ? _kLoss : null,
+                  ),
+                ),
+
+                // Divider
+                Container(width: 1, height: 28, color: AppColors.border),
+
+                // Used Margin or Shortfall
+                Expanded(
+                  child: hasShortfall
+                      ? _StripMetric(
+                          label: 'Shortfall',
+                          value: _fmt(marginShortfall),
+                          valueColor: _kLoss,
+                          align: CrossAxisAlignment.center,
+                        )
+                      : _StripMetric(
+                          label: 'Margin Used',
+                          value: hasPositions ? _fmt(usedMargin) : '—',
+                          align: CrossAxisAlignment.center,
+                        ),
+                ),
+
+                // Divider
+                Container(width: 1, height: 28, color: AppColors.border),
+
+                // View Details CTA
+                const SizedBox(width: 12),
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('Details', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                    SizedBox(height: 2),
+                    Icon(LucideIcons.chevronRight, size: 16, color: AppColors.primary),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _fmt(double v) => _fmtRupee(v);
+}
+
+class _StripMetric extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final CrossAxisAlignment align;
+
+  const _StripMetric({
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.align = CrossAxisAlignment.start,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: align,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: valueColor ?? AppColors.textPrimary,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Margin Detail Bottom Sheet ───────────────────────────────────────────────
+// Full live breakdown. ALL values read from the store on every rebuild —
+// no constructor params for financial data, so numbers stay consistent as
+// prices move while the sheet is open.
+
+class _MarginDetailSheet extends StatelessWidget {
+  final double safeLevel;
+  const _MarginDetailSheet({required this.safeLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    final store = TradingScope.of(context);
+
+    // Derive every number from the same live sources — never from stale Firestore.
+    final usedMargin      = store.usedMargin;
+    final runningPnL      = store.runningPnL;
+    final walletBalance   = store.balance + usedMargin;
+    final equity          = store.equity;
+    final availableMargin = store.availableMargin;   // max(0, equity - usedMargin)
+    final marginShortfall = store.marginShortfall;   // max(0, usedMargin - equity)
+    final marginLevel     = store.marginLevel;
+    final isCritical      = equity > 0 && equity <= safeLevel;   // Auto Square-Off Risk
+    final hasShortfall    = marginShortfall > 0;                  // Margin Shortfall
+
+    // Status: Auto Square-Off Risk takes precedence over Margin Shortfall
+    final statusLabel = isCritical   ? 'Auto Square-Off Risk'
+        : hasShortfall ? 'Margin Shortfall'
+        : 'Healthy';
+    final statusColor = isCritical   ? _kLoss
+        : hasShortfall ? AppColors.warning
+        : _kProfit;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.52,
+      minChildSize: 0.35,
+      maxChildSize: 0.85,
+      builder: (_, controller) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Drag handle
+            const SizedBox(height: 12),
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(LucideIcons.shieldCheck, size: 16, color: AppColors.primary),
+                  ),
+                  const SizedBox(width: 10),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Margin & Equity', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                      Text('Live account risk metrics', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                    ],
+                  ),
+                  const Spacer(),
+                  // Status chip
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: statusColor.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      statusLabel,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: statusColor),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+            const Divider(height: 1),
+
+            Expanded(
+              child: ListView(
+                controller: controller,
+                padding: const EdgeInsets.all(20),
+                children: [
+
+                  // Alert banner (Auto Square-Off Risk only)
+                  if (isCritical) ...[
+                    _AlertBanner(isCritical: true, safeLevel: safeLevel, equity: equity),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Equity formula card
+                  _FormulaCard(
+                    walletBalance: walletBalance,
+                    runningPnL: runningPnL,
+                    equity: equity,
+                    isCritical: isCritical,
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 3-metric row: Used Margin | Available Margin | Margin Level
+                  Row(
+                    children: [
+                      Expanded(child: _DetailMetric(label: 'Used Margin', value: _fmt(usedMargin), hint: 'Blocked')),
+                      const SizedBox(width: 8),
+                      Expanded(child: _DetailMetric(
+                        label: 'Available Margin',
+                        value: _fmt(availableMargin),
+                        hint: 'max(0, E − UM)',
+                        valueColor: (isCritical || hasShortfall) ? _kLoss : null,
+                      )),
+                      const SizedBox(width: 8),
+                      Expanded(child: _DetailMetric(
+                        label: 'Margin Level',
+                        value: marginLevel != null ? '${marginLevel.toStringAsFixed(1)}%' : '—',
+                        hint: '(E ÷ UM) × 100',
+                        valueColor: marginLevel != null && marginLevel < 200 ? _kLoss
+                            : marginLevel != null && marginLevel < 500 ? AppColors.warning
+                            : null,
+                      )),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Running P&L
+                  _RunningPnLTile(value: runningPnL),
+                  const SizedBox(height: 12),
+
+                  // Margin Shortfall card (when in shortfall) — replaces green Safe Level row
+                  if (hasShortfall) ...[
+                    _MarginShortfallCard(
+                      requiredMargin: usedMargin,
+                      equity: equity,
+                      shortfall: marginShortfall,
+                    ),
+                    const SizedBox(height: 12),
+                  ] else ...[
+                    // Safe level indicator (only when healthy — no shortfall)
+                    _SafeLevelRow(equity: equity, safeLevel: safeLevel),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Margin level bar (only with open positions)
+                  if (marginLevel != null) ...[
+                    _MarginLevelBar(marginLevel: marginLevel),
+                    const SizedBox(height: 8),
+                  ],
+
+                  // Formula explanation
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceAlt,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('How these are calculated', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+                        SizedBox(height: 6),
+                        _FormulaLine('Equity', '= Wallet Balance + Running P&L'),
+                        _FormulaLine('Available Margin', '= max(0, Equity − Used Margin)'),
+                        _FormulaLine('Margin Shortfall', '= max(0, Used Margin − Equity)'),
+                        _FormulaLine('Margin Level', '= (Equity ÷ Used Margin) × 100'),
+                        _FormulaLine('Auto Square-Off', '= when Equity ≤ Safe Level'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _fmt(double v) => _fmtRupee(v);
+}
+
+class _FormulaLine extends StatelessWidget {
+  final String term;
+  final String formula;
+  const _FormulaLine(this.term, this.formula);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 88,
+            child: Text(term, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+          ),
+          Expanded(
+            child: Text(formula, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontFamily: 'monospace')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlertBanner extends StatelessWidget {
+  final bool isCritical;
+  final double safeLevel;
+  final double equity;
+  const _AlertBanner({required this.isCritical, required this.safeLevel, required this.equity});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isCritical ? _kLoss : AppColors.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(isCritical ? Icons.warning_amber_rounded : Icons.info_outline, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              isCritical
+                  ? 'Equity ≤ ₹${safeLevel.toStringAsFixed(0)} — auto square-off will trigger on the next price tick.'
+                  : 'Equity (₹${equity.toStringAsFixed(0)}) is approaching the safe level of ₹${safeLevel.toStringAsFixed(0)}. Add funds or reduce positions.',
+              style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FormulaCard extends StatelessWidget {
+  final double walletBalance;
+  final double runningPnL;
+  final double equity;
+  final bool isCritical;
+  const _FormulaCard({required this.walletBalance, required this.runningPnL, required this.equity, required this.isCritical});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isCritical
+              ? [const Color(0xFF4A0000), const Color(0xFF8B0000)]
+              : [const Color(0xFF0D2B6B), const Color(0xFF1565C0)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _EqItem(label: 'Wallet Balance', value: walletBalance, white: true)),
+          const _EqOp('+'),
+          Expanded(child: _EqItem(label: 'Running P&L', value: runningPnL, white: true, colored: true)),
+          const _EqOp('='),
+          Expanded(child: _EqItem(label: 'Equity', value: equity, white: true, bold: true)),
+        ],
+      ),
+    );
+  }
+}
+
+class _EqItem extends StatelessWidget {
+  final String label;
+  final double value;
+  final bool white;
+  final bool colored;
+  final bool bold;
+  const _EqItem({required this.label, required this.value, this.white = false, this.colored = false, this.bold = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = white ? Colors.white : AppColors.textPrimary;
+    Color valueColor = white ? Colors.white : AppColors.textPrimary;
+    if (colored) valueColor = value >= 0 ? _kProfit : _kLoss;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 9, color: textColor.withOpacity(0.6), fontWeight: FontWeight.w500)),
+        const SizedBox(height: 3),
+        Text(
+          _fmt(value),
+          style: GoogleFonts.inter(
+            fontSize: 13,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+            color: valueColor,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+
+  static String _fmt(double v) => _fmtRupee(v);
+}
+
+class _EqOp extends StatelessWidget {
+  final String op;
+  const _EqOp(this.op);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(op, style: const TextStyle(color: Colors.white54, fontSize: 18, fontWeight: FontWeight.w300)),
+    );
+  }
+}
+
+class _DetailMetric extends StatelessWidget {
+  final String label;
+  final String value;
+  final String? hint;
+  final Color? valueColor;
+  const _DetailMetric({required this.label, required this.value, this.hint, this.valueColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: valueColor ?? AppColors.textPrimary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (hint != null) ...[
+            const SizedBox(height: 2),
+            Text(hint!, style: const TextStyle(fontSize: 9, color: AppColors.textSecondary)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RunningPnLTile extends StatelessWidget {
+  final double value;
+  const _RunningPnLTile({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos  = value >= 0;
+    final color  = isPos ? _kProfit : _kLoss;
+    final sign   = isPos ? '+' : '';
+    final arrow  = isPos ? '▲' : '▼';
+    final bg     = color.withOpacity(0.06);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.2))),
+      child: Row(
+        children: [
+          Icon(isPos ? LucideIcons.trendingUp : LucideIcons.trendingDown, size: 16, color: color),
+          const SizedBox(width: 8),
+          const Text('Running P&L', style: TextStyle(fontSize: 12, color: AppColors.textPrimary, fontWeight: FontWeight.w500)),
+          const Spacer(),
+          Text(
+            '$arrow $sign₹${value.abs().toStringAsFixed(2)}',
+            style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w700, color: color, fontFeatures: const [FontFeature.tabularFigures()]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Margin Shortfall Card ────────────────────────────────────────────────────
+
+class _MarginShortfallCard extends StatelessWidget {
+  final double requiredMargin;
+  final double equity;
+  final double shortfall;
+
+  const _MarginShortfallCard({
+    required this.requiredMargin,
+    required this.equity,
+    required this.shortfall,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _kLoss.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kLoss.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, size: 14, color: _kLoss),
+              const SizedBox(width: 6),
+              const Text(
+                'Margin Shortfall',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kLoss),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _ShortfallMetricRow('Required Margin', requiredMargin),
+          const SizedBox(height: 6),
+          _ShortfallMetricRow('Current Equity',  equity),
+          const Divider(height: 16),
+          _ShortfallMetricRow('Shortfall', shortfall, bold: true, color: _kLoss),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShortfallMetricRow extends StatelessWidget {
+  final String label;
+  final double value;
+  final bool bold;
+  final Color? color;
+
+  const _ShortfallMetricRow(this.label, this.value, {this.bold = false, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+        Text(
+          _fmtRupee(value),
+          style: GoogleFonts.inter(
+            fontSize: 12,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+            color: color ?? AppColors.textPrimary,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Safe Level Row ───────────────────────────────────────────────────────────
+
+class _SafeLevelRow extends StatelessWidget {
+  final double equity;
+  final double safeLevel;
+  const _SafeLevelRow({required this.equity, required this.safeLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio   = safeLevel > 0 ? (equity / safeLevel).clamp(0.0, 5.0) : 5.0;
+    final pct     = ratio / 5.0;
+    final color   = ratio < 1.0 ? _kLoss : ratio < 2.0 ? AppColors.warning : _kProfit;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('Safe Level', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              const Spacer(),
+              Text('₹${safeLevel.toStringAsFixed(0)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: pct.clamp(0.0, 1.0),
+              minHeight: 6,
+              backgroundColor: AppColors.border,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Equity is ${ratio < 1.0 ? 'below' : '${ratio.toStringAsFixed(1)}×'} the safe level',
+            style: TextStyle(fontSize: 10, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MarginLevelBar extends StatelessWidget {
+  final double marginLevel;
+  const _MarginLevelBar({required this.marginLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    final capped = marginLevel.clamp(0.0, 1000.0);
+    final pct    = (capped / 1000.0).clamp(0.0, 1.0);
+    final color  = capped < 150 ? _kLoss : capped < 300 ? AppColors.warning : _kProfit;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('Margin Level', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              const Spacer(),
+              Text('${marginLevel.toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: pct,
+              minHeight: 6,
+              backgroundColor: AppColors.border,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('150% — Warning',  style: TextStyle(fontSize: 9, color: AppColors.warning)),
+              Text('300% — Safe',     style: TextStyle(fontSize: 9, color: _kProfit)),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -323,41 +1133,26 @@ class _NetWorthCard extends StatelessWidget {
 
 class _QuickActionsRow extends StatelessWidget {
   const _QuickActionsRow();
+
   @override
   Widget build(BuildContext context) {
     final actions = [
-      (LucideIcons.barChart2, 'Markets', AppColors.primary),
-      (LucideIcons.activity, 'F&O', const Color(0xFF00897B)),
-      (LucideIcons.bookOpen, 'Courses', const Color(0xFF6A1B9A)),
-      (LucideIcons.moreHorizontal, 'More', AppColors.textSecondary),
+      (LucideIcons.barChart2,      'Markets',   AppColors.primary),
+      (LucideIcons.activity,       'F&O',       const Color(0xFF00897B)),
+      (LucideIcons.bookOpen,       'Courses',   const Color(0xFF6A1B9A)),
+      (LucideIcons.moreHorizontal, 'More',      AppColors.textSecondary),
     ];
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: actions.map((a) {
         return _QuickActionButton(
-          icon: a.$1,
-          label: a.$2,
-          color: a.$3,
+          icon: a.$1, label: a.$2, color: a.$3,
           onTap: () {
-            if (a.$2 == 'Markets') {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
-              );
-            } else if (a.$2 == 'F&O') {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FnoMarketScreen()),
-              );
-            } else if (a.$2 == 'Courses') {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const StockGuideScreen()),
-              );
-            } else if (a.$2 == 'More') {
-              _showMoreActions(context);
-            }
+            if (a.$2 == 'Markets')  Navigator.push(context, MaterialPageRoute(builder: (_) => const MarketWatchScreen()));
+            else if (a.$2 == 'F&O') Navigator.push(context, MaterialPageRoute(builder: (_) => const FnoMarketScreen()));
+            else if (a.$2 == 'Courses') Navigator.push(context, MaterialPageRoute(builder: (_) => const StockGuideScreen()));
+            else _showMoreActions(context);
           },
         );
       }).toList(),
@@ -372,90 +1167,30 @@ class _QuickActionsRow extends StatelessWidget {
         child: ListView(
           shrinkWrap: true,
           children: [
-            _sheetItem(
-              ctx,
-              'Market Watch',
-              const MarketWatchScreen(),
-              icon: Icons.view_list,
-            ),
-            _sheetItem(
-              ctx,
-              'Advanced Chart',
-              const AdvancedChartScreen(symbol: 'REL'),
-              icon: Icons.show_chart,
-            ),
-            _sheetItem(
-              ctx,
-              'Top Gainers / Losers',
-              const TopGainersLosersScreen(),
-              icon: Icons.trending_up,
-            ),
-            _sheetItem(
-              ctx,
-              'Sector Heatmap',
-              const SectorHeatmapScreen(),
-              icon: Icons.grid_view,
-            ),
-            _sheetItem(
-              ctx,
-              'F&O Markets',
-              const FnoMarketScreen(),
-              icon: LucideIcons.activity,
-            ),
-            _sheetItem(
-              ctx,
-              'Options Chain',
-              const OptionsChainScreen(),
-              icon: Icons.stacked_bar_chart,
-            ),
-            _sheetItem(
-              ctx,
-              'F&O Dashboard',
-              const FnoDashboardScreen(),
-              icon: LucideIcons.barChart2,
-            ),
-            _sheetItem(
-              ctx,
-              'Market Depth',
-              const MarketDepthScreen(),
-              icon: Icons.layers,
-            ),
-            _sheetItem(
-              ctx,
-              'Time & Sales',
-              const TimeAndSalesScreen(),
-              icon: LucideIcons.clock3,
-            ),
-            _sheetItem(
-              ctx,
-              'Universal Search',
-              const UniversalSearchScreen(),
-              icon: LucideIcons.search,
-            ),
-            _sheetItem(
-              ctx,
-              'Stock Guide',
-              const StockGuideScreen(),
-              icon: LucideIcons.bookOpen,
-            ),
+            _sheetItem(ctx, 'Market Watch',        const MarketWatchScreen(),                     icon: Icons.view_list),
+            _sheetItem(ctx, 'Advanced Chart',      const AdvancedChartScreen(symbol: 'REL'),      icon: Icons.show_chart),
+            _sheetItem(ctx, 'Top Gainers / Losers',const TopGainersLosersScreen(),                icon: Icons.trending_up),
+            _sheetItem(ctx, 'Sector Heatmap',      const SectorHeatmapScreen(),                   icon: Icons.grid_view),
+            _sheetItem(ctx, 'F&O Markets',         const FnoMarketScreen(),                       icon: LucideIcons.activity),
+            _sheetItem(ctx, 'Options Chain',       const OptionsChainScreen(),                    icon: Icons.stacked_bar_chart),
+            _sheetItem(ctx, 'F&O Dashboard',       const FnoDashboardScreen(),                    icon: LucideIcons.barChart2),
+            _sheetItem(ctx, 'Market Depth',        const MarketDepthScreen(),                     icon: Icons.layers),
+            _sheetItem(ctx, 'Time & Sales',        const TimeAndSalesScreen(),                    icon: LucideIcons.clock3),
+            _sheetItem(ctx, 'Universal Search',    const UniversalSearchScreen(),                 icon: LucideIcons.search),
+            _sheetItem(ctx, 'Stock Guide',         const StockGuideScreen(),                      icon: LucideIcons.bookOpen),
           ],
         ),
       ),
     );
   }
 
-  Widget _sheetItem(
-    BuildContext context,
-    String title,
-    Widget destination, {
-    required IconData icon,
-  }) {
+  Widget _sheetItem(BuildContext context, String title, Widget dest, {required IconData icon}) {
     return ListTile(
       leading: Icon(icon, size: 18, color: AppColors.textPrimary),
       title: Text(title),
       onTap: () {
         Navigator.pop(context);
-        Navigator.push(context, MaterialPageRoute(builder: (_) => destination));
+        Navigator.push(context, MaterialPageRoute(builder: (_) => dest));
       },
     );
   }
@@ -467,12 +1202,7 @@ class _QuickActionButton extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
 
-  const _QuickActionButton({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
+  const _QuickActionButton({required this.icon, required this.label, required this.color, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -481,95 +1211,19 @@ class _QuickActionButton extends StatelessWidget {
       child: Column(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: color.withOpacity(0.10),
               shape: BoxShape.circle,
-              border: Border.all(color: color.withOpacity(0.25), width: 1),
+              border: Border.all(color: color.withOpacity(0.20)),
             ),
             child: Icon(icon, color: color, size: 22),
           ),
           const SizedBox(height: 6),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textPrimary,
-            ),
-          ),
+          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppColors.textPrimary)),
         ],
       ),
-    );
-  }
-}
-
-// ─── P&L Strip ────────────────────────────────────────────────────────────────
-
-class _PnlStrip extends StatelessWidget {
-  final double realized;
-  final double unrealized;
-
-  const _PnlStrip({required this.realized, required this.unrealized});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        border: Border.all(color: AppColors.border, width: 1),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _PnlItem(label: 'Realized P&L', value: realized),
-          ),
-          Container(width: 1, height: 36, color: AppColors.border),
-          Expanded(
-            child: _PnlItem(label: 'Unrealized P&L', value: unrealized),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PnlItem extends StatelessWidget {
-  final String label;
-  final double value;
-
-  const _PnlItem({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final isPos = value >= 0;
-    final arrow = isPos ? '▲' : '▼';
-    final color = isPos ? _kProfit : _kLoss;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppColors.textSecondary,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          '$arrow ₹${value.abs().toStringAsFixed(2)}',
-          style: GoogleFonts.inter(
-            color: color,
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
-        ),
-      ],
     );
   }
 }
@@ -587,25 +1241,11 @@ class _SectionHeader extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textPrimary,
-          ),
-        ),
+        Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
         if (onViewAll != null)
           GestureDetector(
             onTap: onViewAll,
-            child: const Text(
-              'View all',
-              style: TextStyle(
-                color: AppColors.primary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            child: const Text('View all', style: TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w600)),
           ),
       ],
     );
@@ -616,7 +1256,6 @@ class _SectionHeader extends StatelessWidget {
 
 class _PositionsSnapshot extends StatelessWidget {
   final List<Position> positions;
-
   const _PositionsSnapshot({required this.positions});
 
   @override
@@ -624,15 +1263,14 @@ class _PositionsSnapshot extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        border: Border.all(color: AppColors.border, width: 1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
           for (var i = 0; i < positions.length; i++) ...[
             _PositionRow(position: positions[i]),
-            if (i < positions.length - 1)
-              const Divider(height: 1, indent: 16, endIndent: 16),
+            if (i < positions.length - 1) const Divider(height: 1, indent: 16, endIndent: 16),
           ],
         ],
       ),
@@ -642,65 +1280,29 @@ class _PositionsSnapshot extends StatelessWidget {
 
 class _PositionRow extends StatelessWidget {
   final Position position;
-
   const _PositionRow({required this.position});
 
   @override
   Widget build(BuildContext context) {
     final p = position;
     final isPos = p.unrealizedPnl >= 0;
-    final productLabel = p.product == ProductType.mis ? 'MIS' : 'CNC';
-    // Never show N/A — use symbol as fallback for name
-    final displayName =
-        (p.name.isNotEmpty && p.name != 'N/A' && p.name != p.symbol)
-        ? p.name
-        : p.symbol;
+    final productLabel = p.product == ProductType.mis ? 'MIS' : 'NRML';
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
       child: Row(
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  p.symbol,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w500,
-                    fontSize: 15,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
+                Text(p.symbol, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.textPrimary)),
                 const SizedBox(height: 3),
                 Row(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        productLabel,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
+                    _Tag(productLabel, AppColors.primary),
                     const SizedBox(width: 6),
-                    Text(
-                      '${p.quantity} qty',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
+                    Text('${p.quantity} qty', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
                   ],
                 ),
               ],
@@ -711,23 +1313,29 @@ class _PositionRow extends StatelessWidget {
             children: [
               Text(
                 '₹${p.currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                  color: AppColors.textPrimary,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.textPrimary, fontFeatures: const [FontFeature.tabularFigures()]),
               ),
               const SizedBox(height: 3),
-              _PnlChip(
-                value: p.unrealizedPnl,
-                pct: p.pnlPercentage,
-                isPos: isPos,
-              ),
+              _PnlChip(value: p.unrealizedPnl, pct: p.pnlPercentage, isPos: isPos),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _Tag extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _Tag(this.label, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: color.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w700)),
     );
   }
 }
@@ -740,28 +1348,20 @@ class _IndicesRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Try to find index-like symbols; fall back to first 3 stocks
     final indices = <_IndexData>[];
-    const indexSymbols = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTYBANK'];
-    for (final sym in indexSymbols) {
-      final match = stocks
-          .where((s) => s.symbol.toUpperCase().contains(sym))
-          .firstOrNull;
-      if (match != null) {
-        indices.add(
-          _IndexData(match.symbol, match.currentPrice, match.changePercentage),
-        );
-      }
+    const want = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTYNXT50'];
+    for (final sym in want) {
+      final m = stocks.where((s) => s.symbol.toUpperCase().contains(sym)).firstOrNull;
+      if (m != null) indices.add(_IndexData(m.symbol, m.currentPrice, m.changePercentage));
     }
-    // If no index symbols found, use first 3 stocks as proxy
     if (indices.isEmpty) {
-      for (final s in stocks.take(3)) {
+      for (final s in stocks.take(4)) {
         indices.add(_IndexData(s.symbol, s.currentPrice, s.changePercentage));
       }
     }
 
     return SizedBox(
-      height: 44,
+      height: 48,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: indices.length,
@@ -785,53 +1385,33 @@ class _IndexPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPos = data.change >= 0;
-    final color = isPos ? _kProfit : _kLoss;
-    final arrow = isPos ? '▲' : '▼';
+    final isPos  = data.change >= 0;
+    final color  = isPos ? _kProfit : _kLoss;
+    final arrow  = isPos ? '▲' : '▼';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.border, width: 1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            data.symbol,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
+          Text(data.symbol, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
           const SizedBox(width: 8),
-          Text(
-            '₹${data.price.toStringAsFixed(2)}',
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Text('₹${data.price.toStringAsFixed(2)}',
+              style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary, fontFeatures: const [FontFeature.tabularFigures()])),
           const SizedBox(width: 6),
-          Text(
-            '$arrow ${data.change.abs().toStringAsFixed(2)}%',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
+          Text('$arrow ${data.change.abs().toStringAsFixed(2)}%',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
         ],
       ),
     );
   }
 }
 
-// ─── Top Movers 2-column grid ─────────────────────────────────────────────────
+// ─── Top Movers ───────────────────────────────────────────────────────────────
 
 class _TopMoversGrid extends StatelessWidget {
   final List<Stock> stocks;
@@ -843,42 +1423,33 @@ class _TopMoversGrid extends StatelessWidget {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-        childAspectRatio: 2.4,
+        crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 2.5,
       ),
       itemCount: stocks.length,
-      itemBuilder: (context, index) => _MoverCard(stock: stocks[index]),
+      itemBuilder: (context, i) => _MoverCard(stock: stocks[i]),
     );
   }
 }
 
 class _MoverCard extends StatelessWidget {
   final Stock stock;
-
   const _MoverCard({required this.stock});
 
   @override
   Widget build(BuildContext context) {
     final isPos = stock.changePercentage >= 0;
-    final sign = isPos ? '+' : '';
     final color = isPos ? _kProfit : _kLoss;
+    final sign  = isPos ? '+' : '';
 
     return InkWell(
-      borderRadius: BorderRadius.circular(AppColors.cardRadius),
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => StockDetailScreen(symbol: stock.symbol),
-        ),
-      ),
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol))),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppColors.cardRadius),
-          border: Border.all(color: AppColors.border, width: 1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
         ),
         child: Row(
           children: [
@@ -887,42 +1458,18 @@ class _MoverCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    stock.symbol,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w500,
-                      fontSize: 13,
-                      color: AppColors.textPrimary,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(stock.symbol, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 2),
-                  Text(
-                    '₹${stock.currentPrice.toStringAsFixed(2)}',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                      color: AppColors.textPrimary,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
+                  Text('₹${stock.currentPrice.toStringAsFixed(2)}',
+                      style: GoogleFonts.inter(fontWeight: FontWeight.w500, fontSize: 12, color: AppColors.textSecondary, fontFeatures: const [FontFeature.tabularFigures()])),
                 ],
               ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                '$sign${stock.changePercentage.toStringAsFixed(2)}%',
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+              decoration: BoxDecoration(color: color.withOpacity(0.10), borderRadius: BorderRadius.circular(8)),
+              child: Text('$sign${stock.changePercentage.toStringAsFixed(2)}%',
+                  style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12)),
             ),
           ],
         ),
@@ -935,7 +1482,6 @@ class _MoverCard extends StatelessWidget {
 
 class _WatchlistPreview extends StatelessWidget {
   final List<Stock> stocks;
-
   const _WatchlistPreview({required this.stocks});
 
   @override
@@ -944,15 +1490,14 @@ class _WatchlistPreview extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        border: Border.all(color: AppColors.border, width: 1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
           for (var i = 0; i < stocks.length; i++) ...[
             _WatchlistPreviewRow(stock: stocks[i]),
-            if (i < stocks.length - 1)
-              const Divider(height: 1, indent: 16, endIndent: 16),
+            if (i < stocks.length - 1) const Divider(height: 1, indent: 16, endIndent: 16),
           ],
         ],
       ),
@@ -962,64 +1507,37 @@ class _WatchlistPreview extends StatelessWidget {
 
 class _WatchlistPreviewRow extends StatelessWidget {
   final Stock stock;
-
   const _WatchlistPreviewRow({required this.stock});
 
   @override
   Widget build(BuildContext context) {
-    final isPos = stock.changePercentage >= 0;
-    final sign = isPos ? '+' : '';
+    final isPos       = stock.changePercentage >= 0;
+    final sign        = isPos ? '+' : '';
     final changeColor = isPos ? _kProfit : _kLoss;
-    final arrow = isPos ? '▲' : '▼';
+    final arrow       = isPos ? '▲' : '▼';
 
     return InkWell(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => StockDetailScreen(symbol: stock.symbol),
-        ),
-      ),
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol))),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                stock.symbol,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 15,
-                  color: AppColors.textPrimary,
-                ),
-              ),
+              child: Text(stock.symbol, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 15, color: AppColors.textPrimary)),
             ),
             PriceFlashWidget(
               price: stock.currentPrice,
               child: Text(
                 '₹${stock.currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                  color: AppColors.textPrimary,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: AppColors.textPrimary, fontFeatures: const [FontFeature.tabularFigures()]),
               ),
             ),
             const SizedBox(width: 10),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: changeColor.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                '$arrow $sign${stock.changePercentage.toStringAsFixed(2)}%',
-                style: TextStyle(
-                  color: changeColor,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
+              decoration: BoxDecoration(color: changeColor.withOpacity(0.10), borderRadius: BorderRadius.circular(8)),
+              child: Text('$arrow $sign${stock.changePercentage.toStringAsFixed(2)}%',
+                  style: TextStyle(color: changeColor, fontWeight: FontWeight.w600, fontSize: 12)),
             ),
           ],
         ),
@@ -1028,54 +1546,32 @@ class _WatchlistPreviewRow extends StatelessWidget {
   }
 }
 
-// ─── P&L Chip ─────────────────────────────────────────────────────────────────
+// ─── P&L Chip (used in positions snapshot) ───────────────────────────────────
 
 class _PnlChip extends StatelessWidget {
   final double value;
   final double pct;
   final bool isPos;
-  final bool light;
 
-  const _PnlChip({
-    required this.value,
-    required this.pct,
-    required this.isPos,
-    this.light = false,
-  });
+  const _PnlChip({required this.value, required this.pct, required this.isPos});
 
   @override
   Widget build(BuildContext context) {
     final color = isPos ? _kProfit : _kLoss;
     final arrow = isPos ? '▲' : '▼';
-    final sign = isPos ? '+' : '';
-    final bgColor = light
-        ? Colors.white.withOpacity(0.2)
-        : color.withOpacity(0.12);
-    final textColor = light ? Colors.white : color;
-
+    final sign  = isPos ? '+' : '';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(color: color.withOpacity(0.10), borderRadius: BorderRadius.circular(6)),
       child: Text(
-        '$arrow $sign₹${value.abs().toStringAsFixed(2)}  ($sign${pct.toStringAsFixed(2)}%)',
-        style: TextStyle(
-          color: textColor,
-          fontWeight: FontWeight.w600,
-          fontSize: 12,
-        ),
+        '$arrow $sign₹${value.abs().toStringAsFixed(2)} ($sign${pct.toStringAsFixed(2)}%)',
+        style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 11),
       ),
     );
   }
 }
 
-// ─── Category Leverage & Margin Card (Fix 2) ──────────────────────────────────
-//
-// Streams admin-configured leverage and margin settings from Firestore
-// (marketSettings/config) and displays them as read-only info tiles.
-// Users can see their allowed limits per category but cannot edit them.
+// ─── Category Leverage Card (kept for future use, not on main screen) ─────────
 
 class _CategoryLimitsCard extends StatefulWidget {
   const _CategoryLimitsCard();
@@ -1092,9 +1588,7 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
   @override
   void initState() {
     super.initState();
-    _sub = _service.stream.listen((s) {
-      if (mounted) setState(() => _settings = s);
-    });
+    _sub = _service.stream.listen((s) { if (mounted) setState(() => _settings = s); });
   }
 
   @override
@@ -1108,49 +1602,24 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        border: Border.all(color: AppColors.border, width: 1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
             child: Row(
               children: [
-                const Icon(
-                  LucideIcons.shieldCheck,
-                  size: 15,
-                  color: AppColors.primary,
-                ),
+                const Icon(LucideIcons.shieldCheck, size: 15, color: AppColors.primary),
                 const SizedBox(width: 8),
-                const Text(
-                  'Margin & Leverage Limits',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
+                const Text('Margin & Leverage Limits', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text(
-                    'Admin-set',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary,
-                    ),
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(6)),
+                  child: const Text('Admin-set', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.primary)),
                 ),
               ],
             ),
@@ -1158,27 +1627,12 @@ class _CategoryLimitsCardState extends State<_CategoryLimitsCard> {
           const SizedBox(height: 4),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Text(
-              'These limits are set by the platform admin and cannot be changed.',
-              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-            ),
+            child: Text('These limits are set by the platform admin and cannot be changed.', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
           ),
           const Divider(height: 1),
-          // NSE / Stocks row
-          _CategoryLimitRow(
-            label: 'NSE / BSE — Stocks',
-            icon: LucideIcons.barChart2,
-            color: AppColors.primary,
-            settings: _settings.stocks,
-          ),
+          _CategoryLimitRow(label: 'NSE / BSE — Stocks', icon: LucideIcons.barChart2, color: AppColors.primary, settings: _settings.stocks),
           const Divider(height: 1, indent: 16, endIndent: 16),
-          // MCX row
-          _CategoryLimitRow(
-            label: 'MCX — Commodities',
-            icon: LucideIcons.flame,
-            color: const Color(0xFF7B1FA2),
-            settings: _settings.mcx,
-          ),
+          _CategoryLimitRow(label: 'MCX — Commodities', icon: LucideIcons.flame, color: const Color(0xFF7B1FA2), settings: _settings.mcx),
         ],
       ),
     );
@@ -1191,98 +1645,44 @@ class _CategoryLimitRow extends StatelessWidget {
   final Color color;
   final SegmentSettings settings;
 
-  const _CategoryLimitRow({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.settings,
-  });
+  const _CategoryLimitRow({required this.label, required this.icon, required this.color, required this.settings});
 
   @override
   Widget build(BuildContext context) {
-    final isEnabled = settings.enabled;
-    final statusColor = isEnabled
-        ? const Color(0xFF00C853)
-        : const Color(0xFFD50000);
-    final statusLabel = isEnabled ? 'Open' : 'Closed';
+    final isEnabled   = settings.enabled;
+    final statusColor = isEnabled ? _kProfit : _kLoss;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          // Category icon
           Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(8),
-            ),
+            width: 36, height: 36,
+            decoration: BoxDecoration(color: color.withOpacity(0.10), borderRadius: BorderRadius.circular(8)),
             child: Icon(icon, size: 17, color: color),
           ),
           const SizedBox(width: 12),
-
-          // Label + status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
+                Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
+                    Container(width: 6, height: 6, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
                     const SizedBox(width: 4),
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: statusColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    Text(isEnabled ? 'Open' : 'Closed', style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w600)),
                     const SizedBox(width: 8),
-                    Text(
-                      '${settings.marketOpen}–${settings.marketClose} IST',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
+                    Text('${settings.marketOpen}–${settings.marketClose} IST', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
                   ],
                 ),
               ],
             ),
           ),
-
-          // Leverage tile
-          _LimitTile(
-            label: 'Max Leverage',
-            value: '${settings.maxLeverage.toStringAsFixed(0)}x',
-            color: color,
-          ),
+          _LimitTile(label: 'Max Lev.', value: '${settings.maxLeverage.toStringAsFixed(0)}x', color: color),
           const SizedBox(width: 8),
-
-          // Margin tile
-          _LimitTile(
-            label: 'Margin Req.',
-            value: '${settings.marginPercent.toStringAsFixed(2)}%',
-            color: color,
-          ),
+          _LimitTile(label: 'Margin', value: '${settings.marginPercent.toStringAsFixed(1)}%', color: color),
         ],
       ),
     );
@@ -1293,12 +1693,7 @@ class _LimitTile extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-
-  const _LimitTile({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+  const _LimitTile({required this.label, required this.value, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -1312,25 +1707,9 @@ class _LimitTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
-              color: color.withOpacity(0.7),
-              letterSpacing: 0.3,
-            ),
-          ),
+          Text(label, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: color.withOpacity(0.7))),
           const SizedBox(height: 2),
-          Text(
-            value,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: color,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Text(value, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: color, fontFeatures: const [FontFeature.tabularFigures()])),
         ],
       ),
     );

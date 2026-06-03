@@ -293,6 +293,14 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               ),
               updateBalance: true,
             );
+
+            // Parse and stream live equity metrics persisted by the backend RMS engine.
+            // The backend writes: walletBalance, usedMargin, freeMargin, equity,
+            // marginLevel, runningPnL, lastEquityUpdate to this document on every tick.
+            final equityData = data.cast<String, dynamic>();
+            _tradingStore.updateAccountEquity(
+              AccountEquity.fromFirestore(equityData),
+            );
           },
           onError: (e) {
             // Non-fatal: user profile stream error — keep showing cached data
@@ -313,8 +321,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final dateTime = timestamp is Timestamp
                   ? timestamp.toDate()
                   : timestamp is int
-                  ? DateTime.fromMillisecondsSinceEpoch(timestamp)
-                  : DateTime.now();
+                  ? DateTime.fromMillisecondsSinceEpoch(timestamp as int)
+                  : DateTime.utc(1970);
 
               // product: backend writes 'productType', TradingService writes 'product'
               final rawProduct = ((data['productType'] as String?) ??

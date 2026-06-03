@@ -6,100 +6,84 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../../domain/trade_ledger.dart';
 import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
 import '../../theme.dart';
 
 // ── Analytics data model ───────────────────────────────────────────────────────
+// All metrics derived from real FIFO-matched trades via LedgerSummary.
+// No synthetic multipliers or hashcode-based P&L.
 
 class _Analytics {
   final List<AdminOrderRecord> orders;
+  late final LedgerSummary _ledger;
 
-  const _Analytics(this.orders);
+  _Analytics(this.orders) {
+    _ledger = LedgerSummary(orders);
+  }
 
   bool _exec(AdminOrderRecord o) =>
       o.status == OrderStatus.executed || o.status == OrderStatus.approved;
 
-  double _pnl(AdminOrderRecord o) {
-    if (!_exec(o)) return 0;
-    final h = o.id.hashCode.abs();
-    return o.quantity * o.price * ((h % 200 - 100) / 1000.0);
-  }
-
+  // Volume = sum of all executed order notionals
   double get volume =>
       orders.where(_exec).fold(0.0, (s, o) => s + o.quantity * o.price);
-  double get brokerageEarned => volume * 0.0003;
-  double get spreadRevenue => volume * 0.00025;
-  double get slippageLoss => volume * 0.0004;
-  double get executionLoss => volume * 0.0001;
-  double get userProfitPaid => orders.fold(0.0, (s, o) {
-    final p = _pnl(o);
-    return s + (p > 0 ? p : 0);
-  });
-  double get netAdminPnl =>
-      brokerageEarned + spreadRevenue - userProfitPaid - slippageLoss - executionLoss;
+
+  // Real brokerage: 0.03% per leg of actual fill prices
+  double get brokerageEarned => _ledger.brokerageRevenue;
+
+  // Profits paid to winning users from matched closed trades
+  double get userProfitPaid => _ledger.userProfitsPaid;
+
+  // Net admin P&L = brokerage collected − user profits paid (real, no fake charges)
+  double get netAdminPnl => _ledger.netAdminPnl;
 
   int get totalOrders => orders.length;
   int get executedOrders => orders.where(_exec).length;
+  int get closedTrades => _ledger.closed.length;
   int get activeUsers => orders.map((o) => o.userId).toSet().length;
   double get exposure => volume;
 
-  int get winCount => orders.where((o) => _exec(o) && _pnl(o) > 0).length;
-  double get winRatio => executedOrders > 0 ? winCount / executedOrders : 0.0;
+  // Win rate over matched CLOSED trades only
+  double get winRatio => _ledger.winRate;
 
-  Map<String, double> get pnlBySymbol {
-    final m = <String, double>{};
-    for (final o in orders) {
-      m[o.symbol] = (m[o.symbol] ?? 0) + _pnl(o);
-    }
-    return m;
-  }
+  // Real P&L per symbol (from matched closed trades)
+  Map<String, double> get pnlBySymbol => _ledger.pnlBySymbol;
 
+  // Real P&L per user clientId (from matched closed trades)
   Map<String, double> get pnlByUser {
     final m = <String, double>{};
-    for (final o in orders) {
-      final id = o.userClientId.isNotEmpty ? o.userClientId : o.userId;
-      m[id] = (m[id] ?? 0) + _pnl(o);
+    for (final t in _ledger.closed) {
+      final id = t.userClientId.isNotEmpty ? t.userClientId : t.userId;
+      m[id] = (m[id] ?? 0) + t.netPnl;
     }
     return m;
   }
 
+  // P&L grouped by exchange (from matched closed trades)
   Map<String, double> get pnlByExchange {
     final m = <String, double>{};
-    for (final o in orders) {
-      final ex = _exchange(o.symbol);
-      m[ex] = (m[ex] ?? 0) + _pnl(o);
+    for (final t in _ledger.closed) {
+      final ex = t.exchange.isEmpty ? _exchFromSymbol(t.symbol) : t.exchange;
+      m[ex] = (m[ex] ?? 0) + t.netPnl;
     }
     return m;
   }
 
-  Map<int, double> get volByHour {
-    final m = <int, double>{};
-    for (final o in orders.where(_exec)) {
-      m[o.dateTime.hour] = (m[o.dateTime.hour] ?? 0) + o.quantity * o.price;
-    }
-    return m;
-  }
+  Map<int, double> get volByHour => _ledger.volumeByHour;
 
-  Map<DateTime, double> get dailyAdminPnl {
-    final m = <DateTime, double>{};
-    for (final o in orders.where(_exec)) {
-      final d = DateTime(o.dateTime.year, o.dateTime.month, o.dateTime.day);
-      final v = o.quantity * o.price;
-      m[d] = (m[d] ?? 0) + v * 0.00055 - (max(0.0, _pnl(o)) * 0.5);
-    }
-    return m;
-  }
+  // Daily admin P&L from real matched trades
+  Map<DateTime, double> get dailyAdminPnl => _ledger.dailyAdminPnl;
 
+  // Cumulative equity curve from real daily admin P&L
   List<FlSpot> get equityCurve {
-    final byDay = dailyAdminPnl;
-    if (byDay.isEmpty) return [const FlSpot(0, 0)];
-    final days = byDay.keys.toList()..sort();
-    var cum = 0.0;
+    final curve = _ledger.equityCurve;
+    if (curve.isEmpty) return [const FlSpot(0, 0)];
     return [
-      for (int i = 0; i < days.length; i++)
-        FlSpot(i.toDouble(), (cum += byDay[days[i]]!)),
+      for (int i = 0; i < curve.length; i++)
+        FlSpot(i.toDouble(), curve[i].cumulative),
     ];
   }
 
@@ -140,20 +124,15 @@ class _Analytics {
     if (exposure > 10000000) {
       out.add(_AlertData('EXPOSURE', 'Exposure ₹${_f(exposure)} above threshold', true));
     }
-    if (slippageLoss > 20000) {
-      out.add(_AlertData('SLIPPAGE', 'Abnormal slippage: ₹${_f(slippageLoss)}', false));
-    }
     if (netAdminPnl < -100000) {
       out.add(_AlertData('P&L', 'Net admin P&L is negative: ₹${_f(netAdminPnl.abs())}', true));
     }
     return out;
   }
 
-  static String _exchange(String sym) {
-    const mcx = {
-      'GOLD', 'SILVER', 'CRUDE', 'CRUDEOIL', 'NATURALGAS',
-      'COPPER', 'ZINC', 'LEAD', 'NICKEL', 'ALUMINIUM',
-    };
+  static String _exchFromSymbol(String sym) {
+    const mcx = {'GOLD', 'SILVER', 'CRUDE', 'CRUDEOIL', 'NATURALGAS',
+        'COPPER', 'ZINC', 'LEAD', 'NICKEL', 'ALUMINIUM'};
     final u = sym.toUpperCase();
     if (mcx.any(u.startsWith)) return 'MCX';
     if (u.startsWith('NIFTY') || u.startsWith('BANKNIFTY') || u.startsWith('SENSEX')) {
@@ -161,6 +140,9 @@ class _Analytics {
     }
     return 'NSE';
   }
+
+  // Kept for filter-bar exchange matching
+  static String _exchange(String sym) => _exchFromSymbol(sym);
 
   static String _f(double v) {
     if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(2)}Cr';
@@ -412,24 +394,24 @@ class _SummaryGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cards = [
-      _CardData('Total Orders', '${an.totalOrders}', LucideIcons.clipboardList, AppColors.primary, null),
-      _CardData('Executed', '${an.executedOrders}', LucideIcons.checkCircle, AppColors.success, null),
-      _CardData('Active Users', '${an.activeUsers}', LucideIcons.users, const Color(0xFF7B1FA2), null),
-      _CardData('Win Ratio', '${(an.winRatio * 100).toStringAsFixed(1)}%', LucideIcons.target, AppColors.success, null),
-      _CardData('Total Volume', _f(an.volume), LucideIcons.trendingUp, AppColors.primary, null),
+      _CardData('Total Orders',    '${an.totalOrders}',    LucideIcons.clipboardList,  AppColors.primary,              null),
+      _CardData('Executed',        '${an.executedOrders}', LucideIcons.checkCircle,    AppColors.success,              null),
+      _CardData('Closed Trades',   '${an.closedTrades}',   LucideIcons.checkCircle2,   const Color(0xFF00897B),        null),
+      _CardData('Active Users',    '${an.activeUsers}',    LucideIcons.users,          const Color(0xFF7B1FA2),        null),
+      _CardData('Win Rate',        '${(an.winRatio * 100).toStringAsFixed(1)}%', LucideIcons.target, AppColors.success, null),
+      _CardData('Total Volume',    _f(an.volume),          LucideIcons.trendingUp,     AppColors.primary,              null),
       _CardData(
         'Net Admin P&L',
-        _f(an.netAdminPnl),
+        '${an.netAdminPnl >= 0 ? '+' : '-'}₹${_f(an.netAdminPnl.abs())}',
         an.netAdminPnl >= 0 ? LucideIcons.trendingUp : LucideIcons.trendingDown,
         an.netAdminPnl >= 0 ? AppColors.success : AppColors.danger,
         an.netAdminPnl,
       ),
-      _CardData('Brokerage', _f(an.brokerageEarned), LucideIcons.percent, const Color(0xFF00838F), null),
-      _CardData('Exposure', _f(an.exposure), LucideIcons.zap, AppColors.warning, null),
-      _CardData('Slippage Loss', '-${_f(an.slippageLoss)}', LucideIcons.alertTriangle, AppColors.danger, null),
-      _CardData('User Profit Paid', '-${_f(an.userProfitPaid)}', LucideIcons.arrowDownLeft, AppColors.danger, null),
-      _CardData('Top Losing Seg.', an.topLosingSegment, LucideIcons.xCircle, AppColors.danger, null),
-      _CardData('Top Profit Seg.', an.topProfitSegment, LucideIcons.award, AppColors.success, null),
+      _CardData('Brokerage',       '₹${_f(an.brokerageEarned)}', LucideIcons.coins,  const Color(0xFF00838F),        null),
+      _CardData('Exposure',        '₹${_f(an.exposure)}',  LucideIcons.zap,            AppColors.warning,              null),
+      _CardData('User Profits Paid','-₹${_f(an.userProfitPaid)}', LucideIcons.arrowDownLeft, AppColors.danger,        null),
+      _CardData('Top Losing Seg.', an.topLosingSegment,    LucideIcons.xCircle,        AppColors.danger,               null),
+      _CardData('Top Profit Seg.', an.topProfitSegment,    LucideIcons.award,          AppColors.success,              null),
     ];
 
     final cols = isWide ? 4 : 2;
@@ -539,12 +521,10 @@ class _PnlBreakdownCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Only real, computable lines — no synthetic slippage or spread estimates.
     final rows = [
-      ('+', 'Brokerage Earned', an.brokerageEarned, AppColors.success),
-      ('+', 'Spread Revenue', an.spreadRevenue, AppColors.success),
-      ('-', 'User Profit Paid', an.userProfitPaid, AppColors.danger),
-      ('-', 'Slippage Loss', an.slippageLoss, AppColors.danger),
-      ('-', 'Execution Loss', an.executionLoss, AppColors.danger),
+      ('+', 'Brokerage Collected (0.03%/leg)', an.brokerageEarned, AppColors.success),
+      ('-', 'User Profits Paid Out',            an.userProfitPaid,   AppColors.danger),
     ];
 
     return Container(

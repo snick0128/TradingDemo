@@ -327,6 +327,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final store = TradingScope.of(context);
     final balance = store.balance;
 
+    // Use freeMargin for validation (equity-aware — accounts for running losses).
+    // For users with no open positions, freeMargin == balance.
+    final freeMargin = store.freeMargin;
+
     // Determine if this is a futures/options/MIS instrument that allows short selling.
     // For such instruments we skip the "insufficient holdings" check on SELL.
     final ex = widget.stock.exchange.toUpperCase();
@@ -358,9 +362,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     // the currently available quantity.
     final isShortSell = !_isBuy && isFnoOrMis && _qty > availableQty;
 
-    // BUY and short SELL both block margin. Exit SELL only needs quantity.
+    // BUY and short SELL both block margin — validate against freeMargin (not raw balance).
+    // freeMargin = equity - usedMargin, so it correctly reflects running losses.
     final hasInsufficientFunds =
-        (_isBuy || isShortSell) && _requiredMargin > balance;
+        (_isBuy || isShortSell) && _requiredMargin > freeMargin;
 
     final blockReason = _marketBlockReason;
     final isBlocked = blockReason != null;
@@ -415,7 +420,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                     _buildPriceField(),
                     const SizedBox(height: 16),
                   ],
-                  _buildCostBreakdown(balance),
+                  _buildCostBreakdown(freeMargin),
                   const SizedBox(height: 8),
                 ],
               ),
@@ -561,7 +566,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  _isBuy ? 'Balance' : 'Breakdown',
+                                  _isBuy ? 'Free Margin' : 'Breakdown',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,
@@ -574,12 +579,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                   fit: BoxFit.scaleDown,
                                   child: Text(
                                     _isBuy
-                                        ? '₹${balance.toStringAsFixed(2)}'
+                                        ? '₹${freeMargin.toStringAsFixed(2)}'
                                         : '$_qty @ ₹${_effectivePrice.toStringAsFixed(2)}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
-                                      color: Color(0xFF666666),
+                                      color: hasInsufficientFunds
+                                          ? const Color(0xFFD50000)
+                                          : const Color(0xFF666666),
                                     ),
                                   ),
                                 ),
@@ -603,7 +610,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                             Expanded(
                               child: Text(
                                 hasInsufficientFunds
-                                    ? 'Insufficient funds. Please add money.'
+                                    ? 'Insufficient free margin (₹${freeMargin.toStringAsFixed(2)} available). Add funds or reduce size.'
                                     : (availableQty == 0
                                           ? 'No ${widget.stock.symbol} to sell.'
                                           : 'Only $availableQty qty available.'),
@@ -1300,10 +1307,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   // ── Cost breakdown ─────────────────────────────────────────────────────────
 
-  Widget _buildCostBreakdown(double balance) {
+  Widget _buildCostBreakdown(double freeMargin) {
     final tv = _qty * _effectivePrice;
     final margin = _requiredMargin;
     final lev = _leverage;
+    final afterMargin = freeMargin - margin - _estimatedCharges;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1349,6 +1357,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             _isBuy ? const Color(0xFFD50000) : const Color(0xFF00C853),
             bold: true,
           ),
+          if (_isBuy) ...[
+            const SizedBox(height: 4),
+            _row(
+              'Free Margin after',
+              '₹${afterMargin.toStringAsFixed(2)}',
+              afterMargin >= 0 ? const Color(0xFF888888) : const Color(0xFFD50000),
+            ),
+          ],
         ],
       ),
     );

@@ -156,10 +156,20 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _logStage('ws_attach_requested_ms', _openElapsedMs());
   }
 
-  /// If the stock has no live price (currentPrice == 0), fetch a quote
-  /// from the backend using the token registered by the search screen.
-  /// This covers indices (NIFTY, SENSEX) and any non-tracked instrument.
-  Future<void> _fetchLiveQuoteIfNeeded() async {
+  /// Fetch a live price for instruments that have no WebSocket tick yet.
+  ///
+  /// Covers: indices (NIFTY 50, SENSEX), MCX futures, options, any symbol
+  /// that isn't in the backend's hardcoded WebSocket subscription list.
+  ///
+  /// Two-strategy approach:
+  ///   S1: /market/stock?symbol=  — fast (< 100ms), works for tracked symbols
+  ///   S2: /derivatives/quote?token=  — Angel One REST, works for ANY instrument
+  ///       with a valid token. Token comes from registerSearchResult() which
+  ///       is called by the search screen BEFORE Navigator.push.
+  ///
+  /// If both strategies fail on the first attempt, we retry once after 1s.
+  /// This handles transient network blips and Angel One token refresh races.
+  Future<void> _fetchLiveQuoteIfNeeded({int attempt = 0}) async {
     if (!mounted) return;
     final store = _store!;
     final stock = store.stockBySymbol(widget.symbol);
@@ -168,89 +178,114 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     if (stock.currentPrice > 0) {
       _quoteCache[_cacheSymbol] = stock;
       _quoteStage = 'live-store';
+      debugPrint('[StockDetail] Using live price for ${widget.symbol}: ₹${stock.currentPrice} (attempt $attempt)');
       return;
     }
 
-    debugPrint(
-      '[StockDetail] No live price for ${widget.symbol} — fetching...',
-    );
+    debugPrint('[StockDetail] No live price for ${widget.symbol} (token="${stock.token}" exchange="${stock.exchange}") — fetching (attempt $attempt)');
     final sw = Stopwatch()..start();
     if (mounted) setState(() => _quoteStage = 'refreshing');
 
     double ltp = 0;
     double pct = 0;
+    String source = '';
 
-    // Strategy 1: Try /market/stock?symbol= (reads from live WebSocket cache)
-    // This works for any symbol the backend has ever received a tick for.
+    // ── Strategy 1: /market/stock (live WebSocket cache on backend) ──────────
     try {
       final detail = await _api
           .getStockDetail(widget.symbol.toUpperCase())
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 4));
       final rawLtp = (detail['ltp'] as num?)?.toDouble() ?? 0.0;
       if (rawLtp > 0) {
-        ltp = rawLtp;
-        pct = (detail['changePercent'] as num?)?.toDouble() ?? 0.0;
-        debugPrint('[StockDetail] Got price from /market/stock: ₹$ltp');
+        ltp    = rawLtp;
+        pct    = (detail['changePercent'] as num?)?.toDouble() ?? 0.0;
+        source = 'market/stock';
+        debugPrint('[StockDetail] S1 OK: ₹$ltp for ${widget.symbol}');
+      } else {
+        debugPrint('[StockDetail] S1 returned ltp=0 for ${widget.symbol}');
       }
-    } catch (_) {}
-
-    // Strategy 2: Try /derivatives/quote?token=...&exchange=... (Angel One REST)
-    // Works for any instrument with a valid token, including MCX futures.
-    if (ltp <= 0 && stock.token.isNotEmpty) {
-      try {
-        final quote = await _api
-            .getQuoteByToken(
-              stock.token,
-              exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-            )
-            .timeout(const Duration(seconds: 3));
-        final rawLtp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
-        if (rawLtp > 0) {
-          ltp = rawLtp;
-          pct = (quote['percentChange'] as num?)?.toDouble() ?? 0.0;
-          debugPrint('[StockDetail] Got price from /derivatives/quote: ₹$ltp');
-        }
-      } catch (_) {}
+    } catch (e) {
+      debugPrint('[StockDetail] S1 failed for ${widget.symbol}: $e');
     }
+
+    // ── Strategy 2: /derivatives/quote?token=&exchange= (Angel One REST) ────
+    // This is the primary path for non-WebSocket instruments (indices, F&O, MCX).
+    // Token MUST be non-empty — passed from search screen via registerSearchResult.
+    if (ltp <= 0) {
+      final token    = stock.token;
+      final exchange = stock.exchange.isNotEmpty ? stock.exchange : 'NSE';
+
+      if (token.isNotEmpty) {
+        try {
+          final quote = await _api
+              .getQuoteByToken(token, exchange: exchange)
+              .timeout(const Duration(seconds: 4));
+          final rawLtp = (quote['ltp'] as num?)?.toDouble() ?? 0.0;
+          if (rawLtp > 0) {
+            ltp    = rawLtp;
+            pct    = (quote['percentChange'] as num?)?.toDouble() ?? 0.0;
+            source = 'derivatives/quote';
+            debugPrint('[StockDetail] S2 OK: ₹$ltp for ${widget.symbol} (token=$token exchange=$exchange)');
+          } else {
+            debugPrint('[StockDetail] S2 returned ltp=0 for ${widget.symbol} (token=$token exchange=$exchange)');
+          }
+        } catch (e) {
+          debugPrint('[StockDetail] S2 failed for ${widget.symbol} (token=$token exchange=$exchange): $e');
+        }
+      } else {
+        debugPrint('[StockDetail] S2 skipped: no token for ${widget.symbol}. '
+            'Ensure search screen calls registerSearchResult before navigating.');
+      }
+    }
+
+    sw.stop();
+    _logStage('quote_fetch_ms_attempt$attempt', sw.elapsedMilliseconds);
 
     if (!mounted) return;
 
     if (ltp > 0) {
+      final resolvedExchange = stock.exchange.isNotEmpty ? stock.exchange : 'NSE';
       final resolvedStock = Stock(
-        symbol: widget.symbol,
-        name: stock.name.isNotEmpty ? stock.name : widget.symbol,
-        currentPrice: ltp,
+        symbol:           widget.symbol,
+        name:             stock.name.isNotEmpty ? stock.name : widget.symbol,
+        currentPrice:     ltp,
         changePercentage: pct,
-        sector: stock.sector,
-        exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-        token: stock.token,
-        prevClose: stock.prevClose,
-        volume: stock.volume,
-        isStale: stock.isStale,
-        expiry: stock.expiry,
-        instrumentType: stock.instrumentType,
-        strikePrice: stock.strikePrice,
+        sector:           stock.sector,
+        exchange:         resolvedExchange,
+        token:            stock.token,
+        prevClose:        stock.prevClose,
+        volume:           stock.volume,
+        isStale:          stock.isStale,
+        expiry:           stock.expiry,
+        instrumentType:   stock.instrumentType,
+        strikePrice:      stock.strikePrice,
       );
       _quoteCache[_cacheSymbol] = resolvedStock;
       store.registerSearchResult(
-        symbol: widget.symbol,
-        displayName: stock.name.isNotEmpty ? stock.name : widget.symbol,
-        exchange: stock.exchange.isNotEmpty ? stock.exchange : 'NSE',
-        token: stock.token,
-        ltp: ltp,
-        changePercent: pct,
+        symbol:         widget.symbol,
+        displayName:    stock.name.isNotEmpty ? stock.name : widget.symbol,
+        exchange:       resolvedExchange,
+        token:          stock.token,
+        ltp:            ltp,
+        changePercent:  pct,
         instrumentType: stock.instrumentType,
-        strikePrice: stock.strikePrice,
-        expiry: stock.expiry,
+        strikePrice:    stock.strikePrice,
+        expiry:         stock.expiry,
       );
       if (mounted) setState(() => _quoteStage = 'fresh');
-      debugPrint('[StockDetail] Price updated: ${widget.symbol} = ₹$ltp');
+      debugPrint('[StockDetail] Price resolved: ${widget.symbol} = ₹$ltp via $source (${sw.elapsedMilliseconds}ms)');
     } else {
-      if (mounted) setState(() => _quoteStage = 'unavailable');
-      debugPrint('[StockDetail] Could not fetch price for ${widget.symbol}');
+      // Both strategies failed — retry once after a short delay.
+      // Covers: transient network errors, Angel One token refresh in-progress.
+      if (attempt < 1) {
+        debugPrint('[StockDetail] Both strategies failed for ${widget.symbol}, retrying in 1.5s...');
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        if (mounted) return _fetchLiveQuoteIfNeeded(attempt: attempt + 1);
+      } else {
+        if (mounted) setState(() => _quoteStage = 'unavailable');
+        debugPrint('[StockDetail] Could not resolve price for ${widget.symbol} after 2 attempts (${sw.elapsedMilliseconds}ms total)');
+      }
     }
-    sw.stop();
-    _logStage('quote_fetch_ms', sw.elapsedMilliseconds);
   }
 
   @override

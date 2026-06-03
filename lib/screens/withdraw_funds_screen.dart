@@ -16,49 +16,51 @@ class WithdrawFundsScreen extends StatefulWidget {
 }
 
 class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _amountController = TextEditingController();
-  String _selectedBank = 'HDFC Bank ****1234';
-  bool _loading = false;
-  bool _submitted = false;
-
-  static const _bankOptions = [
-    'HDFC Bank ****1234',
-    'ICICI Bank ****5678',
-    'SBI ****9012',
-  ];
+  final _formKey         = GlobalKey<FormState>();
+  final _amountCtrl      = TextEditingController();
+  final _bankCtrl        = TextEditingController();
+  final _upiCtrl         = TextEditingController();
+  final _remarksCtrl     = TextEditingController();
+  bool  _loading         = false;
+  bool  _submitted       = false;
 
   @override
   void dispose() {
-    _amountController.dispose();
+    _amountCtrl.dispose();
+    _bankCtrl.dispose();
+    _upiCtrl.dispose();
+    _remarksCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    final amount = double.parse(_amountController.text.trim());
+    final amount = double.parse(_amountCtrl.text.trim());
 
     setState(() => _loading = true);
 
     try {
-      // Get the current user's UID from the auth session.
-      final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
-      final uid = appScope?.notifier?.user?.uid;
+      final appScope = AppScope.of(context);
+      final uid      = appScope.notifier?.user?.uid;
+      final userName = appScope.notifier?.user?.name ?? '';
 
       if (uid == null || uid.isEmpty) {
         _showError('You must be logged in to submit a withdrawal request.');
         return;
       }
 
-      final firestore = appScope!.firestoreService;
+      final firestore = appScope.firestoreService;
 
       await firestore.addDocument('withdrawal_requests', {
-        'userId': uid,
-        'amount': amount,
-        'bankAccount': _selectedBank,
-        'status': 'PENDING',
-        'createdAt': Timestamp.now(),
-        'updatedAt': Timestamp.now(),
+        'userId':      uid,
+        'userName':    userName,
+        'amount':      amount,
+        'bankAccount': _bankCtrl.text.trim(),
+        'upiId':       _upiCtrl.text.trim(),
+        'remarks':     _remarksCtrl.text.trim(),
+        'status':      'PENDING',
+        'createdAt':   Timestamp.now(),
+        'updatedAt':   Timestamp.now(),
       });
 
       if (!mounted) return;
@@ -80,8 +82,7 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-
-    final body = _submitted ? _buildSuccessView() : _buildForm(store);
+    final body  = _submitted ? _buildSuccessView() : _buildForm(store);
 
     if (!widget.showAppBar) return body;
 
@@ -102,39 +103,35 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                color: AppColors.success.withOpacity(0.1),
-                shape: BoxShape.circle,
+                color:  AppColors.success.withOpacity(0.1),
+                shape:  BoxShape.circle,
               ),
-              child: const Icon(
-                LucideIcons.checkCircle,
-                size: 36,
-                color: AppColors.success,
-              ),
+              child: const Icon(LucideIcons.checkCircle,
+                  size: 36, color: AppColors.success),
             ),
             const SizedBox(height: 24),
-            Text(
-              'Request Submitted',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
-              ),
-            ),
+            const Text('Request Submitted',
+                style: TextStyle(
+                    fontSize:   22,
+                    fontWeight: FontWeight.w700,
+                    color:      AppColors.textPrimary)),
             const SizedBox(height: 12),
-            Text(
+            const Text(
               'Your withdrawal request has been submitted and is pending admin approval.\nYou will be notified once it is processed.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 14,
-                color: AppColors.textSecondary,
-                height: 1.6,
-              ),
+                  fontSize: 14,
+                  color:    AppColors.textSecondary,
+                  height:   1.6),
             ),
             const SizedBox(height: 32),
             OutlinedButton(
               onPressed: () => setState(() {
                 _submitted = false;
-                _amountController.clear();
+                _amountCtrl.clear();
+                _bankCtrl.clear();
+                _upiCtrl.clear();
+                _remarksCtrl.clear();
               }),
               child: const Text('Submit Another Request'),
             ),
@@ -145,6 +142,10 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
   }
 
   Widget _buildForm(dynamic store) {
+    final availableBalance = store.balance;
+    final usedMargin       = store.usedMargin;
+    final freeBalance      = store.freeMargin;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Center(
@@ -155,62 +156,49 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(
-                  LucideIcons.building2,
-                  size: 40,
-                  color: AppColors.primary,
-                ),
+                const Icon(LucideIcons.building2,
+                    size: 40, color: AppColors.primary),
                 const SizedBox(height: 16),
-                Text(
-                  'Withdraw Funds',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
+                const Text('Withdraw Funds',
+                    style: TextStyle(
+                        fontSize:   22,
+                        fontWeight: FontWeight.w700,
+                        color:      AppColors.textPrimary)),
                 const SizedBox(height: 8),
                 Text(
-                  'Available balance: ₹${store.balance.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textSecondary,
-                  ),
+                  'Available: ₹${availableBalance.toStringAsFixed(2)}  ·  Free: ₹${freeBalance.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
+
                 // Info banner
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.06),
+                    color:  AppColors.primary.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: AppColors.primary.withOpacity(0.2),
-                    ),
+                    border: Border.all(color: AppColors.primary.withOpacity(0.2)),
                   ),
-                  child: Row(
+                  child: const Row(
                     children: [
-                      const Icon(
-                        LucideIcons.info,
-                        size: 14,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 8),
+                      Icon(LucideIcons.info, size: 14, color: AppColors.primary),
+                      SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Withdrawal requests are reviewed by admin. Funds are credited within 1–2 business days after approval.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primary,
-                          ),
+                          'Only free balance (not margin-locked funds) can be withdrawn. '
+                          'Requests are reviewed within 1–2 business days.',
+                          style: TextStyle(fontSize: 12, color: AppColors.primary),
                         ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 24),
+
+                // Amount
                 TextFormField(
-                  controller: _amountController,
+                  controller: _amountCtrl,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: 'Amount',
@@ -222,38 +210,69 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
                     if (val == null || val <= 0) {
                       return 'Enter a valid amount greater than 0';
                     }
-                    if (val > store.balance) {
-                      return 'Amount exceeds available balance';
+                    if (val > availableBalance) {
+                      return 'Amount exceeds available balance (₹${availableBalance.toStringAsFixed(2)})';
+                    }
+                    if (val > freeBalance && usedMargin > 0) {
+                      return 'Amount includes margin-locked funds. Max: ₹${freeBalance.toStringAsFixed(2)}';
                     }
                     return null;
                   },
                 ),
-                const SizedBox(height: 20),
-                DropdownButtonFormField<String>(
-                  value: _selectedBank,
-                  decoration: const InputDecoration(labelText: 'Bank Account'),
-                  items: _bankOptions
-                      .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedBank = v!),
+                const SizedBox(height: 18),
+
+                // Bank Account
+                TextFormField(
+                  controller: _bankCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Bank Account Details',
+                    hintText:  'e.g. HDFC Bank XXXX 1234 / IFSC: HDFC0001234',
+                    prefixIcon: Icon(LucideIcons.building2, size: 16),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Bank account details are required';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 18),
+
+                // UPI ID (optional)
+                TextFormField(
+                  controller: _upiCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'UPI ID (optional)',
+                    hintText:  'e.g. yourname@okaxis',
+                    prefixIcon: Icon(LucideIcons.smartphone, size: 16),
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // Remarks (optional)
+                TextFormField(
+                  controller: _remarksCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Remarks (optional)',
+                    hintText:  'Any additional note for admin',
+                    prefixIcon: Icon(LucideIcons.messageSquare, size: 16),
+                  ),
                 ),
                 const SizedBox(height: 32),
+
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: _loading ? null : _submit,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                    ),
+                        backgroundColor: AppColors.primary),
                     child: _loading
                         ? const SizedBox(
                             height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
+                            width:  20,
+                            child:  CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
                         : const Text('Submit Withdrawal Request'),
                   ),
                 ),

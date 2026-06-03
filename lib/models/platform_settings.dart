@@ -65,6 +65,9 @@ class PlatformRmsSettings {
   final double nrmlSellLeverage;
   final bool blockOvernightEquityShortSell;
   final bool enableRealtimeRms;
+  /// Equity-based auto square-off threshold (₹). Default ₹500.
+  /// All positions are closed when equity drops to or below this level.
+  final double safeLevelRupees;
 
   const PlatformRmsSettings({
     this.intradayShortSellLeverage       = 5.0,
@@ -79,6 +82,7 @@ class PlatformRmsSettings {
     this.nrmlSellLeverage                = 1.0,
     this.blockOvernightEquityShortSell   = true,
     this.enableRealtimeRms               = true,
+    this.safeLevelRupees                 = 500.0,
   });
 
   static const PlatformRmsSettings defaults = PlatformRmsSettings();
@@ -96,6 +100,7 @@ class PlatformRmsSettings {
     nrmlSellLeverage:              ((m['nrmlSellLeverage']             as num?) ?? 1).toDouble(),
     blockOvernightEquityShortSell: (m['blockOvernightEquityShortSell'] as bool?) ?? true,
     enableRealtimeRms:             (m['enableRealtimeRms']            as bool?) ?? true,
+    safeLevelRupees:               ((m['safeLevel']                   as num?) ?? 500).toDouble(),
   );
 
   Map<String, dynamic> toMap() => {
@@ -111,6 +116,7 @@ class PlatformRmsSettings {
     'nrmlSellLeverage':              nrmlSellLeverage,
     'blockOvernightEquityShortSell': blockOvernightEquityShortSell,
     'enableRealtimeRms':             enableRealtimeRms,
+    'safeLevel':                     safeLevelRupees,
   };
 
   PlatformRmsSettings copyWith({
@@ -126,6 +132,7 @@ class PlatformRmsSettings {
     double? nrmlSellLeverage,
     bool? blockOvernightEquityShortSell,
     bool? enableRealtimeRms,
+    double? safeLevelRupees,
   }) => PlatformRmsSettings(
     intradayShortSellLeverage:     intradayShortSellLeverage    ?? this.intradayShortSellLeverage,
     maxShortSellMultiplier:        maxShortSellMultiplier       ?? this.maxShortSellMultiplier,
@@ -139,5 +146,6 @@ class PlatformRmsSettings {
     nrmlSellLeverage:              nrmlSellLeverage             ?? this.nrmlSellLeverage,
     blockOvernightEquityShortSell: blockOvernightEquityShortSell ?? this.blockOvernightEquityShortSell,
     enableRealtimeRms:             enableRealtimeRms            ?? this.enableRealtimeRms,
+    safeLevelRupees:               safeLevelRupees              ?? this.safeLevelRupees,
   );
 }

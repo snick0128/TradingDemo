@@ -52,6 +52,77 @@ enum TransactionType {
   stt,
   gst,
   exchangeCharges,
+  adminCredit,
+  bonus,
+  referral,
+  ipoProfit,
+  ipoLoss,
+  ipoMarginBlocked,
+  manualAdjustment,
+}
+
+enum IpoRequestStatus { pending, accepted, rejected }
+
+enum LedgerEntryType {
+  deposit,
+  adminCredit,
+  bonus,
+  referral,
+  ipoProfit,
+  ipoLoss,
+  ipoMarginBlocked,
+  withdrawal,
+  manualAdjustment,
+  marginBlocked,
+  marginReleased,
+  brokerage,
+  other;
+
+  static LedgerEntryType fromString(String s) {
+    switch (s.toUpperCase()) {
+      case 'DEPOSIT':              return LedgerEntryType.deposit;
+      case 'ADMIN_CREDIT':         return LedgerEntryType.adminCredit;
+      case 'BONUS':                return LedgerEntryType.bonus;
+      case 'REFERRAL':             return LedgerEntryType.referral;
+      case 'IPO_PROFIT':           return LedgerEntryType.ipoProfit;
+      case 'IPO_LOSS':             return LedgerEntryType.ipoLoss;
+      case 'IPO_MARGIN_BLOCKED':   return LedgerEntryType.ipoMarginBlocked;
+      case 'WITHDRAWAL':           return LedgerEntryType.withdrawal;
+      case 'MANUAL_ADJUSTMENT':    return LedgerEntryType.manualAdjustment;
+      case 'MARGIN_BLOCKED':       return LedgerEntryType.marginBlocked;
+      case 'MARGIN_RELEASED':      return LedgerEntryType.marginReleased;
+      case 'BROKERAGE':            return LedgerEntryType.brokerage;
+      default:                     return LedgerEntryType.other;
+    }
+  }
+
+  String get displayName {
+    switch (this) {
+      case LedgerEntryType.deposit:           return 'Deposit';
+      case LedgerEntryType.adminCredit:       return 'Admin Credit';
+      case LedgerEntryType.bonus:             return 'Bonus';
+      case LedgerEntryType.referral:          return 'Referral';
+      case LedgerEntryType.ipoProfit:         return 'IPO Profit';
+      case LedgerEntryType.ipoLoss:           return 'IPO Loss';
+      case LedgerEntryType.ipoMarginBlocked:  return 'IPO Margin';
+      case LedgerEntryType.withdrawal:        return 'Withdrawal';
+      case LedgerEntryType.manualAdjustment:  return 'Adjustment';
+      case LedgerEntryType.marginBlocked:     return 'Margin Blocked';
+      case LedgerEntryType.marginReleased:    return 'Margin Released';
+      case LedgerEntryType.brokerage:         return 'Brokerage';
+      case LedgerEntryType.other:             return 'Other';
+    }
+  }
+
+  bool get isCredit {
+    return this == LedgerEntryType.deposit ||
+        this == LedgerEntryType.adminCredit ||
+        this == LedgerEntryType.bonus ||
+        this == LedgerEntryType.referral ||
+        this == LedgerEntryType.ipoProfit ||
+        this == LedgerEntryType.marginReleased ||
+        this == LedgerEntryType.manualAdjustment;
+  }
 }
 
 // ─── InstrumentType ───────────────────────────────────────────────────────────
@@ -393,7 +464,13 @@ class Position {
   });
 
   double get investedValue => quantity * avgPrice;
-  double get currentValue => quantity * currentPrice;
+
+  /// currentPrice = 0 means no live tick has arrived yet (cold start / reconnect).
+  /// Use avgPrice as a safe fallback so unrealizedPnl stays at 0 rather than
+  /// reporting a fake catastrophic loss equal to the full invested value.
+  double get _effectivePrice => currentPrice > 0 ? currentPrice : avgPrice;
+
+  double get currentValue  => quantity * _effectivePrice;
   double get unrealizedPnl => side == OrderType.buy
       ? currentValue - investedValue
       : investedValue - currentValue;
@@ -500,6 +577,107 @@ class Transaction {
     this.orderId,
     this.symbol,
   });
+}
+
+// ─── Account Equity ───────────────────────────────────────────────────────────
+
+/// Live account equity metrics, kept in sync with the backend.
+///
+/// Formulas (all server-authoritative):
+///   walletBalance = freeBalance + usedMargin
+///   equity        = walletBalance + runningPnL
+///   freeMargin    = equity - usedMargin
+///   marginLevel%  = (equity / usedMargin) × 100  (null = no open positions)
+class AccountEquity {
+  /// Total deposited cash (free cash + blocked margin).
+  final double walletBalance;
+
+  /// Cash not blocked by any position (= Firestore users.balance).
+  final double freeBalance;
+
+  /// Sum of margin blocked by all open positions.
+  final double usedMargin;
+
+  /// Cash available for new orders = equity - usedMargin.
+  final double freeMargin;
+
+  /// walletBalance + runningPnL — the real-time account value.
+  final double equity;
+
+  /// Margin level percentage = (equity / usedMargin) × 100.
+  /// null when there are no open positions (no margin in use).
+  final double? marginLevel;
+
+  /// Sum of unrealized P&L across all open positions.
+  final double runningPnL;
+
+  /// When this snapshot was last updated by the backend.
+  final DateTime? lastUpdated;
+
+  const AccountEquity({
+    this.walletBalance  = 0,
+    this.freeBalance    = 0,
+    this.usedMargin     = 0,
+    this.freeMargin     = 0,
+    this.equity         = 0,
+    this.marginLevel,
+    this.runningPnL     = 0,
+    this.lastUpdated,
+  });
+
+  static const AccountEquity zero = AccountEquity();
+
+  /// Parse from a Firestore users/{userId} document snapshot.
+  factory AccountEquity.fromFirestore(Map<String, dynamic> data) {
+    final balance     = (data['balance']       as num?)?.toDouble() ?? 0;
+    final usedMargin  = (data['usedMargin']     as num?)?.toDouble() ?? 0;
+    final freeMargin  = (data['freeMargin']     as num?)?.toDouble() ?? 0;
+    final equity      = (data['equity']         as num?)?.toDouble() ?? 0;
+    final marginLevel = (data['marginLevel']    as num?)?.toDouble();
+    final runningPnL  = (data['runningPnL']     as num?)?.toDouble() ?? 0;
+    final wallet      = (data['walletBalance']  as num?)?.toDouble() ?? (balance + usedMargin);
+    final updatedMs   = data['lastEquityUpdate'] as int?;
+    return AccountEquity(
+      walletBalance: wallet,
+      freeBalance:   balance,
+      usedMargin:    usedMargin,
+      freeMargin:    freeMargin.isNaN || freeMargin.isInfinite ? balance : freeMargin,
+      equity:        equity.isNaN || equity.isInfinite ? balance : equity,
+      marginLevel:   marginLevel,
+      runningPnL:    runningPnL,
+      lastUpdated:   updatedMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(updatedMs)
+          : null,
+    );
+  }
+
+  AccountEquity copyWith({
+    double? walletBalance,
+    double? freeBalance,
+    double? usedMargin,
+    double? freeMargin,
+    double? equity,
+    double? marginLevel,
+    double? runningPnL,
+    DateTime? lastUpdated,
+  }) {
+    return AccountEquity(
+      walletBalance: walletBalance ?? this.walletBalance,
+      freeBalance:   freeBalance   ?? this.freeBalance,
+      usedMargin:    usedMargin    ?? this.usedMargin,
+      freeMargin:    freeMargin    ?? this.freeMargin,
+      equity:        equity        ?? this.equity,
+      marginLevel:   marginLevel   ?? this.marginLevel,
+      runningPnL:    runningPnL    ?? this.runningPnL,
+      lastUpdated:   lastUpdated   ?? this.lastUpdated,
+    );
+  }
+
+  /// Whether the account is at risk (equity < 2× safeLevel or margin level < 200%)
+  bool isAtRisk(double safeLevel) => equity < safeLevel * 2;
+
+  /// Whether auto square-off is imminent (equity <= safeLevel)
+  bool isCritical(double safeLevel) => equity > 0 && equity <= safeLevel;
 }
 
 // ─── Market Depth ─────────────────────────────────────────────────────────────
@@ -759,6 +937,8 @@ class User {
   final DateTime? lastLoginAt;
   final String brokeragePlan;
   final bool isAdmin;
+  /// Unrealized P&L from open positions — persisted by backend on every tick.
+  final double runningPnL;
 
   User({
     required this.id,
@@ -772,6 +952,7 @@ class User {
     this.lastLoginAt,
     this.brokeragePlan = 'Standard',
     this.isAdmin = false,
+    this.runningPnL = 0,
   });
 
   User copyWith({
@@ -786,6 +967,7 @@ class User {
     DateTime? lastLoginAt,
     String? brokeragePlan,
     bool? isAdmin,
+    double? runningPnL,
   }) {
     return User(
       id: id ?? this.id,
@@ -799,6 +981,7 @@ class User {
       lastLoginAt: lastLoginAt ?? this.lastLoginAt,
       brokeragePlan: brokeragePlan ?? this.brokeragePlan,
       isAdmin: isAdmin ?? this.isAdmin,
+      runningPnL: runningPnL ?? this.runningPnL,
     );
   }
 }
@@ -1019,4 +1202,233 @@ class IPOApplication {
     this.isAllotted = false,
     this.allottedLots,
   });
+}
+
+// ─── IPO Request ──────────────────────────────────────────────────────────────
+
+class IpoRequest {
+  final String id;
+  final String userId;
+  final String userName;
+  final String ipoId;
+  final String ipoName;
+  final int lots;
+  final int lotSize;
+  final double bidPrice;
+  final double lotValue;
+  final double marginBlocked;
+  final int marginPercent;
+  final IpoRequestStatus status;
+  final DateTime appliedAt;
+
+  // Settlement fields
+  final double? profitAmount;
+  final double? lossAmount;
+  final double? returnAmount;
+  final String? settledBy;
+  final DateTime? settledAt;
+
+  const IpoRequest({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.ipoId,
+    required this.ipoName,
+    required this.lots,
+    required this.lotSize,
+    required this.bidPrice,
+    required this.lotValue,
+    required this.marginBlocked,
+    this.marginPercent = 10,
+    required this.status,
+    required this.appliedAt,
+    this.profitAmount,
+    this.lossAmount,
+    this.returnAmount,
+    this.settledBy,
+    this.settledAt,
+  });
+
+  factory IpoRequest.fromFirestore(String id, Map<String, dynamic> d) {
+    IpoRequestStatus parseStatus(String s) {
+      switch (s.toUpperCase()) {
+        case 'ACCEPTED':
+        case 'APPROVED':
+          return IpoRequestStatus.accepted;
+        case 'REJECTED':
+          return IpoRequestStatus.rejected;
+        default:
+          return IpoRequestStatus.pending;
+      }
+    }
+
+    DateTime? parseTs(dynamic ts) {
+      if (ts == null) return null;
+      if (ts is DateTime) return ts;
+      try {
+        // Firestore Timestamp
+        return (ts as dynamic).toDate() as DateTime;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final batchPrice  = ((d['batchPrice'] as num?) ?? 0).toDouble();
+    final lotValue    = ((d['lotValue']   as num?) ?? batchPrice).toDouble();
+    final marginPct   = ((d['marginPercent'] as num?) ?? 10).toInt();
+    final blocked     = ((d['blockedAmount'] as num?) ?? 0).toDouble();
+
+    return IpoRequest(
+      id:            id,
+      userId:        (d['userId']       as String?) ?? '',
+      userName:      (d['userName']     as String?) ?? '',
+      ipoId:         (d['ipoId']        as String?) ?? '',
+      ipoName:       (d['companyName']  as String?) ?? '',
+      lots:          ((d['lots']        as num?) ?? 0).toInt(),
+      lotSize:       ((d['lotSize']     as num?) ?? 0).toInt(),
+      bidPrice:      ((d['bidPrice']    as num?) ?? 0).toDouble(),
+      lotValue:      lotValue,
+      marginBlocked: blocked,
+      marginPercent: marginPct,
+      status:        parseStatus((d['status'] as String?) ?? 'PENDING'),
+      appliedAt:     parseTs(d['createdAt']) ?? DateTime.now(),
+      profitAmount:  (d['profitAmount'] as num?)?.toDouble(),
+      lossAmount:    (d['lossAmount']   as num? ?? d['cutAmount'] as num?)?.toDouble(),
+      returnAmount:  (d['refundAmount'] as num?)?.toDouble(),
+      settledBy:     (d['approvedBy']   as String?) ?? (d['rejectedBy'] as String?),
+      settledAt:     parseTs(d['approvedAt'] ?? d['rejectedAt']),
+    );
+  }
+}
+
+// ─── Wallet Ledger Entry ──────────────────────────────────────────────────────
+
+class WalletLedgerEntry {
+  final String id;
+  final String userId;
+  final LedgerEntryType type;
+  final String typeRaw;
+  final double credit;
+  final double debit;
+  final double balanceBefore;
+  final double balanceAfter;
+  final String referenceId;
+  final String referenceType;
+  final String remarks;
+  final DateTime createdAt;
+
+  const WalletLedgerEntry({
+    required this.id,
+    required this.userId,
+    required this.type,
+    required this.typeRaw,
+    required this.credit,
+    required this.debit,
+    required this.balanceBefore,
+    required this.balanceAfter,
+    required this.referenceId,
+    required this.referenceType,
+    required this.remarks,
+    required this.createdAt,
+  });
+
+  bool get isCredit => credit > 0;
+  double get amount => credit > 0 ? credit : debit;
+
+  factory WalletLedgerEntry.fromFirestore(String id, Map<String, dynamic> d) {
+    DateTime parseTs(dynamic ts) {
+      if (ts == null) return DateTime.now();
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return DateTime.now(); }
+    }
+
+    final typeRaw = (d['type'] as String?) ?? 'OTHER';
+    final type    = LedgerEntryType.fromString(typeRaw);
+
+    // Handle both old format (amount + balance) and new format (credit + debit)
+    final rawAmount  = ((d['amount'] as num?) ?? 0).toDouble();
+    final rawCredit  = ((d['credit'] as num?) ?? 0).toDouble();
+    final rawDebit   = ((d['debit']  as num?) ?? 0).toDouble();
+    final credit     = rawCredit > 0 ? rawCredit : (type.isCredit ? rawAmount : 0.0);
+    final debit      = rawDebit  > 0 ? rawDebit  : (!type.isCredit && rawAmount > 0 ? rawAmount : 0.0);
+    final balAfter   = ((d['balanceAfter']  as num?) ?? (d['balance'] as num?) ?? 0).toDouble();
+    final balBefore  = ((d['balanceBefore'] as num?) ?? 0).toDouble();
+
+    return WalletLedgerEntry(
+      id:            id,
+      userId:        (d['userId']        as String?) ?? '',
+      type:          type,
+      typeRaw:       typeRaw,
+      credit:        credit,
+      debit:         debit,
+      balanceBefore: balBefore,
+      balanceAfter:  balAfter,
+      referenceId:   (d['referenceId']   as String?) ?? '',
+      referenceType: (d['referenceType'] as String?) ?? '',
+      remarks:       (d['remarks']       as String?) ?? '',
+      createdAt:     parseTs(d['createdAt']),
+    );
+  }
+}
+
+// ─── Withdrawal Request ───────────────────────────────────────────────────────
+
+class WithdrawalRequest {
+  final String id;
+  final String userId;
+  final String userName;
+  final double amount;
+  final String bankAccount;
+  final String upiId;
+  final String remarks;
+  final String status; // PENDING | APPROVED | REJECTED
+  final DateTime createdAt;
+  final String? approvedBy;
+  final DateTime? approvedAt;
+  final String? rejectedBy;
+  final DateTime? rejectedAt;
+  final String? rejectionReason;
+
+  const WithdrawalRequest({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.amount,
+    required this.bankAccount,
+    required this.upiId,
+    required this.remarks,
+    required this.status,
+    required this.createdAt,
+    this.approvedBy,
+    this.approvedAt,
+    this.rejectedBy,
+    this.rejectedAt,
+    this.rejectionReason,
+  });
+
+  factory WithdrawalRequest.fromFirestore(String id, Map<String, dynamic> d) {
+    DateTime parseTs(dynamic ts) {
+      if (ts == null) return DateTime.now();
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return DateTime.now(); }
+    }
+    DateTime? parseTsOpt(dynamic ts) {
+      if (ts == null) return null;
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return null; }
+    }
+    return WithdrawalRequest(
+      id:              id,
+      userId:          (d['userId']          as String?) ?? '',
+      userName:        (d['userName']        as String?) ?? '',
+      amount:          ((d['amount']         as num?) ?? 0).toDouble(),
+      bankAccount:     (d['bankAccount']     as String?) ?? '',
+      upiId:           (d['upiId']           as String?) ?? '',
+      remarks:         (d['remarks']         as String?) ?? '',
+      status:          (d['status']          as String?) ?? 'PENDING',
+      createdAt:       parseTs(d['createdAt']),
+      approvedBy:      d['approvedBy']       as String?,
+      approvedAt:      parseTsOpt(d['approvedAt']),
+      rejectedBy:      d['rejectedBy']       as String?,
+      rejectedAt:      parseTsOpt(d['rejectedAt']),
+      rejectionReason: d['rejectionReason']  as String?,
+    );
+  }
 }

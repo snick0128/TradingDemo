@@ -78,8 +78,20 @@ service cloud.firestore {
 
     // ── ledger ─────────────────────────────────────────────────────────────
     match /ledger/{entryId} {
-      allow read:  if isSignedIn();
+      allow read:  if isAdmin() ||
+                      (isSignedIn() && resource.data.userId == request.auth.uid);
       allow write: if isAdmin();
+    }
+
+    // ── ipo_orders ─────────────────────────────────────────────────────────
+    match /ipo_orders/{orderId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'PENDING' &&
+                       request.resource.data.blockedAmount > 0;
+      allow update, delete: if isAdmin();
     }
 
     // ── stocks ─────────────────────────────────────────────────────────────

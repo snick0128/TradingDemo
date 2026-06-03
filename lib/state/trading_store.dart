@@ -306,6 +306,10 @@ class TradingStore extends ChangeNotifier {
   bool _showMisSquareOffWarning = false;
   bool get showMisSquareOffWarning => _showMisSquareOffWarning;
 
+  // ── Account Equity (streamed from Firestore users/{userId}) ───────────────
+  AccountEquity _accountEquity = AccountEquity.zero;
+  AccountEquity get accountEquity => _accountEquity;
+
   // ── Platform settings (leverage, RMS, support) ────────────────────────────
   PlatformRmsSettings _rmsSettings = PlatformRmsSettings.defaults;
   SupportConfig _supportConfig = const SupportConfig();
@@ -419,6 +423,67 @@ class TradingStore extends ChangeNotifier {
       exposureMargin: exposureMargin,
       peakMargin: usedMargin * 1.1,
     );
+  }
+
+  // ── Equity getters — always computed live from streaming state ──────────
+  //
+  // IMPORTANT: Do NOT use _accountEquity.equity / freeMargin / runningPnL for
+  // primary display. Those fields are written to Firestore only when the backend
+  // RMS engine receives a price tick for a symbol with an open position.
+  // Between ticks — and whenever there are no open positions — they are stale.
+  // A user whose balance was ₹22,000 but whose equity field was last written at
+  // ₹2,000 would see ₹2,000 displayed. Always compute from live streams instead.
+  //
+  // Formula:
+  //   runningPnL    = sum(unrealizedPnl across open positions)  [from _positions stream]
+  //   walletBalance = _balance + usedMargin                     [_balance = free cash from user stream]
+  //   equity        = walletBalance + runningPnL
+  //   freeMargin    = equity - usedMargin
+
+  /// Sum of unrealized P&L across all open MIS/NRML positions.
+  /// Always computed from the live Firestore-streamed _positions list.
+  double get runningPnL =>
+      _positions.fold<double>(0.0, (s, p) => s + p.unrealizedPnl);
+
+  /// Live equity = walletBalance + runningPnL.
+  /// walletBalance = _balance (free cash) + usedMargin (blocked margin).
+  double get equity {
+    final running = runningPnL;
+    // _balance = free cash after margin is blocked (from Firestore user stream)
+    // usedMargin = sum of marginUsed on open positions (from Firestore holdings stream)
+    // walletBalance = _balance + usedMargin (margin is blocked, not permanently deducted)
+    return _balance + usedMargin + running;
+  }
+
+  /// Cash available for new orders = equity - usedMargin.
+  double get freeMargin => equity - usedMargin;
+
+  /// Available margin — never negative. max(0, equity − usedMargin)
+  double get availableMargin => (equity - usedMargin).clamp(0.0, double.infinity);
+
+  /// Margin shortfall — how far equity is below the required margin. Zero when healthy.
+  double get marginShortfall => (usedMargin - equity).clamp(0.0, double.infinity);
+
+  /// Margin level % = (equity / usedMargin) × 100. Null when no open positions.
+  double? get marginLevel {
+    final um = usedMargin;
+    if (um <= 0) return null;
+    return (equity / um) * 100;
+  }
+
+  /// Update equity metrics from the Firestore users/{userId} document.
+  /// Called by main.dart's user stream listener on every snapshot.
+  void updateAccountEquity(AccountEquity newEquity) {
+    // Only notify if a meaningful field changed (avoids spurious rebuilds).
+    if (_accountEquity.equity == newEquity.equity &&
+        _accountEquity.freeMargin == newEquity.freeMargin &&
+        _accountEquity.usedMargin == newEquity.usedMargin &&
+        _accountEquity.runningPnL == newEquity.runningPnL) return;
+    _accountEquity = newEquity;
+    _notifyDebounce ??= Timer(const Duration(milliseconds: 16), () {
+      _notifyDebounce = null;
+      notifyListeners();
+    });
   }
 
   Stock? stockBySymbolOrNull(String symbol) {

@@ -10,6 +10,7 @@ import '../widgets/shared_widgets.dart';
 import 'basket_orders_screen.dart';
 import 'gtt_orders_screen.dart';
 import 'market_watch_screen.dart';
+import 'trade_history_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
@@ -632,57 +633,13 @@ class _OrderCard extends StatelessWidget {
   }
 }
 
-// ─── Trade Book Tab (executed orders — card rows) ─────────────────────────────
+// ─── Trade Book Tab — delegates to TradeHistoryScreen ─────────────────────────
 
 class _TradeBookTab extends StatelessWidget {
   const _TradeBookTab();
 
   @override
-  Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final executed =
-        store.orders
-            .where(
-              (o) =>
-                  o.status == OrderStatus.approved ||
-                  o.status == OrderStatus.executed,
-            )
-            .toList()
-          ..sort(
-            (a, b) => (b.executedAt ?? b.dateTime).compareTo(
-              a.executedAt ?? a.dateTime,
-            ),
-          );
-
-    if (executed.isEmpty) return _emptyState('No executed trades');
-
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
-      itemCount: executed.length,
-      itemBuilder: (context, index) {
-        final order = executed[index];
-        final prev = index > 0 ? executed[index - 1] : null;
-        final showDateHeader =
-            prev == null ||
-            !_sameDay(
-              prev.executedAt ?? prev.dateTime,
-              order.executedAt ?? order.dateTime,
-            );
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (showDateHeader)
-              _DateGroupLabel(order.executedAt ?? order.dateTime),
-            _TradeCard(order: order),
-            const SizedBox(height: 10),
-          ],
-        );
-      },
-    );
-  }
-
-  bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
+  Widget build(BuildContext context) => const TradeHistoryScreen();
 }
 
 class _TradeCard extends StatelessWidget {

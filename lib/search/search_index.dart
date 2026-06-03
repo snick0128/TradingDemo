@@ -10,6 +10,7 @@
 ///     the first remote response.
 
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 
 // ── Instrument model ──────────────────────────────────────────────────────────
 
@@ -192,6 +193,11 @@ class SearchIndex {
   // exchange_symbol → catalog index (prevents duplicates on ingest)
   late Map<String, int> _dedupKeys;
 
+  // symbol (upper) → Angel One symbolToken — populated by ingestRemoteResults.
+  // Used to pass a valid token when navigating from local catalog results so
+  // the StockDetailScreen can call /derivatives/quote and always get a price.
+  final Map<String, String> _tokenMap = {};
+
   // Context sets — updated from TradingStore
   final Set<String> _watchlistSymbols = {};
   final Set<String> _holdingSymbols   = {};
@@ -220,6 +226,28 @@ class SearchIndex {
       final sym  = ((r['symbol'] ?? r['tradingSymbol'] ?? '') as String).toUpperCase().trim();
       final ex   = ((r['exchange'] ?? '') as String).toUpperCase().trim();
       if (sym.isEmpty || ex.isEmpty) continue;
+
+      // Always store the token — even for existing catalog entries.
+      // This is the key fix: local results (seed catalog) have no token, but
+      // once the remote search returns a token, we cache it here so that
+      // _navigateToSymbol can pass it to StockDetailScreen.
+      final token = (r['token'] ?? r['symbolToken'] ?? '').toString().trim();
+      if (token.isNotEmpty) {
+        _tokenMap[sym] = token;
+        // Also store with exchange prefix for disambiguation (e.g. INFY NSE vs INFY BSE)
+        _tokenMap['${ex}_$sym'] = token;
+        // NSE stores equities/ETFs with a -EQ suffix (e.g. NIFTYBEES-EQ).
+        // The local seed catalog uses the bare name (NIFTYBEES, exchange=NSE).
+        // Store an extra qualified entry under the bare name so that
+        // getToken('NIFTYBEES', exchange:'NSE') finds the NSE token, not BSE's.
+        if (ex == 'NSE') {
+          final bare = sym.replaceAll(RegExp(r'-(EQ|BE|BL|IQ|RL|AF|U\d+)$'), '');
+          if (bare != sym) {
+            _tokenMap['NSE_$bare'] = token;
+            debugPrint('[SearchIndex] NSE suffix-stripped: $sym → $bare token=$token');
+          }
+        }
+      }
 
       final key = '${ex}_$sym';
       if (_dedupKeys.containsKey(key)) {
@@ -253,6 +281,37 @@ class SearchIndex {
       _prefix.addInstrument(idx, inst);
       _dedupKeys[key] = idx;
     }
+  }
+
+  /// Look up the Angel One symbolToken for a given trading symbol.
+  ///
+  /// Lookup order (stops at first hit):
+  ///   1. Exchange-qualified exact:   NSE_NIFTYBEES-EQ
+  ///   2. Exchange-qualified bare:    NSE_NIFTYBEES  (stripped by ingestRemoteResults)
+  ///   3. Exchange-qualified +EQ:     NSE_NIFTYBEES-EQ  (for NSE, if bare miss)
+  ///   4. Unqualified fallback:       NIFTYBEES
+  ///
+  /// Returns empty string if no token is known yet.
+  String getToken(String symbol, {String exchange = ''}) {
+    final sym = symbol.toUpperCase().trim();
+    final ex  = exchange.toUpperCase().trim();
+    if (ex.isNotEmpty) {
+      // 1. Exact qualified key (e.g. NSE_NIFTYBEES-EQ or BSE_NIFTYBEES)
+      final qualified = _tokenMap['${ex}_$sym'];
+      if (qualified != null && qualified.isNotEmpty) return qualified;
+      // 2. Bare-name qualified key stored by ingestRemoteResults for NSE -EQ symbols
+      //    e.g. NSE_NIFTYBEES → covers seed-catalog instruments whose symbol has no suffix
+      // (already covered by step 1 when sym has no suffix; this is a no-op duplicate-safe)
+
+      // 3. For NSE: try with -EQ suffix in case only the suffixed form was ingested
+      if (ex == 'NSE') {
+        final withEq = _tokenMap['NSE_${sym}-EQ'];
+        if (withEq != null && withEq.isNotEmpty) return withEq;
+      }
+    }
+    // 4. Unqualified fallback — may be BSE token for dual-listed symbols;
+    //    only reached when no exchange was provided or qualified lookup missed.
+    return _tokenMap[sym] ?? '';
   }
 
   /// Search the local catalog + any ingested instruments.

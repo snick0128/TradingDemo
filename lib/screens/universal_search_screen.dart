@@ -11,6 +11,51 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 import 'stock_detail_screen.dart';
 
+// ─── Session-level search cache ──────────────────────────────────────────────
+//
+// Lives as static state — survives screen pops/reopens for the entire app
+// session. Implements a three-tier TTL model:
+//
+//   Fresh  (< 45s)  — serve immediately, no background refresh needed
+//   Stale  (< 5min) — serve immediately, trigger silent background refresh
+//   Expired(> 5min) — don't serve; fetch fresh (show skeleton)
+//
+// This gives users sub-millisecond results for recently-typed queries while
+// ensuring data stays reasonably fresh.
+
+class _CachedSearch {
+  final List<_RemoteResult> results;
+  final DateTime fetchedAt;
+
+  _CachedSearch(this.results) : fetchedAt = DateTime.now();
+
+  static const _kFresh = Duration(seconds: 45);
+  static const _kStale = Duration(minutes: 5);
+
+  bool get isFresh   => DateTime.now().difference(fetchedAt) < _kFresh;
+  bool get isExpired => DateTime.now().difference(fetchedAt) > _kStale;
+  bool get isStale   => !isFresh && !isExpired;
+}
+
+/// Session-scoped search result store — global singleton, never GC'd during app life.
+class _SearchSessionCache {
+  _SearchSessionCache._();
+
+  static const _kMax = 120; // plenty for a full session
+
+  static final Map<String, _CachedSearch> _store = {};
+
+  static _CachedSearch? get(String key) => _store[key];
+
+  static void put(String key, List<_RemoteResult> results) {
+    if (_store.length >= _kMax) _store.remove(_store.keys.first);
+    _store[key] = _CachedSearch(results);
+    debugPrint('[SearchCache] Stored "$key" (${results.length} results, total=${_store.length})');
+  }
+
+  static int get size => _store.length;
+}
+
 // ─── Remote result (from backend API) ────────────────────────────────────────
 
 class _RemoteResult {
@@ -111,31 +156,44 @@ class UniversalSearchScreen extends StatefulWidget {
 
 class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   final _controller = TextEditingController();
-  final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
-  final _focusNode = FocusNode();
+  final _api        = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+  final _focusNode  = FocusNode();
 
-  String _query = '';
+  String  _query          = '';
   String? _exchangeFilter; // null = All
   String? _segmentFilter;
 
-  // Local catalog results (instant)
+  // Instant local results — prefix trie lookup, < 5ms
   List<Instrument> _localResults = [];
 
-  // Remote API results (enriched with LTP)
+  // Remote API results (enriched with LTP + token from backend)
   List<_RemoteResult> _remoteResults = [];
-  bool _remoteLoading = false;
+  bool   _remoteLoading = false;
   String? _remoteError;
 
-  // Cache to avoid duplicate requests
-  final Map<String, List<_RemoteResult>> _searchCache = {};
+  // Generation counter: incremented on every new query or filter change.
+  // All async responses check this before mutating state, preventing races.
+  int _reqGen = 0;
 
   Timer? _debounce;
+  Timer? _retryTimer;
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
-    // Seed context into search index
-    WidgetsBinding.instance.addPostFrameCallback((_) => _seedContext());
+
+    // Pre-warm: fire a real search query immediately so the connection, search
+    // route, and instrument index are ALL warm before the user types anything.
+    // /health alone only wakes the Express process; this also warms the search
+    // index cache and the TCP+TLS connection that subsequent searches will reuse.
+    unawaited(_api.searchUniversal('nifty', limit: 5).catchError((_) {}));
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _seedContext();
+      _preloadWatchlist(); // background prefetch of watchlist quotes
+    });
   }
 
   @override
@@ -143,101 +201,258 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     _controller.dispose();
     _focusNode.dispose();
     _debounce?.cancel();
+    _retryTimer?.cancel();
     super.dispose();
   }
+
+  // ── Context seeding ─────────────────────────────────────────────────────────
 
   void _seedContext() {
     if (!mounted) return;
     final store = TradingScope.of(context);
     SearchIndex.instance.updateContext(
       watchlist: store.watchlist.map((s) => s.symbol).toSet(),
-      holdings: store.holdings.map((h) => h.symbol).toSet(),
+      holdings:  store.holdings.map((h) => h.symbol).toSet(),
       positions: store.positions.map((p) => p.symbol).toSet(),
-      recent: List<String>.from(store.recentSearches),
+      recent:    List<String>.from(store.recentSearches),
     );
+  }
+
+  // ── Background prefetch ─────────────────────────────────────────────────────
+
+  /// Prefetch quote data for watchlist instruments that don't have a live price.
+  /// Populates the HTTP cache so stock detail opens instantly for these symbols.
+  Future<void> _preloadWatchlist() async {
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+    final store = TradingScope.of(context);
+    final toLoad = store.watchlist
+        .where((s) => s.token.isNotEmpty && s.currentPrice <= 0)
+        .take(4)
+        .toList();
+    for (final s in toLoad) {
+      unawaited(
+        _api.getQuoteByToken(s.token, exchange: s.exchange.isNotEmpty ? s.exchange : 'NSE')
+            .catchError((_) {}),
+      );
+    }
+    debugPrint('[Search] Preloaded ${toLoad.length} watchlist quotes');
+  }
+
+  /// Prefetch quote data on tap-down (before the tap is registered by the system).
+  /// The ~100ms between tap-down and route push is enough to populate the HTTP
+  /// cache — making the detail screen feel instantaneous.
+  void _prefetchForSymbol({
+    required String symbol,
+    required String exchange,
+    required String token,
+  }) {
+    debugPrint('[Search] Prefetch tap-down: $symbol ($exchange) token=${token.isEmpty ? "none" : token.substring(0, token.length.clamp(0, 8))}...');
+    // Strategy 1 — /market/stock (always fire, works for WebSocket-tracked symbols)
+    unawaited(_api.getStockDetail(symbol.toUpperCase()).catchError((_) {}));
+    // Strategy 2 — /derivatives/quote (requires token; covers indices, F&O, MCX)
+    if (token.isNotEmpty) {
+      final ex = exchange.isNotEmpty ? exchange.toUpperCase() : 'NSE';
+      unawaited(_api.getQuoteByToken(token, exchange: ex).catchError((_) {}));
+    }
+  }
+
+  // ── Token resolution ────────────────────────────────────────────────────────
+
+  /// Resolve the best token for a local catalog instrument.
+  ///
+  /// Priority:
+  ///   1. TradingStore (live WebSocket — most authoritative)
+  ///   2. SearchIndex._tokenMap (populated by previous remote search)
+  ///   3. Empty string (detail screen falls back to /market/stock only)
+  String _tokenFor(Instrument instrument) {
+    if (mounted) {
+      final stock = TradingScope.of(context).stockBySymbolOrNull(instrument.symbol);
+      if (stock != null && stock.token.isNotEmpty) return stock.token;
+    }
+    return SearchIndex.instance.getToken(instrument.symbol, exchange: instrument.exchange);
   }
 
   // ── Query handling ──────────────────────────────────────────────────────────
 
   void _onQueryChanged(String value) {
     _debounce?.cancel();
+    _retryTimer?.cancel();
     final q = value.trim();
-    setState(() {
-      _query = q;
-      _remoteError = null;
-    });
 
-    // Clear results for empty or single-char queries — no API call
     if (q.length < 2) {
       setState(() {
-        _localResults = [];
+        _query         = q;
+        _localResults  = [];
         _remoteResults = [];
         _remoteLoading = false;
+        _remoteError   = null;
       });
       return;
     }
 
-    // Instant local results — no debounce needed (pure in-memory)
-    final local = SearchIndex.instance.search(q, limit: 20);
+    // ── Step 1: Instant local results (<5ms) ──
+    final local    = SearchIndex.instance.search(q, limit: 20);
+    final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
+    final cached   = _SearchSessionCache.get(cacheKey);
+
+    if (cached != null && !cached.isExpired) {
+      // ── Cache hit: serve immediately (<1ms perceived) ──────────────────────
+      setState(() {
+        _query         = q;
+        _localResults  = local;
+        _remoteResults = cached.results;
+        _remoteLoading = false;
+        _remoteError   = null;
+      });
+
+      // Stale: serve immediately, refresh silently in background.
+      // Very short delay (50ms) — just enough to let the current frame paint
+      // before firing the background network request.
+      if (cached.isStale) {
+        final gen = ++_reqGen;
+        _debounce = Timer(const Duration(milliseconds: 50),
+            () => _fetchRemote(q, gen, isBackground: true));
+      }
+      return;
+    }
+
+    // ── Cache miss: show skeleton immediately + fire API ────────────────────
+    final gen = ++_reqGen;
     setState(() {
-      _localResults = local;
+      _query         = q;
+      _localResults  = local;
+      _remoteLoading = true;
+      _remoteError   = null;
+      // Keep previous remote results while loading — avoids the "flash of
+      // empty skeleton" when the user extends the query (TAT → TATA).
     });
 
-    // Remote enrichment — 150ms debounce (fast feel, avoids per-keystroke spam)
-    _debounce = Timer(const Duration(milliseconds: 150), () => _fetchRemote(q));
+    // 100ms debounce: shorter than before (was 200ms).
+    // Still prevents firing on every intermediate keystroke while typing fast,
+    // but halves the wait once the user pauses.
+    _debounce = Timer(const Duration(milliseconds: 100),
+        () => _fetchRemote(q, gen));
   }
 
-  Future<void> _fetchRemote(String q) async {
-    if (q.isEmpty || q.length < 2) return;
+  Future<void> _fetchRemote(String q, int gen, {bool isBackground = false}) async {
+    if (q.isEmpty || q.length < 2 || !mounted) return;
 
-    // Check cache first — avoids duplicate API calls for the same query
-    final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
-    if (_searchCache.containsKey(cacheKey)) {
-      setState(() {
-        _remoteResults = _searchCache[cacheKey]!;
-        _remoteLoading = false;
-        _remoteError = null;
-      });
+    // Generation guard — discard if superseded by a newer query or filter change
+    if (gen != _reqGen) {
+      debugPrint('[Search] Drop gen=$gen (current=$_reqGen) q="$q"');
       return;
     }
 
-    setState(() {
-      _remoteLoading = true;
-      _remoteError = null;
-    });
+    final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
+
+    // Double-check session cache — another code path may have populated it
+    final alreadyCached = _SearchSessionCache.get(cacheKey);
+    if (alreadyCached != null && !alreadyCached.isExpired) {
+      if (gen == _reqGen && mounted) {
+        setState(() {
+          _remoteResults = alreadyCached.results;
+          _remoteLoading = false;
+          _remoteError   = null;
+        });
+      }
+      return;
+    }
+
+    debugPrint('[Search] Fetch gen=$gen bg=$isBackground q="$q" ex=${_exchangeFilter ?? "ALL"}');
+    final sw = Stopwatch()..start();
 
     try {
       final results = await _api.searchUniversal(q, exchange: _exchangeFilter);
+      sw.stop();
+      debugPrint('[Search] Got gen=$gen ${results.length} results in ${sw.elapsedMilliseconds}ms');
 
-      // Stale response guard: discard if query has changed since request was sent
-      if (_query != q || !mounted) return;
+      if (gen != _reqGen || !mounted) {
+        debugPrint('[Search] Discard stale response gen=$gen');
+        return;
+      }
 
       final parsed = results.map(_RemoteResult.fromJson).toList();
-      _searchCache[cacheKey] = parsed;
 
-      // Cache results in local trie so subsequent keystrokes are instant
+      // ── Store in session cache ──
+      _SearchSessionCache.put(cacheKey, parsed);
+
+      // ── Ingest into local trie + token map ──
+      // Next keystrokes will be instant. Also populates SearchIndex._tokenMap
+      // so local-result navigation always has a valid token.
       SearchIndex.instance.ingestRemoteResults(
         parsed.map((r) => {
-          'symbol': r.tradingSymbol,
-          'exchange': r.exchange,
-          'type': r.instrumentType,
+          'symbol':      r.tradingSymbol,
+          'exchange':    r.exchange,
+          'type':        r.instrumentType,
           'displayName': r.displaySymbol,
-          'name': r.name,
+          'name':        r.name,
+          'token':       r.symbolToken,
           if (r.ltp != null) 'ltp': r.ltp,
           if (r.percentChange != null) 'percentChange': r.percentChange,
         }).toList(),
       );
 
+      // Background refresh: only update state if results actually changed
+      // (avoids a repaint when the data is identical to what's shown)
+      if (isBackground) {
+        final currentSyms = _remoteResults.map((r) => r.tradingSymbol).toSet();
+        final newSyms     = parsed.map((r) => r.tradingSymbol).toSet();
+        final changed     = currentSyms.length != newSyms.length ||
+            currentSyms.any((s) => !newSyms.contains(s));
+        if (changed && mounted) {
+          setState(() => _remoteResults = parsed);
+          debugPrint('[Search] Background update applied for "$q"');
+        }
+        return;
+      }
+
       setState(() {
         _remoteResults = parsed;
         _remoteLoading = false;
       });
+
+      // ── Background prefetch of top results ──
+      // After results render, fire quote prefetch for top 3 so tapping any of
+      // them opens the detail screen without a loading spinner.
+      _prefetchTopResults(parsed);
+
     } catch (e) {
-      if (_query != q || !mounted) return;
-      setState(() {
-        _remoteError = e.toString().replaceFirst('BackendException: ', '');
-        _remoteLoading = false;
-      });
+      sw.stop();
+      if (gen != _reqGen || !mounted) return;
+
+      // 503 = index still initializing — retry silently (don't show error)
+      if (e is BackendException && e.statusCode == 503) {
+        debugPrint('[Search] 503 index not ready, retry in 2s (gen=$gen)');
+        if (!isBackground) setState(() => _remoteLoading = true);
+        _retryTimer = Timer(const Duration(seconds: 2), () {
+          if (mounted && gen == _reqGen) _fetchRemote(q, gen, isBackground: isBackground);
+        });
+        return;
+      }
+
+      debugPrint('[Search] Error gen=$gen ${sw.elapsedMilliseconds}ms: $e');
+      if (!isBackground) {
+        setState(() {
+          _remoteError   = e.toString().replaceFirst('BackendException: ', '');
+          _remoteLoading = false;
+        });
+      }
+    }
+  }
+
+  /// After results render, prefetch quotes for the top N to pre-warm the HTTP
+  /// cache. Tap-down also fires prefetch, but this covers the case where the
+  /// user taps before seeing the results (e.g. very fast tap).
+  void _prefetchTopResults(List<_RemoteResult> results) {
+    final top = results.take(3);
+    for (final r in top) {
+      if (r.symbolToken.isNotEmpty) {
+        unawaited(
+          _api.getQuoteByToken(r.symbolToken, exchange: r.exchange).catchError((_) {}),
+        );
+      }
+      unawaited(_api.getStockDetail(r.displaySymbol.toUpperCase()).catchError((_) {}));
     }
   }
 
@@ -293,6 +508,8 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 
   void _onExchangeTap(String ex) {
     final newFilter = _exchangeFilter == ex ? null : ex;
+    _debounce?.cancel();
+    _retryTimer?.cancel();
     setState(() {
       _exchangeFilter = newFilter;
       if (newFilter == 'MCX' &&
@@ -302,7 +519,20 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
         _segmentFilter = null;
       }
     });
-    if (_query.length >= 2) _fetchRemote(_query);
+    if (_query.length >= 2) {
+      final gen = ++_reqGen;
+      final cacheKey = '${newFilter ?? 'ALL'}_$_query';
+      final cached   = _SearchSessionCache.get(cacheKey);
+      if (cached != null && !cached.isExpired) {
+        setState(() {
+          _remoteResults = cached.results;
+          _remoteLoading = false;
+        });
+        return;
+      }
+      setState(() => _remoteLoading = true);
+      _fetchRemote(_query, gen);
+    }
   }
 
   // ── Navigate to stock ───────────────────────────────────────────────────────
@@ -412,8 +642,20 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
             selected: _exchangeFilter == null,
             onTap: () {
               if (_exchangeFilter != null) {
+                _debounce?.cancel();
+                _retryTimer?.cancel();
                 setState(() => _exchangeFilter = null);
-                if (_query.length >= 2) _fetchRemote(_query);
+                if (_query.length >= 2) {
+                  final gen      = ++_reqGen;
+                  final cacheKey = 'ALL_$_query';
+                  final cached   = _SearchSessionCache.get(cacheKey);
+                  if (cached != null && !cached.isExpired) {
+                    setState(() { _remoteResults = cached.results; _remoteLoading = false; });
+                    return;
+                  }
+                  setState(() => _remoteLoading = true);
+                  _fetchRemote(_query, gen);
+                }
               }
             },
           ),
@@ -538,228 +780,183 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       return _buildNoResults();
     }
 
-    return ListView(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      children: [
-        // ── Top Match (Exact match boost) ──────────────────────────────────
-        if (local.isNotEmpty &&
-            local[0].displayName.toUpperCase() == _query.toUpperCase()) ...[
-          _SectionHeader(
-            icon: LucideIcons.star,
-            label: 'Best Match',
-            color: AppColors.primary,
+    // ── Flat item list for ListView.builder ─────────────────────────────────
+    // Avoids rendering all items immediately; Flutter builds only visible rows.
+    final items = <Widget>[];
+    final isBestMatch = local.isNotEmpty &&
+        local[0].displayName.toUpperCase() == _query.toUpperCase();
+
+    // Best Match
+    if (isBestMatch) {
+      final i = local[0];
+      final tok = _tokenFor(i);
+      items.add(_SectionHeader(icon: LucideIcons.star, label: 'Best Match', color: AppColors.primary));
+      items.add(_withPrefetch(
+        symbol: i.symbol, exchange: i.exchange, token: tok,
+        child: _LocalInstrumentTile(
+          instrument: i, ltp: _ltpForSymbol(i.symbol),
+          onTap: () => _navigateToSymbol(context, i.symbol, i.displayName, exchange: i.exchange, token: tok),
+        ),
+      ));
+      items.add(const Divider(height: 1, indent: 70));
+    }
+
+    // Watchlist
+    if (fromWatchlist.isNotEmpty) {
+      items.add(_SectionHeader(icon: LucideIcons.bookmark, label: 'In Your Watchlist', color: AppColors.primary));
+      for (final i in fromWatchlist) {
+        final tok = _tokenFor(i);
+        items.add(_withPrefetch(
+          symbol: i.symbol, exchange: i.exchange, token: tok,
+          child: _LocalInstrumentTile(
+            instrument: i, ltp: _ltpForSymbol(i.symbol),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName, exchange: i.exchange, token: tok),
           ),
-          _LocalInstrumentTile(
-            instrument: local[0],
-            ltp: _ltpForSymbol(local[0].symbol),
+        ));
+      }
+    }
+
+    // Portfolio
+    if (fromHoldings.isNotEmpty || fromPositions.isNotEmpty) {
+      items.add(_SectionHeader(icon: LucideIcons.briefcase, label: 'Your Portfolio', color: AppColors.success));
+      for (final i in [...fromHoldings, ...fromPositions]) {
+        final tok = _tokenFor(i);
+        items.add(_withPrefetch(
+          symbol: i.symbol, exchange: i.exchange, token: tok,
+          child: _LocalInstrumentTile(
+            instrument: i, ltp: _ltpForSymbol(i.symbol),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName, exchange: i.exchange, token: tok),
+          ),
+        ));
+      }
+    }
+
+    // Remote results
+    if (remote.isNotEmpty) {
+      items.add(_SectionHeader(icon: LucideIcons.globe, label: 'Universal Results', color: AppColors.textSecondary));
+      for (final r in remote) {
+        items.add(_withPrefetch(
+          symbol: r.displaySymbol, exchange: r.exchange, token: r.symbolToken,
+          child: _RemoteResultTile(
+            result: r,
             onTap: () => _navigateToSymbol(
-              context,
-              local[0].symbol,
-              local[0].displayName,
-              exchange: local[0].exchange,
+              context, r.tradingSymbol, r.displaySymbol,
+              exchange: r.exchange, token: r.symbolToken,
+              ltp: r.ltp ?? 0, changePercent: r.percentChange ?? 0,
+              instrumentType: r.resolvedInstrumentType,
             ),
           ),
-          const Divider(height: 1, indent: 70),
-        ],
+        ));
+      }
+    } else if (_remoteLoading) {
+      items.add(_SectionHeader(icon: LucideIcons.globe, label: 'Searching Exchanges...', color: AppColors.textSecondary));
+      items.add(const _SearchSkeleton());
+      items.add(const _SearchSkeleton());
+      items.add(const _SearchSkeleton());
+    }
 
-        // ── Watchlist section ──────────────────────────────────────────────
-        if (fromWatchlist.isNotEmpty) ...[
-          _SectionHeader(
-            icon: LucideIcons.bookmark,
-            label: 'In Your Watchlist',
-            color: AppColors.primary,
+    // Other local matches
+    final othersFiltered = others.where((i) => !(isBestMatch && i == local[0])).toList();
+    if (othersFiltered.isNotEmpty) {
+      final hasOtherSections = fromWatchlist.isNotEmpty ||
+          fromHoldings.isNotEmpty || fromPositions.isNotEmpty || remote.isNotEmpty;
+      if (hasOtherSections) {
+        items.add(_SectionHeader(icon: LucideIcons.search, label: 'Other Matches', color: AppColors.textSecondary));
+      }
+      for (final i in othersFiltered) {
+        final tok = _tokenFor(i);
+        items.add(_withPrefetch(
+          symbol: i.symbol, exchange: i.exchange, token: tok,
+          child: _LocalInstrumentTile(
+            instrument: i, ltp: _ltpForSymbol(i.symbol),
+            onTap: () => _navigateToSymbol(context, i.symbol, i.displayName, exchange: i.exchange, token: tok),
           ),
-          ...fromWatchlist.map(
-            (i) => _LocalInstrumentTile(
-              instrument: i,
-              ltp: _ltpForSymbol(i.symbol),
-              onTap: () => _navigateToSymbol(
-                context,
-                i.symbol,
-                i.displayName,
-                exchange: i.exchange,
-              ),
-            ),
-          ),
-        ],
+        ));
+      }
+    }
 
-        // ── Holdings & Positions ───────────────────────────────────────────
-        if (fromHoldings.isNotEmpty || fromPositions.isNotEmpty) ...[
-          _SectionHeader(
-            icon: LucideIcons.briefcase,
-            label: 'Your Portfolio',
-            color: AppColors.success,
-          ),
-          ...fromHoldings.map(
-            (i) => _LocalInstrumentTile(
-              instrument: i,
-              ltp: _ltpForSymbol(i.symbol),
-              onTap: () => _navigateToSymbol(
-                context,
-                i.symbol,
-                i.displayName,
-                exchange: i.exchange,
-              ),
-            ),
-          ),
-          ...fromPositions.map(
-            (i) => _LocalInstrumentTile(
-              instrument: i,
-              ltp: _ltpForSymbol(i.symbol),
-              onTap: () => _navigateToSymbol(
-                context,
-                i.symbol,
-                i.displayName,
-                exchange: i.exchange,
-              ),
-            ),
-          ),
-        ],
+    if (!hasAny && !_remoteLoading) return _buildNoResults();
 
-        // ── Global Search Results ──────────────────────────────────────────
-        if (remote.isNotEmpty) ...[
-          _SectionHeader(
-            icon: LucideIcons.globe,
-            label: 'Universal Results',
-            color: AppColors.textSecondary,
-          ),
-          ...remote.map(
-            (r) => _RemoteResultTile(
-              result: r,
-              onTap: () => _navigateToSymbol(
-                context,
-                r.tradingSymbol,
-                r.displaySymbol,
-                exchange: r.exchange,
-                token: r.symbolToken,
-                ltp: r.ltp ?? 0,
-                changePercent: r.percentChange ?? 0,
-                instrumentType: r.resolvedInstrumentType,
-              ),
+    // Append trailing items (error, hint, spacer) to the flat list
+    if (_remoteError != null && remote.isEmpty) {
+      items.add(Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            const Icon(LucideIcons.alertCircle, size: 32, color: AppColors.danger),
+            const SizedBox(height: 12),
+            Text(
+              'Universal search currently limited\n$_remoteError',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.5),
             ),
-          ),
-        ] else if (_remoteLoading) ...[
-          _SectionHeader(
-            icon: LucideIcons.globe,
-            label: 'Searching Exchanges...',
-            color: AppColors.textSecondary,
-          ),
-          const _SearchSkeleton(),
-          const _SearchSkeleton(),
-          const _SearchSkeleton(),
-        ],
+          ],
+        ),
+      ));
+    }
 
-        // ── Other Local matches ────────────────────────────────────────────
-        if (others.isNotEmpty &&
-            others.length >
-                (local[0].displayName.toUpperCase() == _query.toUpperCase()
-                    ? 1
-                    : 0)) ...[
-          if (fromWatchlist.isNotEmpty ||
-              fromHoldings.isNotEmpty ||
-              fromPositions.isNotEmpty ||
-              remote.isNotEmpty)
-            _SectionHeader(
-              icon: LucideIcons.search,
-              label: 'Other Matches',
-              color: AppColors.textSecondary,
+    if (_hiddenDerivativeCount > 0) {
+      items.add(Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: GestureDetector(
+          onTap: () => setState(() => _segmentFilter = 'FUT'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3E5F5),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFCE93D8).withValues(alpha: 0.5)),
             ),
-          ...others
-              .where((i) => i != (local.isNotEmpty ? local[0] : null))
-              .map(
-                (i) => _LocalInstrumentTile(
-                  instrument: i,
-                  ltp: _ltpForSymbol(i.symbol),
-                  onTap: () => _navigateToSymbol(
-                    context,
-                    i.symbol,
-                    i.displayName,
-                    exchange: i.exchange,
-                  ),
-                ),
-              ),
-        ],
-
-        if (_remoteError != null && remote.isEmpty)
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
+            child: Row(
               children: [
-                const Icon(
-                  LucideIcons.alertCircle,
-                  size: 32,
-                  color: AppColors.danger,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Universal search currently limited\n$_remoteError',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                    height: 1.5,
+                const Icon(Icons.candlestick_chart_outlined, size: 14, color: Color(0xFF7B1FA2)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$_hiddenDerivativeCount F&O contract${_hiddenDerivativeCount == 1 ? '' : 's'} hidden — tap to show Futures & Options',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF7B1FA2), fontWeight: FontWeight.w500),
                   ),
                 ),
+                const Icon(Icons.chevron_right, size: 16, color: Color(0xFF7B1FA2)),
               ],
             ),
           ),
-        // ── F&O hint row ───────────────────────────────────────────────────
-        if (_hiddenDerivativeCount > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-            child: GestureDetector(
-              onTap: () => setState(() => _segmentFilter = 'FUT'),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3E5F5),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: const Color(0xFFCE93D8).withValues(alpha: 0.5),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.candlestick_chart_outlined,
-                      size: 14,
-                      color: Color(0xFF7B1FA2),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '$_hiddenDerivativeCount F&O contract${_hiddenDerivativeCount == 1 ? '' : 's'} hidden — tap to show Futures & Options',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF7B1FA2),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right,
-                      size: 16,
-                      color: Color(0xFF7B1FA2),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        ),
+      ));
+    }
 
-        const SizedBox(height: 48),
-      ],
+    items.add(const SizedBox(height: 48));
+
+    return ListView.builder(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      itemCount: items.length,
+      itemBuilder: (_, index) => items[index],
     );
   }
 
   double? _ltpForSymbol(String symbol) {
     if (!mounted) return null;
-    final store = TradingScope.of(context);
-    final stock = store.stockBySymbolOrNull(symbol);
-    return stock?.currentPrice;
+    return TradingScope.of(context).stockBySymbolOrNull(symbol)?.currentPrice;
+  }
+
+  /// Wrap a tile with a GestureDetector that fires a prefetch on tap-down.
+  /// The ~80-100ms between tap-down and route push is enough to populate the
+  /// HTTP cache with a fresh quote, making the detail screen feel instant.
+  Widget _withPrefetch({
+    required Widget child,
+    required String symbol,
+    required String exchange,
+    required String token,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTapDown: (_) => _prefetchForSymbol(
+        symbol: symbol,
+        exchange: exchange,
+        token: token,
+      ),
+      child: child,
+    );
   }
 
   Widget _buildNoResults() {

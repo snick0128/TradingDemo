@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
-import 'funds_screen.dart';
 import 'add_funds_screen.dart';
-import 'withdraw_funds_screen.dart';
-import 'transaction_ledger_screen.dart';
-import 'brokerage_statement_screen.dart';
 import 'brokerage_calculator_screen.dart';
+import 'brokerage_statement_screen.dart';
+import 'funds_screen.dart';
+import 'ipo_history_screen.dart';
+import 'wallet_ledger_screen.dart';
+import 'withdraw_funds_screen.dart';
 
-/// Clean wallet screen — single AppBar, no duplicate "Funds" heading inside.
-/// Tabs: Overview · Add · Withdraw · Ledger · Statement · Calculator
+/// Wallet screen — tabs: Overview · Add Funds · Withdraw · Wallet History · IPO History · Statement · Calculator
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
@@ -25,7 +25,8 @@ class _WalletScreenState extends State<WalletScreen>
     Tab(text: 'Overview'),
     Tab(text: 'Add Funds'),
     Tab(text: 'Withdraw'),
-    Tab(text: 'Ledger'),
+    Tab(text: 'History'),
+    Tab(text: 'IPO History'),
     Tab(text: 'Statement'),
     Tab(text: 'Calculator'),
   ];
@@ -48,18 +49,15 @@ class _WalletScreenState extends State<WalletScreen>
       appBar: AppBar(
         title: const Text('Funds'),
         bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          labelColor: AppColors.primary,
-          unselectedLabelColor: AppColors.textSecondary,
-          indicatorColor: AppColors.primary,
-          indicatorWeight: 2,
-          labelStyle: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
-          unselectedLabelStyle: const TextStyle(fontSize: 13),
-          tabs: _tabs,
+          controller:               _tabController,
+          isScrollable:             true,
+          labelColor:               AppColors.primary,
+          unselectedLabelColor:     AppColors.textSecondary,
+          indicatorColor:           AppColors.primary,
+          indicatorWeight:          2,
+          labelStyle:               const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          unselectedLabelStyle:     const TextStyle(fontSize: 13),
+          tabs:                     _tabs,
         ),
       ),
       body: TabBarView(
@@ -68,7 +66,8 @@ class _WalletScreenState extends State<WalletScreen>
           FundsScreen(showAppBar: false),
           AddFundsScreen(showAppBar: false),
           WithdrawFundsScreen(showAppBar: false),
-          TransactionLedgerScreen(showAppBar: false),
+          WalletLedgerScreen(showAppBar: false),
+          IpoHistoryScreen(showAppBar: false),
           BrokerageStatementScreen(showAppBar: false),
           BrokerageCalculatorScreen(showAppBar: false),
         ],

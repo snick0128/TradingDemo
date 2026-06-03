@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
@@ -19,11 +20,80 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
   final Map<String, TextEditingController> _maxDailyLossControllers = {};
   final Map<String, TextEditingController> _maxLeverageControllers = {};
 
+  // Safe level (equity-based auto square-off threshold)
+  final TextEditingController _safeLevelController = TextEditingController();
+  double _currentSafeLevel = 500;
+  bool _safeLevelLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSafeLevel();
+  }
+
+  Future<void> _loadSafeLevel() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('admin_config')
+          .doc('rms_settings')
+          .get();
+      final level = (snap.data()?['safeLevel'] as num?)?.toDouble() ?? 500;
+      if (mounted) {
+        setState(() {
+          _currentSafeLevel = level;
+          _safeLevelController.text = level.toStringAsFixed(0);
+          _safeLevelLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _safeLevelLoading = false);
+    }
+  }
+
+  Future<void> _saveSafeLevel() async {
+    final val = double.tryParse(_safeLevelController.text);
+    if (val == null || val < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid amount (≥ 0).'),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('admin_config')
+          .doc('rms_settings')
+          .set({'safeLevel': val, 'updatedAt': DateTime.now().millisecondsSinceEpoch},
+              SetOptions(merge: true));
+      setState(() => _currentSafeLevel = val);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Safe level updated to ₹${val.toStringAsFixed(0)}.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     for (final c in _maxPositionControllers.values) c.dispose();
     for (final c in _maxDailyLossControllers.values) c.dispose();
     for (final c in _maxLeverageControllers.values) c.dispose();
+    _safeLevelController.dispose();
     super.dispose();
   }
 
@@ -48,6 +118,99 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Safe Level (Equity-Based Auto Square-Off) ────────────────
+            CustomCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(LucideIcons.shieldAlert, color: AppColors.warning, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Safe Level — Auto Square-Off',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'When a user\'s equity (Wallet Balance + Running P&L) drops to or below '
+                    'this amount, ALL open positions are automatically closed immediately.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Equity = Wallet Balance + Running P&L\n'
+                    'Free Margin = Equity − Used Margin\n'
+                    'Margin Level % = (Equity ÷ Used Margin) × 100',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary.withOpacity(0.75),
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (_safeLevelLoading)
+                    const Center(child: CircularProgressIndicator())
+                  else
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _safeLevelController,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: InputDecoration(
+                              labelText: 'Safe Level (₹)',
+                              hintText: '500',
+                              helperText: 'Current: ₹${_currentSafeLevel.toStringAsFixed(0)}',
+                              prefixText: '₹ ',
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton.icon(
+                          onPressed: _saveSafeLevel,
+                          icon: const Icon(LucideIcons.save, size: 14),
+                          label: const Text('Save'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.warning,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(LucideIcons.info, size: 14, color: AppColors.warning),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Changes apply immediately to all accounts on the next price tick.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.warning.withOpacity(0.9),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
             // ── Global Trading Halt ──────────────────────────────────────
             CustomCard(
               child: Column(
@@ -238,26 +401,25 @@ class _RiskControlScreenState extends State<RiskControlScreen> {
                     ],
                   ),
                   ...users.map((user) {
-                    // Mock exposure data
-                    final posValue = user.balance * 0.4;
-                    final dailyPnl =
-                        user.balance * 0.02 * (user.isActive ? 1 : -1);
-                    final isAtRisk = posValue > user.marginLimit * 0.8;
+                    final pnl = admin.livePnlByUser[user.id] ?? 0.0;
+                    // Used margin estimate: margin = balance - (balance - usedMargin).
+                    // Use marginLimit as the ceiling; exposure = runningPnL magnitude as proxy.
+                    final usedMargin = user.marginLimit > 0
+                        ? (user.marginLimit - user.balance).clamp(0.0, user.marginLimit)
+                        : 0.0;
+                    final isAtRisk = user.marginLimit > 0 &&
+                        usedMargin > user.marginLimit * 0.8;
                     return TableRow(
                       children: [
                         _cell(user.name),
-                        _cell('₹${posValue.toStringAsFixed(0)}'),
+                        _cell('₹${usedMargin.toStringAsFixed(0)}'),
                         _cell(
-                          '${dailyPnl >= 0 ? '+' : ''}₹${dailyPnl.toStringAsFixed(0)}',
-                          color: dailyPnl >= 0
-                              ? AppColors.success
-                              : AppColors.danger,
+                          '${pnl >= 0 ? '+' : ''}₹${pnl.toStringAsFixed(0)}',
+                          color: pnl >= 0 ? AppColors.success : AppColors.danger,
                         ),
                         _cell(
                           isAtRisk ? '⚠ At Risk' : '✓ Normal',
-                          color: isAtRisk
-                              ? AppColors.warning
-                              : AppColors.success,
+                          color: isAtRisk ? AppColors.warning : AppColors.success,
                         ),
                       ],
                     );

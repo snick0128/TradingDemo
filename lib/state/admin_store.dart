@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../data/services/firestore_service.dart';
 import '../data/services/trading_service.dart';
+import '../domain/trade_ledger.dart';
 import '../models/trading_models.dart';
 
 class PlatformStats {
@@ -34,7 +35,11 @@ class AdminOrderRecord {
   final int quantity;
   final double price;
   final DateTime dateTime;
+  final DateTime? executedAt;
   final String? rejectionReason;
+  final String exchange;   // NSE / BSE / MCX
+  final String product;    // MIS / NRML / OVERNIGHT
+  final String variety;    // MARKET / LIMIT / SL
 
   const AdminOrderRecord({
     required this.id,
@@ -46,7 +51,11 @@ class AdminOrderRecord {
     required this.quantity,
     required this.price,
     required this.dateTime,
+    this.executedAt,
     this.rejectionReason,
+    this.exchange = 'NSE',
+    this.product = 'MIS',
+    this.variety = 'MARKET',
   });
 
   AdminOrderRecord copyWith({
@@ -59,7 +68,11 @@ class AdminOrderRecord {
     int? quantity,
     double? price,
     DateTime? dateTime,
+    DateTime? executedAt,
     String? rejectionReason,
+    String? exchange,
+    String? product,
+    String? variety,
   }) {
     return AdminOrderRecord(
       id: id ?? this.id,
@@ -71,7 +84,11 @@ class AdminOrderRecord {
       quantity: quantity ?? this.quantity,
       price: price ?? this.price,
       dateTime: dateTime ?? this.dateTime,
+      executedAt: executedAt ?? this.executedAt,
       rejectionReason: rejectionReason ?? this.rejectionReason,
+      exchange: exchange ?? this.exchange,
+      product: product ?? this.product,
+      variety: variety ?? this.variety,
     );
   }
 }
@@ -151,8 +168,24 @@ class AdminStore extends ChangeNotifier {
     0.0,
     (total, o) => total + (o.quantity * o.price),
   );
-  double get platformPnl => totalVolume * 0.0008;
-  double get revenue => totalVolume * 0.00025;
+  // Lazily-cached ledger summary so repeated getters don't recompute FIFO matching.
+  LedgerSummary? _ledgerCache;
+  int _ledgerCacheLen = -1;
+
+  LedgerSummary get _ledger {
+    if (_ledgerCache == null || _ledgerCacheLen != _masterOrderBook.length) {
+      _ledgerCache  = LedgerSummary(_masterOrderBook);
+      _ledgerCacheLen = _masterOrderBook.length;
+    }
+    return _ledgerCache!;
+  }
+
+  // Real admin revenue = brokerage collected at 0.03% per leg of actual fills.
+  double get revenue => _ledger.brokerageRevenue;
+
+  // Real platform P&L = brokerage earned − profits paid out to winning users.
+  double get platformPnl => _ledger.netAdminPnl;
+
   double get liveExposure => _masterOrderBook
       .where(
         (o) =>
@@ -170,16 +203,17 @@ class AdminStore extends ChangeNotifier {
     return sorted.take(10).toList(growable: false);
   }
 
+  // Overall P&L per user = realized (closed trades) + unrealized (open positions).
+  // Realized comes from FIFO-matched ledger; unrealized from backend-persisted runningPnL.
   Map<String, double> get livePnlByUser {
-    final out = <String, double>{};
-    for (final o in _masterOrderBook) {
-      if (o.status != OrderStatus.executed && o.status != OrderStatus.approved)
-        continue;
-      final signed = o.type == OrderType.buy ? -1.0 : 1.0;
-      out[o.userId] =
-          (out[o.userId] ?? 0) + (o.quantity * o.price * signed * 0.002);
+    final realized = _ledger.pnlByUser;
+    final result = Map<String, double>.from(realized);
+    for (final user in _users) {
+      if (user.runningPnL != 0) {
+        result[user.id] = (result[user.id] ?? 0) + user.runningPnL;
+      }
     }
-    return out;
+    return result;
   }
 
   PlatformStats get stats => PlatformStats(
@@ -616,6 +650,7 @@ class AdminStore extends ChangeNotifier {
       ..._rawOrders,
       ..._rawPendingRequests.where((r) => !ids.contains(r.id)),
     ]..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    _ledgerCache = null; // invalidate on every rebuild
   }
 
   void _bindFirebaseStreams() {
@@ -820,6 +855,7 @@ class AdminStore extends ChangeNotifier {
       lastLoginAt: _asNullableDate(data['lastLoginAt']),
       brokeragePlan: (data['brokeragePlan'] as String?) ?? 'Standard',
       isAdmin: (data['role'] as String?) == 'admin',
+      runningPnL: ((data['runningPnL'] as num?) ?? 0).toDouble(),
     );
   }
 
@@ -838,6 +874,7 @@ class AdminStore extends ChangeNotifier {
             ?.clientId ??
         fallbackClientId;
 
+    final executedAt = _asNullableDate(data['executedAt']);
     return AdminOrderRecord(
       id: doc.id,
       userId: userId,
@@ -846,10 +883,18 @@ class AdminStore extends ChangeNotifier {
       type: _orderTypeFromDb(data['type'] as String?),
       status: _orderStatusFromDb(data['status'] as String?),
       quantity: ((data['qty'] as num?) ?? 0).toInt(),
-      price: ((data['fillPrice'] as num?) ?? (data['price'] as num?) ?? 0)
+      price: ((data['fillPrice'] as num?) ??
+              (data['executed_price'] as num?) ??
+              (data['avg_executed_price'] as num?) ??
+              (data['price'] as num?) ??
+              0)
           .toDouble(),
       dateTime: _asDate(data['createdAt'] ?? data['updatedAt']),
+      executedAt: executedAt,
       rejectionReason: data['rejectionReason'] as String?,
+      exchange: ((data['exchange'] as String?) ?? 'NSE').toUpperCase(),
+      product: ((data['product'] as String?) ?? 'MIS').toUpperCase(),
+      variety: ((data['variety'] as String?) ?? 'MARKET').toUpperCase(),
     );
   }
 
@@ -883,17 +928,19 @@ class AdminStore extends ChangeNotifier {
 
   DateTime _asDate(dynamic value) {
     if (value is Timestamp) return value.toDate();
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
     if (value is DateTime) return value;
     if (value is String) {
       final parsed = DateTime.tryParse(value);
       if (parsed != null) return parsed;
     }
-    return DateTime.now();
+    return DateTime.utc(1970);
   }
 
   DateTime? _asNullableDate(dynamic value) {
     if (value == null) return null;
     if (value is Timestamp) return value.toDate();
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
     if (value is DateTime) return value;
     if (value is String) return DateTime.tryParse(value);
     return null;

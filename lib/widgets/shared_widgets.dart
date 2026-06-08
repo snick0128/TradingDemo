@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 
 // ─── Shimmer Loading Widget ───────────────────────────────────────────────────
@@ -723,6 +724,50 @@ class _PriceFlashWidgetState extends State<PriceFlashWidget>
           child: child,
         );
       },
+    );
+  }
+}
+
+// ─── LivePriceText ────────────────────────────────────────────────────────────
+
+/// Price display that updates instantly on every WS tick via [ValueNotifier],
+/// completely bypassing the store's 16ms debounce and any parent rebuild cycle.
+///
+/// Wraps [PriceFlashWidget] so the green/red flash animation still plays on
+/// each price change. The [PriceFlashWidget] state is reused across rebuilds,
+/// so the animation controller is never unnecessarily recreated.
+///
+/// Usage:
+/// ```dart
+/// LivePriceText(
+///   symbol: stock.symbol,
+///   store: TradingScope.of(context),
+///   style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
+/// )
+/// ```
+class LivePriceText extends StatelessWidget {
+  final String symbol;
+  final TradingStore store;
+  final TextStyle? style;
+
+  const LivePriceText({
+    super.key,
+    required this.symbol,
+    required this.store,
+    this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: store.ltpNotifier(symbol),
+      builder: (_, ltp, __) => PriceFlashWidget(
+        price: ltp,
+        child: Text(
+          ltp > 0 ? '₹${ltp.toStringAsFixed(2)}' : '—',
+          style: style,
+        ),
+      ),
     );
   }
 }

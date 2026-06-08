@@ -99,10 +99,12 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   List<Stock> _stocksForWatchlist(int index, List<Stock> allStocks) {
     final wl = _watchlists[index];
-    final stocks = wl.symbols
-        .map((sym) => allStocks.where((s) => s.symbol == sym).firstOrNull)
-        .whereType<Stock>()
-        .toList();
+    final stocks = wl.symbols.map((sym) {
+      for (final s in allStocks) {
+        if (s.symbol == sym) return s;
+      }
+      return null;
+    }).whereType<Stock>().toList();
 
     switch (_sort) {
       case WatchlistSort.symbol:
@@ -912,16 +914,14 @@ class _StockRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  PriceFlashWidget(
-                    price: stock.currentPrice,
-                    child: Text(
-                      '₹${stock.currentPrice.toStringAsFixed(2)}',
-                      style: GoogleFonts.inter(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF0D0D0D),
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
+                  LivePriceText(
+                    symbol: stock.symbol,
+                    store: TradingScope.of(context),
+                    style: GoogleFonts.inter(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF0D0D0D),
+                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                   const SizedBox(height: 4),

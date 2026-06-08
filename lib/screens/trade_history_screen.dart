@@ -119,21 +119,25 @@ class UserTrade {
     holdingDuration: Duration.zero, sourceOrders: [o],
   );
 
-  static UserTrade _open(Order o) {
-    final fillTime = o.executedAt ?? o.dateTime;
+  static UserTrade _open(Order o, {int? qty}) {
+    final fillTime  = o.executedAt ?? o.dateTime;
     final fillPrice = o.executedPrice ?? o.price;
-    final qty = o.executedQuantity ?? o.quantity;
-    final notional = fillPrice * qty;
-    final brok = o.chargesApplied ?? notional * 0.0003;
-    final duration = _isUnknownTime(fillTime)
+    final fillQty   = qty ?? o.executedQuantity ?? o.quantity;
+    final notional  = fillPrice * fillQty;
+    final brok      = fillQty == (o.executedQuantity ?? o.quantity)
+        ? (o.chargesApplied ?? 0.0)
+        : (o.chargesApplied != null
+            ? o.chargesApplied! * fillQty / (o.executedQuantity ?? o.quantity)
+            : notional * 0.0003);
+    final duration  = _isUnknownTime(fillTime)
         ? Duration.zero
         : DateTime.now().difference(fillTime);
     return UserTrade(
-      id: 'open_${o.id}',
+      id: 'open_${o.id}_q$fillQty',
       symbol: o.symbol, symbolName: o.name,
       exchange: o.exchange ?? 'NSE',
       product: _productLabel(o.product), variety: _varietyLabel(o.variety),
-      direction: o.type, quantity: qty,
+      direction: o.type, quantity: fillQty,
       entryPrice: fillPrice, entryTime: fillTime, entryOrderId: o.id,
       grossPnl: 0, brokerage: brok, netPnl: -brok, pointsCaptured: 0,
       status: _TradeStatus.open,
@@ -141,32 +145,57 @@ class UserTrade {
     );
   }
 
-  static UserTrade _closed({required Order entry, required Order exit}) {
+  static UserTrade _closed({required Order entry, required Order exit, int? qty}) {
     final entryFill = entry.executedPrice ?? entry.price;
     final exitFill  = exit.executedPrice  ?? exit.price;
     final entryTime = entry.executedAt ?? entry.dateTime;
     final exitTime  = exit.executedAt  ?? exit.dateTime;
-    final qty       = entry.executedQuantity ?? entry.quantity;
     final isLong    = entry.type == OrderType.buy;
 
-    // Duration: always positive; cap minimum display at 1s
+    // Quantity for this matched slice — may be less than the full order qty
+    // when the FIFO engine splits a large order across multiple counterparts.
+    final fullEntryQty = entry.executedQuantity ?? entry.quantity;
+    final fullExitQty  = exit.executedQuantity  ?? exit.quantity;
+    final matchQty     = qty ?? fullEntryQty;
+
+    // Duration: always positive
     final rawDuration = exitTime.difference(entryTime);
     final duration = rawDuration.isNegative ? Duration.zero : rawDuration;
 
-    final points = isLong ? (exitFill - entryFill) : (entryFill - exitFill);
-    final grossPnl = points * qty;
-    final turnover = entryFill * qty + exitFill * qty;
-    // Use server-computed P&L when available, otherwise derive from fill prices
-    final serverNetPnl = exit.pnl;
-    final brok = (entry.chargesApplied ?? 0) + (exit.chargesApplied ?? turnover * 0.0003);
-    final netPnl = serverNetPnl ?? (grossPnl - brok);
+    final points   = isLong ? (exitFill - entryFill) : (entryFill - exitFill);
+    final grossPnl = points * matchQty;
+    final turnover = entryFill * matchQty + exitFill * matchQty;
+
+    // Prorate charges by the fraction of each order this slice represents.
+    // Distinction: chargesApplied=null means "not provided → use fallback rate".
+    //              chargesApplied=0.0 means "explicitly no charges" (e.g. paper trading).
+    final entryChargesSet = entry.chargesApplied != null;
+    final exitChargesSet  = exit.chargesApplied  != null;
+    final entryChargesFull = entry.chargesApplied ?? 0.0;
+    final exitChargesFull  = exit.chargesApplied  ?? 0.0;
+    final entryBrok = entryChargesSet && fullEntryQty > 0
+        ? entryChargesFull * matchQty / fullEntryQty
+        : 0.0;
+    final exitBrok  = exitChargesSet && fullExitQty > 0
+        ? exitChargesFull  * matchQty / fullExitQty
+        : (exitChargesSet ? 0.0 : turnover * 0.0003);
+    final brok    = entryBrok + exitBrok;
+
+    // Backend stores pnl = GROSS P&L (before charges) on the closing order.
+    // This is the same convention as realised_pnl_screen and orderEngine.
+    // Prorate by match fraction if only part of the exit order is matched.
+    final serverGross = exit.pnl != null && exit.pnl != 0.0
+        ? (fullExitQty > 0 ? exit.pnl! * matchQty / fullExitQty : exit.pnl!)
+        : null;
+    final effectiveGross = serverGross ?? grossPnl;
+    final netPnl = effectiveGross - brok;
 
     return UserTrade(
-      id: 'closed_${entry.id}_${exit.id}',
+      id: 'closed_${entry.id}_${exit.id}_q$matchQty',
       symbol: entry.symbol, symbolName: entry.name,
       exchange: entry.exchange ?? exit.exchange ?? 'NSE',
       product: _productLabel(entry.product), variety: _varietyLabel(entry.variety),
-      direction: entry.type, quantity: qty,
+      direction: entry.type, quantity: matchQty,
       entryPrice: entryFill, entryTime: entryTime, entryOrderId: entry.id,
       exitPrice: exitFill, exitTime: exitTime, exitOrderId: exit.id,
       grossPnl: grossPnl, brokerage: brok, netPnl: netPnl, pointsCaptured: points,
@@ -267,46 +296,51 @@ List<UserTrade> buildUserTrades(List<Order> orders) {
 
     final buys  = group.where((o) => o.type == OrderType.buy).toList();
     final sells = group.where((o) => o.type == OrderType.sell).toList();
-    final usedBuys  = <int>{};
-    final usedSells = <int>{};
 
-    // Long trades: FIFO buy → earliest sell after it
+    // Quantity-aware FIFO: track remaining fill quantity per order so a
+    // single large order can be partially matched across multiple counterparts.
+    // e.g. BUY 100 + SELL 80 → one closed slice (80 qty) + open remainder (20).
+    final buyRem  = List<int>.generate(buys.length,  (i) => buys[i].executedQuantity  ?? buys[i].quantity);
+    final sellRem = List<int>.generate(sells.length, (i) => sells[i].executedQuantity ?? sells[i].quantity);
+
+    // Long FIFO: each BUY matches with earliest subsequent SELL(s)
     for (int bi = 0; bi < buys.length; bi++) {
+      if (buyRem[bi] <= 0) continue;
       final buyTime = buys[bi].executedAt ?? buys[bi].dateTime;
       for (int si = 0; si < sells.length; si++) {
-        if (usedSells.contains(si)) continue;
+        if (sellRem[si] <= 0) continue;
         final sellTime = sells[si].executedAt ?? sells[si].dateTime;
-        if (!sellTime.isBefore(buyTime)) {
-          result.add(UserTrade._closed(entry: buys[bi], exit: sells[si]));
-          usedBuys.add(bi);
-          usedSells.add(si);
-          break;
-        }
+        if (sellTime.isBefore(buyTime)) continue;
+        final matchQty = buyRem[bi] < sellRem[si] ? buyRem[bi] : sellRem[si];
+        buyRem[bi]  -= matchQty;
+        sellRem[si] -= matchQty;
+        result.add(UserTrade._closed(entry: buys[bi], exit: sells[si], qty: matchQty));
+        if (buyRem[bi] <= 0) break;
       }
     }
 
-    // Short trades: FIFO sell → earliest buy after it
+    // Short FIFO: each remaining SELL matches with earliest subsequent BUY(s)
     for (int si = 0; si < sells.length; si++) {
-      if (usedSells.contains(si)) continue;
+      if (sellRem[si] <= 0) continue;
       final sellTime = sells[si].executedAt ?? sells[si].dateTime;
       for (int bi = 0; bi < buys.length; bi++) {
-        if (usedBuys.contains(bi)) continue;
+        if (buyRem[bi] <= 0) continue;
         final buyTime = buys[bi].executedAt ?? buys[bi].dateTime;
-        if (!buyTime.isBefore(sellTime)) {
-          result.add(UserTrade._closed(entry: sells[si], exit: buys[bi]));
-          usedSells.add(si);
-          usedBuys.add(bi);
-          break;
-        }
+        if (buyTime.isBefore(sellTime)) continue;
+        final matchQty = sellRem[si] < buyRem[bi] ? sellRem[si] : buyRem[bi];
+        sellRem[si] -= matchQty;
+        buyRem[bi]  -= matchQty;
+        result.add(UserTrade._closed(entry: sells[si], exit: buys[bi], qty: matchQty));
+        if (sellRem[si] <= 0) break;
       }
     }
 
-    // Unmatched → open positions
+    // Remaining unmatched quantity → open positions
     for (int bi = 0; bi < buys.length; bi++) {
-      if (!usedBuys.contains(bi)) result.add(UserTrade._open(buys[bi]));
+      if (buyRem[bi] > 0) result.add(UserTrade._open(buys[bi], qty: buyRem[bi]));
     }
     for (int si = 0; si < sells.length; si++) {
-      if (!usedSells.contains(si)) result.add(UserTrade._open(sells[si]));
+      if (sellRem[si] > 0) result.add(UserTrade._open(sells[si], qty: sellRem[si]));
     }
   }
 

@@ -128,23 +128,25 @@ class TradeLedgerEntry {
     );
   }
 
-  static TradeLedgerEntry openPosition(AdminOrderRecord o) {
-    final fillTime = o.executedAt ?? o.dateTime;
-    final duration = _isUnknownTime(fillTime)
+  static TradeLedgerEntry openPosition(AdminOrderRecord o, {int? qty}) {
+    final fillTime  = o.executedAt ?? o.dateTime;
+    final fillQty   = qty ?? o.quantity;
+    final duration  = _isUnknownTime(fillTime)
         ? Duration.zero
         : DateTime.now().difference(fillTime);
-    final notional = o.price * o.quantity;
+    final notional  = o.price * fillQty;
+    // Prorate brokerage if only a portion of the order is open
     final brokerage = notional * 0.0003;
-    final health = notional > 500000 ? TradeHealth.large : TradeHealth.neutral;
+    final health    = notional > 500000 ? TradeHealth.large : TradeHealth.neutral;
     return TradeLedgerEntry(
-      id: 'open_${o.id}',
+      id: 'open_${o.id}_q$fillQty',
       userId: o.userId,
       userClientId: o.userClientId,
       symbol: o.symbol,
       exchange: o.exchange,
       product: o.product,
       direction: o.type,
-      quantity: o.quantity,
+      quantity: fillQty,
       entryPrice: o.price,
       entryTime: fillTime,
       entryOrderId: o.id,
@@ -161,15 +163,17 @@ class TradeLedgerEntry {
   static TradeLedgerEntry closedTrade({
     required AdminOrderRecord entry,
     required AdminOrderRecord exit,
+    int? matchQty,
   }) {
     final isLong = entry.type == OrderType.buy;
-    final qty = entry.quantity < exit.quantity ? entry.quantity : exit.quantity;
+    // Use caller-supplied match quantity (from quantity-aware FIFO) or min of both orders.
+    final qty = matchQty ?? (entry.quantity < exit.quantity ? entry.quantity : exit.quantity);
     final grossPnl = isLong
         ? (exit.price - entry.price) * qty
         : (entry.price - exit.price) * qty;
-    final turnover = entry.price * qty + exit.price * qty;
+    final turnover  = entry.price * qty + exit.price * qty;
     final brokerage = turnover * 0.0003;
-    final netPnl = grossPnl - brokerage;
+    final netPnl    = grossPnl - brokerage;
     final entryFillTime = entry.executedAt ?? entry.dateTime;
     final exitFillTime  = exit.executedAt  ?? exit.dateTime;
     final rawDuration = (_isUnknownTime(entryFillTime) || _isUnknownTime(exitFillTime))
@@ -271,54 +275,52 @@ List<TradeLedgerEntry> buildTradeLedger(
     final buys  = group.where((o) => o.type == OrderType.buy).toList();
     final sells = group.where((o) => o.type == OrderType.sell).toList();
 
-    final usedBuys  = <int>{};
-    final usedSells = <int>{};
+    // Quantity-aware FIFO: each order tracks its own remaining fill qty so
+    // partial closes (e.g. BUY 100 + SELL 80) produce one closed slice (80)
+    // and one open remainder (20) instead of marking the whole BUY as closed.
+    final buyRem  = List<int>.from(buys.map((o) => o.quantity));
+    final sellRem = List<int>.from(sells.map((o) => o.quantity));
 
-    // FIFO long match: earliest buy with earliest sell that came after it.
+    // Long FIFO: each BUY absorbs earliest subsequent SELL(s).
     for (int bi = 0; bi < buys.length; bi++) {
+      if (buyRem[bi] <= 0) continue;
       final buyTime = buys[bi].executedAt ?? buys[bi].dateTime;
       for (int si = 0; si < sells.length; si++) {
-        if (usedSells.contains(si)) continue;
+        if (sellRem[si] <= 0) continue;
         final sellTime = sells[si].executedAt ?? sells[si].dateTime;
-        if (!sellTime.isBefore(buyTime)) {
-          result.add(TradeLedgerEntry.closedTrade(
-              entry: buys[bi], exit: sells[si]));
-          usedBuys.add(bi);
-          usedSells.add(si);
-          break;
-        }
+        if (sellTime.isBefore(buyTime)) continue;
+        final mq = buyRem[bi] < sellRem[si] ? buyRem[bi] : sellRem[si];
+        buyRem[bi]  -= mq;
+        sellRem[si] -= mq;
+        result.add(TradeLedgerEntry.closedTrade(
+            entry: buys[bi], exit: sells[si], matchQty: mq));
+        if (buyRem[bi] <= 0) break;
       }
     }
 
-    // FIFO short match: earliest sell with earliest buy that came after it.
+    // Short FIFO: remaining SELLs match earliest subsequent BUY(s).
     for (int si = 0; si < sells.length; si++) {
-      if (usedSells.contains(si)) continue;
+      if (sellRem[si] <= 0) continue;
       final sellTime = sells[si].executedAt ?? sells[si].dateTime;
       for (int bi = 0; bi < buys.length; bi++) {
-        if (usedBuys.contains(bi)) continue;
+        if (buyRem[bi] <= 0) continue;
         final buyTime = buys[bi].executedAt ?? buys[bi].dateTime;
-        if (!buyTime.isBefore(sellTime)) {
-          result.add(TradeLedgerEntry.closedTrade(
-              entry: sells[si], exit: buys[bi]));
-          usedSells.add(si);
-          usedBuys.add(bi);
-          break;
-        }
+        if (buyTime.isBefore(sellTime)) continue;
+        final mq = sellRem[si] < buyRem[bi] ? sellRem[si] : buyRem[bi];
+        sellRem[si] -= mq;
+        buyRem[bi]  -= mq;
+        result.add(TradeLedgerEntry.closedTrade(
+            entry: sells[si], exit: buys[bi], matchQty: mq));
+        if (sellRem[si] <= 0) break;
       }
     }
 
-    // Unmatched buys → open long positions.
+    // Remaining unmatched quantity → open positions.
     for (int bi = 0; bi < buys.length; bi++) {
-      if (!usedBuys.contains(bi)) {
-        result.add(TradeLedgerEntry.openPosition(buys[bi]));
-      }
+      if (buyRem[bi] > 0) result.add(TradeLedgerEntry.openPosition(buys[bi], qty: buyRem[bi]));
     }
-
-    // Unmatched sells → open short positions.
     for (int si = 0; si < sells.length; si++) {
-      if (!usedSells.contains(si)) {
-        result.add(TradeLedgerEntry.openPosition(sells[si]));
-      }
+      if (sellRem[si] > 0) result.add(TradeLedgerEntry.openPosition(sells[si], qty: sellRem[si]));
     }
   }
 

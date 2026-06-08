@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import '../models/trading_models.dart';
 
 class TradingCandle {
@@ -21,6 +22,28 @@ class TradingCandle {
     this.sma20,
     this.sma50,
   });
+
+  TradingCandle copyWith({
+    DateTime? time,
+    double? open,
+    double? high,
+    double? low,
+    double? close,
+    double? volume,
+    double? sma20,
+    double? sma50,
+  }) {
+    return TradingCandle(
+      time: time ?? this.time,
+      open: open ?? this.open,
+      high: high ?? this.high,
+      low: low ?? this.low,
+      close: close ?? this.close,
+      volume: volume ?? this.volume,
+      sma20: sma20 ?? this.sma20,
+      sma50: sma50 ?? this.sma50,
+    );
+  }
 }
 
 class TradingChartSeries {
@@ -148,6 +171,129 @@ class TradingChartService {
           : vwapNumerator / totalVolume,
       rsi14: _rsi(closes, 14),
     );
+  }
+
+  // ─── Build series from already-parsed candle objects ────────────────────────
+
+  static TradingChartSeries fromCandleObjects(
+    List<TradingCandle> candles, {
+    required double fallbackPrice,
+  }) {
+    if (candles.isEmpty) {
+      final px = fallbackPrice > 0 ? fallbackPrice : 0.0;
+      return TradingChartSeries(
+        data: [
+          TradingCandle(
+            time: DateTime.now(),
+            open: px, high: px, low: px, close: px, volume: 0,
+          ),
+        ],
+        open: px, high: px, low: px, close: px,
+        volume: 0, vwap: px, rsi14: 50,
+      );
+    }
+    final closes  = candles.map((c) => c.close).toList(growable: false);
+    final highs   = candles.map((c) => c.high).toList(growable: false);
+    final lows    = candles.map((c) => c.low).toList(growable: false);
+    final volumes = candles.map((c) => c.volume).toList(growable: false);
+    final totalVol = volumes.fold<double>(0, (s, v) => s + v);
+    var vwapNum = 0.0;
+    for (final c in candles) {
+      vwapNum += ((c.high + c.low + c.close) / 3) * c.volume;
+    }
+    return TradingChartSeries(
+      data: candles,
+      open: candles.first.open,
+      high: highs.reduce(math.max),
+      low: lows.reduce(math.min),
+      close: candles.last.close,
+      volume: totalVol,
+      vwap: totalVol == 0 ? candles.last.close : vwapNum / totalVol,
+      rsi14: _rsi(closes, 14),
+    );
+  }
+
+  // ─── Real-time tick merge (new candle detection) ─────────────────────────────
+
+  /// Merge a live price tick into an existing series.
+  ///
+  /// Returns a record with:
+  /// - [series]: updated series (either last candle updated or new candle appended)
+  /// - [isNewCandle]: true when a new interval started and a new candle was created
+  ///
+  /// [intervalMinutes] must match the chart's current timeframe (e.g. 5 for 5m).
+  static ({TradingChartSeries series, bool isNewCandle}) mergeRealtimeTick(
+    TradingChartSeries series,
+    double price, {
+    required int intervalMinutes,
+  }) {
+    if (series.data.isEmpty || price <= 0) return (series: series, isNewCandle: false);
+
+    final now = DateTime.now().toLocal();
+    final candles = [...series.data];
+    final last = candles.last;
+
+    // Floor both the last candle's time and "now" to the same interval grid.
+    final lastSlot = _floorToInterval(last.time.toLocal(), intervalMinutes);
+    final nowSlot  = _floorToInterval(now, intervalMinutes);
+
+    bool isNewCandle = false;
+    if (nowSlot.isAfter(lastSlot)) {
+      // New candle interval has started.
+      candles.add(TradingCandle(
+        time: nowSlot,
+        open: price, high: price, low: price, close: price, volume: 0,
+      ));
+      isNewCandle = true;
+      debugPrint('[ChartService] New candle opened at $nowSlot '
+          'price=$price total=${candles.length}');
+    } else {
+      // Still inside the same candle — update OHLC.
+      candles[candles.length - 1] = TradingCandle(
+        time:   last.time,
+        open:   last.open,
+        high:   math.max(last.high, price),
+        low:    last.low == 0 ? price : math.min(last.low, price),
+        close:  price,
+        volume: last.volume,
+        sma20:  last.sma20,
+        sma50:  last.sma50,
+      );
+    }
+
+    final highs   = candles.map((c) => c.high);
+    final lows    = candles.map((c) => c.low);
+    final closes  = candles.map((c) => c.close).toList();
+    final volumes = candles.map((c) => c.volume).toList();
+    final totalVol = volumes.fold<double>(0, (s, v) => s + v);
+    var vwapNum = 0.0;
+    for (final c in candles) {
+      vwapNum += ((c.high + c.low + c.close) / 3) * c.volume;
+    }
+
+    return (
+      series: TradingChartSeries(
+        data: candles,
+        open: candles.first.open,
+        high: highs.reduce(math.max),
+        low: lows.reduce(math.min),
+        close: price,
+        volume: totalVol,
+        vwap: totalVol == 0 ? price : vwapNum / totalVol,
+        rsi14: _rsi(closes, 14),
+      ),
+      isNewCandle: isNewCandle,
+    );
+  }
+
+  /// Floor [t] down to the nearest [intervalMinutes] boundary (local time).
+  static DateTime _floorToInterval(DateTime t, int intervalMinutes) {
+    if (intervalMinutes >= 24 * 60) {
+      return DateTime(t.year, t.month, t.day);
+    }
+    final totalMin = t.hour * 60 + t.minute;
+    final floored  = (totalMin ~/ intervalMinutes) * intervalMinutes;
+    return DateTime(t.year, t.month, t.day, floored ~/ 60, floored % 60);
   }
 
   static TradingChartSeries withRealtimePrice(

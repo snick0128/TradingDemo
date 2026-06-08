@@ -179,6 +179,19 @@
       }
     });
   </script>
+  <script>
+    // Register FCM service worker before Flutter initialises so that background
+    // push messages are handled even before the Flutter engine wakes up.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' })
+        .then(function(reg) {
+          console.log('[FCM] Service worker registered, scope:', reg.scope);
+        })
+        .catch(function(e) {
+          console.warn('[FCM] Service worker registration failed:', e);
+        });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

@@ -71,12 +71,23 @@ class TradingStore extends ChangeNotifier {
   // Track last known LTP per symbol to suppress no-op emissions.
   final Map<String, double> _lastLtpBySymbol = {};
 
+  // Per-symbol notifiers for zero-overhead targeted price rebuilds.
+  // Updated immediately on each tick (before the 16ms debounce).
+  final Map<String, ValueNotifier<double>> _ltpNotifiers = {};
+
+  /// Returns a [ValueNotifier<double>] for [symbol] that fires on every tick.
+  /// Use with [ValueListenableBuilder] for instant, targeted price rebuilds.
+  ValueNotifier<double> ltpNotifier(String symbol) =>
+      _ltpNotifiers.putIfAbsent(
+          symbol, () => ValueNotifier(_lastLtpBySymbol[symbol] ?? 0.0));
+
   // ── Live backend wiring ────────────────────────────────────────────────────
   LiveMarketService? _liveMarketService;
   StreamSubscription<List<Stock>>? _liveStockSub;
   StreamSubscription<Map<String, dynamic>>? _wsNotifSub;
   bool _usingLiveBackend = false;
   bool get usingLiveBackend => _usingLiveBackend;
+  LiveMarketService? get liveMarketService => _liveMarketService;
 
   /// Call this once after the store is created to switch from mock prices
   /// to live prices from the Node.js backend.
@@ -109,6 +120,15 @@ class TradingStore extends ChangeNotifier {
   /// Register userId with the live backend WebSocket for real-time notification push.
   void registerLiveUser(String userId) {
     _liveMarketService?.registerUser(userId);
+  }
+
+  /// Called when the app returns to the foreground. Immediately reconnects the
+  /// WebSocket so stale or dropped connections are detected without waiting for
+  /// the 45-second heartbeat timeout. Also refreshes the subscription list in
+  /// case positions/holdings changed while backgrounded.
+  void onAppResumed() {
+    _liveMarketService?.reconnectNow();
+    _refreshMarketSubscriptions();
   }
 
   void _onWsNotification(Map<String, dynamic> raw) {
@@ -192,12 +212,11 @@ class TradingStore extends ChangeNotifier {
 
     for (final stock in stocks) {
       final newLtp = stock.currentPrice;
-      final lastLtp = _lastLtpBySymbol[stock.symbol];
 
-      // Skip if LTP is identical — no meaningful state change.
-      if (newLtp > 0 && lastLtp == newLtp) continue;
-
-      if (newLtp > 0) _lastLtpBySymbol[stock.symbol] = newLtp;
+      if (newLtp > 0) {
+        _lastLtpBySymbol[stock.symbol] = newLtp;
+        _ltpNotifiers[stock.symbol]?.value = newLtp;
+      }
       anyPriceChanged = true;
 
       final existing = _watchlistUniverse[stock.symbol];
@@ -215,6 +234,11 @@ class TradingStore extends ChangeNotifier {
       // Record direction for price flash arrows
       if (oldPrice != null && oldPrice != newLtp) {
         _marketDataService.recordDirection(stock.symbol, oldPrice, newLtp);
+      }
+
+      // Push depth update to MarketDepthScreen stream when tick carries depth.
+      if (stock.depth != null) {
+        _marketDataService.pushDepth(stock.symbol, stock.depth!);
       }
 
       // Token-based lookup preferred (globally unique per contract); falls back
@@ -249,7 +273,12 @@ class TradingStore extends ChangeNotifier {
   void _refreshMarketSubscriptions() {
     final service = _liveMarketService;
     if (service == null) return;
-    final symbols = {..._watchlist.map((s) => s.symbol), ..._monitoredSymbols};
+    final symbols = {
+      ..._watchlist.map((s) => s.symbol),
+      ..._monitoredSymbols,
+      ..._positions.map((p) => p.symbol),
+      ..._holdings.map((h) => h.symbol),
+    };
     if (symbols.isEmpty) {
       // Default subscription covers all tracked symbols — NSE + MCX
       symbols.addAll(const [
@@ -349,6 +378,8 @@ class TradingStore extends ChangeNotifier {
     _liveMarketService?.dispose();
     _alertService.dispose();
     _marketDataService.dispose();
+    for (final n in _ltpNotifiers.values) n.dispose();
+    _ltpNotifiers.clear();
     super.dispose();
   }
 
@@ -488,14 +519,20 @@ class TradingStore extends ChangeNotifier {
 
   Stock? stockBySymbolOrNull(String symbol) {
     // Exact match first
-    final exact =
-        _watchlistUniverse[symbol] ??
-        _watchlist.where((s) => s.symbol == symbol).firstOrNull;
+    Stock? exact = _watchlistUniverse[symbol];
+    if (exact == null) {
+      for (final s in _watchlist) {
+        if (s.symbol == symbol) { exact = s; break; }
+      }
+    }
     if (exact != null) return exact;
     // Case-insensitive fallback (handles RELIANCE vs reliance)
     final upper = symbol.toUpperCase();
-    return _watchlistUniverse[upper] ??
-        _watchlist.where((s) => s.symbol.toUpperCase() == upper).firstOrNull;
+    if (_watchlistUniverse.containsKey(upper)) return _watchlistUniverse[upper];
+    for (final s in _watchlist) {
+      if (s.symbol.toUpperCase() == upper) return s;
+    }
+    return null;
   }
 
   /// Last non-zero LTP received from the live feed for [symbol].
@@ -1208,18 +1245,32 @@ class TradingStore extends ChangeNotifier {
   }
 
   void replacePositions(List<Position> positions) {
+    // Preserve live WS prices — Firestore currentPrice may be seconds behind
+    // the latest tick. If we have a live price from the WS feed, stamp it onto
+    // the incoming position so the screen never shows a stale Firestore value.
+    final merged = positions.map((p) {
+      final live = _lastLtpBySymbol[p.symbol];
+      return (live != null && live > 0) ? p.copyWith(currentPrice: live) : p;
+    }).toList();
     _positions
       ..clear()
-      ..addAll(positions);
+      ..addAll(merged);
     _rebuildPositionIndex();
+    _refreshMarketSubscriptions();
     notifyListeners();
   }
 
   void replaceHoldings(List<Holding> holdings) {
+    // Same: stamp live WS price so Firestore writes never overwrite tick data.
+    final merged = holdings.map((h) {
+      final live = _lastLtpBySymbol[h.symbol];
+      return (live != null && live > 0) ? h.copyWith(currentPrice: live) : h;
+    }).toList();
     _holdings
       ..clear()
-      ..addAll(holdings);
+      ..addAll(merged);
     _rebuildHoldingIndex();
+    _refreshMarketSubscriptions();
     notifyListeners();
   }
 
@@ -1230,12 +1281,25 @@ class TradingStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ─── User data readiness ─────────────────────────────────────────────────
+  //
+  // Tracks whether the first Firestore user-document snapshot has arrived.
+  // Until it has, _balance is 0.0 — a stub value, not the real balance.
+  // Order forms must not evaluate "insufficient funds" against 0.0.
+
+  bool _isUserDataLoaded = false;
+
+  /// True once the first Firestore user-document snapshot has been applied.
+  /// Order forms should gate balance validation behind this flag.
+  bool get isUserDataLoaded => _isUserDataLoaded;
+
   // ─── User update ──────────────────────────────────────────────────────────
 
   void updateUser(User updated, {bool updateBalance = false}) {
     _currentUser = updated;
     if (updateBalance) {
       _balance = updated.balance;
+      _isUserDataLoaded = true; // real balance has arrived
     }
     notifyListeners();
   }

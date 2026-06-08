@@ -8,6 +8,7 @@ import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 
 // ─── Chart color constants ────────────────────────────────────────────────────
@@ -59,6 +60,14 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   bool _loading = true;
   String? _error;
 
+  // ── Live tick subscription ────────────────────────────────────────────────
+  TradingStore? _advStore;
+  double? _lastLivePrice;
+
+  // ── Viewport tracking (index-based axis) ─────────────────────────────────
+  bool _isAtLive = true;
+  double _currentZoomFactor = 0.4;
+
   @override
   void initState() {
     super.initState();
@@ -79,7 +88,85 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.of(context);
+    if (_advStore == store) return;
+    _advStore?.removeListener(_onAdvLiveTick);
+    _advStore = store;
+    store.addListener(_onAdvLiveTick);
+    store.monitorSymbol(widget.symbol);
+  }
+
+  void _onAdvLiveTick() {
+    if (!mounted || _series == null || _loading) return;
+    final price = _advStore?.stockBySymbol(widget.symbol).currentPrice ?? 0;
+    if (price <= 0 || price == _lastLivePrice) return;
+    _lastLivePrice = price;
+
+    // Only update live for intraday/weekly timeframes (same rule as inline chart).
+    if (_timeframe != ChartTimeframe.m1 &&
+        _timeframe != ChartTimeframe.m5 &&
+        _timeframe != ChartTimeframe.m10 &&
+        _timeframe != ChartTimeframe.m15 &&
+        _timeframe != ChartTimeframe.m30) return;
+
+    final intervalMin = _intervalMinutes(_timeframe);
+    final (:series, :isNewCandle) = TradingChartService.mergeRealtimeTick(
+      _series!,
+      price,
+      intervalMinutes: intervalMin,
+    );
+    debugPrint('[AdvChart] Tick ₹$price isNewCandle=$isNewCandle total=${series.data.length}');
+    setState(() {
+      _series = series;
+      if (isNewCandle && _isAtLive) {
+        _currentZoomFactor = _defaultZoomFactor(series.data.length);
+        _chartVersion++;
+      }
+    });
+  }
+
+  int _intervalMinutes(ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1:  return 1;
+      case ChartTimeframe.m3:  return 3;
+      case ChartTimeframe.m5:  return 5;
+      case ChartTimeframe.m10: return 10;
+      case ChartTimeframe.m15: return 15;
+      case ChartTimeframe.m30: return 30;
+      case ChartTimeframe.h1:  return 60;
+      case ChartTimeframe.h4:  return 240;
+      default:                 return 24 * 60;
+    }
+  }
+
+  double _defaultZoomFactor(int n) {
+    if (n <= 0) return 1.0;
+    final visible = 60.clamp(1, n);
+    return (visible / n).clamp(0.05, 1.0);
+  }
+
+  String _formatAdvLabel(DateTime t) {
+    final local = t.toLocal();
+    switch (_dateRange) {
+      case ChartDateRange.d1:
+      case ChartDateRange.d5:
+        return '${local.hour.toString().padLeft(2,'0')}:${local.minute.toString().padLeft(2,'0')}';
+      case ChartDateRange.mo1:
+      case ChartDateRange.mo3:
+        const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return '${local.day} ${m[local.month - 1]}';
+      default:
+        const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return '${m[local.month - 1]} ${(local.year % 100).toString().padLeft(2,'0')}';
+    }
+  }
+
+  @override
   void dispose() {
+    _advStore?.removeListener(_onAdvLiveTick);
+    _advStore?.unmonitorSymbol(widget.symbol);
     _fadeCtrl.dispose();
     _compareController.dispose();
     super.dispose();
@@ -124,14 +211,19 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       }
 
       if (!mounted) return;
+      final newSeries = TradingChartService.fromRawCandles(
+        mainRows,
+        fallbackPrice: stock.currentPrice,
+      );
       setState(() {
-        _series = TradingChartService.fromRawCandles(
-          mainRows,
-          fallbackPrice: stock.currentPrice,
-        );
+        _series = newSeries;
         _compareSeries = compare;
         _loading = false;
+        _isAtLive = true;
+        _lastLivePrice = null;
+        _currentZoomFactor = _defaultZoomFactor(newSeries.data.length);
         _chartVersion++;
+        debugPrint('[AdvChart] Loaded ${newSeries.data.length} candles for ${widget.symbol}');
       });
       // Fade in new chart
       _fadeCtrl.forward();
@@ -606,8 +698,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       );
     }
 
-    // Validate and clean candle data — prevents bad timestamps from creating
-    // empty right-side gaps that compress the visible bars to one edge.
+    // Validate: sort, dedup, remove bad timestamps / zero prices.
     final data = _validateCandles(chartData);
     if (data.isEmpty) {
       return const Center(
@@ -615,41 +706,32 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       );
     }
 
-    // Debug logging
-    debugPrint('[Chart] ${widget.symbol} tf=${_timeframe.name} '
-        'raw=${chartData.length} valid=${data.length} '
-        'first=${data.first.time.toIso8601String()} '
-        'last=${data.last.time.toIso8601String()}');
-
+    final n = data.length;
     final closes = data.map((c) => c.close).toList();
     final emaValues = _showEma ? TradingChartService.ema(closes, 20) : null;
-    final bbValues = _showBollinger
+    final bbValues  = _showBollinger
         ? TradingChartService.bollingerBands(closes, 20, 2.0)
         : null;
 
-    final isUp = series.close >= series.open;
+    // ── Index-based x-axis ────────────────────────────────────────────────
+    // Each candle is rendered at index i (0…n-1), eliminating overnight/weekend
+    // gaps that caused the "blank left space + compressed right" bug when using
+    // DateTimeAxis with time-proportional spacing.
+    final zoomFactor   = _currentZoomFactor.clamp(0.02, 1.0);
+    final zoomPosition = (1.0 - zoomFactor).clamp(0.0, 1.0); // right-anchored
 
-    // Visible window: show the most-recent ~60 candles, right-anchored.
-    // IMPORTANT: axisMax must equal the LAST data timestamp exactly — adding
-    // any extra duration here creates the empty right-side gap that causes
-    // the compressed-to-one-side rendering bug.
-    final n = data.length;
-    final visibleCount = 60.clamp(1, n);
-    final initialZoom = (visibleCount / n).clamp(0.02, 1.0);
-    final axisMin = data.first.time;
-    final axisMax = data.last.time; // NO extra padding — prevents the empty gap
+    debugPrint('[AdvChart] ${widget.symbol} tf=${_timeframe.name} '
+        'n=$n zoom=${zoomFactor.toStringAsFixed(3)} at_live=$_isAtLive '
+        'first=${data.first.time.toIso8601String()} '
+        'last=${data.last.time.toIso8601String()}');
 
-    debugPrint('[Chart] ${widget.symbol} n=$n visible=$visibleCount '
-        'zoom=${initialZoom.toStringAsFixed(3)} '
-        'axisMin=${axisMin.toIso8601String()} axisMax=${axisMax.toIso8601String()}');
-
-    return SfCartesianChart(
-      key: ValueKey(_chartVersion),
+    final chart = SfCartesianChart(
+      key: ValueKey('adv_${widget.symbol}_${_timeframe.name}_$_chartVersion'),
       backgroundColor: _kChartBg,
       plotAreaBackgroundColor: _kChartBg,
       plotAreaBorderWidth: 0,
       margin: const EdgeInsets.fromLTRB(0, 8, 0, 0),
-      enableAxisAnimation: true,
+      enableAxisAnimation: false,
       zoomPanBehavior: ZoomPanBehavior(
         enablePinching: true,
         enablePanning: true,
@@ -679,18 +761,47 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
           textStyle: TextStyle(color: Colors.white, fontSize: 11),
         ),
       ),
-      primaryXAxis: DateTimeAxis(
-        initialZoomFactor: initialZoom,
-        initialZoomPosition: 1.0,
-        minimum: axisMin,
-        maximum: axisMax,
+      onActualRangeChanged: (ActualRangeChangedArgs args) {
+        if (args.orientation != AxisOrientation.horizontal) return;
+        final vMax = (args.visibleMax as num).toDouble();
+        final aMax = (args.actualMax  as num).toDouble();
+        final vMin = (args.visibleMin as num).toDouble();
+        final aMin = (args.actualMin  as num).toDouble();
+        final span = aMax - aMin;
+        if (span > 0) {
+          _currentZoomFactor = ((vMax - vMin) / span).clamp(0.02, 1.0);
+        }
+        final atLive = vMax >= (aMax - 0.5);
+        if (atLive != _isAtLive) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _isAtLive = atLive);
+          });
+        }
+        debugPrint('[AdvChart] Viewport idx ${vMin.toStringAsFixed(1)}–'
+            '${vMax.toStringAsFixed(1)} of 0–${aMax.toStringAsFixed(0)} '
+            '| at_live=$atLive');
+      },
+      // Index-based x-axis — labels rendered from candle timestamps.
+      primaryXAxis: NumericAxis(
+        minimum: -0.5,
+        maximum: n - 0.5,
+        initialZoomFactor:   zoomFactor,
+        initialZoomPosition: zoomPosition,
         isVisible: true,
         majorGridLines: const MajorGridLines(color: _kGridColor, width: 1),
         axisLine: const AxisLine(width: 0),
-        dateFormat: _dateFormatForRange(),
-        intervalType: DateTimeIntervalType.auto,
         labelStyle: const TextStyle(fontSize: 11, color: _kAxisColor),
         majorTickLines: const MajorTickLines(size: 0),
+        axisLabelFormatter: (AxisLabelRenderDetails details) {
+          final idx = details.value.round();
+          if (idx >= 0 && idx < data.length) {
+            return ChartAxisLabel(
+              _formatAdvLabel(data[idx].time),
+              details.textStyle,
+            );
+          }
+          return ChartAxisLabel('', details.textStyle);
+        },
       ),
       primaryYAxis: NumericAxis(
         opposedPosition: true,
@@ -723,19 +834,84 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       series: <CartesianSeries>[
         ..._buildMainSeries(data, series),
         if (emaValues != null) ..._buildEmaSeries(data, emaValues),
-        if (bbValues != null) ..._buildBollingerSeries(data, bbValues),
-        if (compareSeries != null) _buildCompareSeries(compareSeries),
+        if (bbValues != null)  ..._buildBollingerSeries(data, bbValues),
+        if (compareSeries != null) _buildCompareSeries(compareSeries, n),
+      ],
+    );
+
+    // Wrap in Stack so we can overlay the "Go To Live" button.
+    return Stack(
+      children: [
+        chart,
+        if (!_isAtLive)
+          Positioned(
+            top: 16,
+            right: 16,
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isAtLive = true;
+                  _chartVersion++;  // force viewport reset to latest candle
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1565C0),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.flash_on, size: 13, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text(
+                      'Go To Live',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
 
+  // Volume chart uses the same index-based x-axis as the main chart so that
+  // bars are visually aligned (both start at index 0 with equal spacing).
   Widget _buildVolumeChart(List<TradingCandle> data) {
+    final n = data.length;
+    final zoomFactor   = _currentZoomFactor.clamp(0.02, 1.0);
+    final zoomPosition = (1.0 - zoomFactor).clamp(0.0, 1.0);
+
     return SfCartesianChart(
+      key: ValueKey('advvol_${widget.symbol}_${_timeframe.name}_$_chartVersion'),
       backgroundColor: Colors.white,
       plotAreaBackgroundColor: Colors.white,
       plotAreaBorderWidth: 0,
       margin: const EdgeInsets.only(right: 8),
-      primaryXAxis: DateTimeAxis(isVisible: false),
+      primaryXAxis: NumericAxis(
+        minimum: -0.5,
+        maximum: n - 0.5,
+        initialZoomFactor:   zoomFactor,
+        initialZoomPosition: zoomPosition,
+        isVisible: false,
+        majorGridLines: const MajorGridLines(width: 0),
+        axisLine: const AxisLine(width: 0),
+        majorTickLines: const MajorTickLines(size: 0),
+      ),
       primaryYAxis: NumericAxis(
         opposedPosition: true,
         isVisible: true,
@@ -746,9 +922,9 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         numberFormat: NumberFormat.compact(),
       ),
       series: <CartesianSeries>[
-        ColumnSeries<TradingCandle, DateTime>(
+        ColumnSeries<TradingCandle, num>(
           dataSource: data,
-          xValueMapper: (c, _) => c.time,
+          xValueMapper: (c, i) => i,
           yValueMapper: (c, _) => c.volume,
           pointColorMapper: (c, _) => c.close >= c.open
               ? const Color(0xFF00C853).withOpacity(0.4)
@@ -759,19 +935,6 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         ),
       ],
     );
-  }
-
-  DateFormat _dateFormatForRange() {
-    switch (_dateRange) {
-      case ChartDateRange.d1:
-      case ChartDateRange.d5:
-        return DateFormat.Hm();
-      case ChartDateRange.mo1:
-      case ChartDateRange.mo3:
-        return DateFormat('dd MMM');
-      default:
-        return DateFormat('MMM yy');
-    }
   }
 
   String _cleanError(String error) {
@@ -788,78 +951,78 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       case ChartType.candles:
       case ChartType.heikinAshi:
         return [
-          CandleSeries<TradingCandle, DateTime>(
+          CandleSeries<TradingCandle, num>(
             name: 'OHLC',
             dataSource: data,
-            xValueMapper: (c, _) => c.time,
-            lowValueMapper: (c, _) => c.low,
-            highValueMapper: (c, _) => c.high,
-            openValueMapper: (c, _) => c.open,
+            xValueMapper: (c, i) => i,
+            lowValueMapper:   (c, _) => c.low,
+            highValueMapper:  (c, _) => c.high,
+            openValueMapper:  (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
             enableSolidCandles: true,
             bearColor: _kBearColor,
             bullColor: _kBullColor,
             width: data.length > 180 ? 0.45 : 0.68,
-            animationDuration: 150,
+            animationDuration: 0,
             animationDelay: 0,
           ),
         ];
       case ChartType.bar:
         return [
-          CandleSeries<TradingCandle, DateTime>(
+          CandleSeries<TradingCandle, num>(
             name: 'OHLC',
             dataSource: data,
-            xValueMapper: (c, _) => c.time,
-            lowValueMapper: (c, _) => c.low,
-            highValueMapper: (c, _) => c.high,
-            openValueMapper: (c, _) => c.open,
+            xValueMapper: (c, i) => i,
+            lowValueMapper:   (c, _) => c.low,
+            highValueMapper:  (c, _) => c.high,
+            openValueMapper:  (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
             enableSolidCandles: false,
             bearColor: _kBearColor,
             bullColor: _kBullColor,
             width: 0.3,
-            animationDuration: 400,
+            animationDuration: 0,
             animationDelay: 0,
           ),
         ];
       case ChartType.hollowCandle:
         return [
-          CandleSeries<TradingCandle, DateTime>(
+          // hollow candle / OHLC bar — index-based x
+          CandleSeries<TradingCandle, num>(
             name: 'OHLC',
             dataSource: data,
-            xValueMapper: (c, _) => c.time,
-            lowValueMapper: (c, _) => c.low,
-            highValueMapper: (c, _) => c.high,
-            openValueMapper: (c, _) => c.open,
+            xValueMapper: (c, i) => i,
+            lowValueMapper:   (c, _) => c.low,
+            highValueMapper:  (c, _) => c.high,
+            openValueMapper:  (c, _) => c.open,
             closeValueMapper: (c, _) => c.close,
             enableSolidCandles: false,
             bearColor: _kBearColor,
             bullColor: _kBullColor,
             width: 0.7,
-            animationDuration: 400,
+            animationDuration: 0,
             animationDelay: 0,
           ),
         ];
       case ChartType.line:
         return [
-          FastLineSeries<TradingCandle, DateTime>(
+          FastLineSeries<TradingCandle, num>(
             dataSource: data,
-            xValueMapper: (c, _) => c.time,
+            xValueMapper: (c, i) => i,
             yValueMapper: (c, _) => c.close,
             color: isUp ? _kBullColor : _kBearColor,
             width: 1.5,
-            animationDuration: 500,
+            animationDuration: 0,
             animationDelay: 0,
           ),
         ];
       case ChartType.area:
         final areaColor = isUp ? _kBullColor : _kBearColor;
         return [
-          AreaSeries<TradingCandle, DateTime>(
+          AreaSeries<TradingCandle, num>(
             dataSource: data,
-            xValueMapper: (c, _) => c.time,
+            xValueMapper: (c, i) => i,
             yValueMapper: (c, _) => c.close,
-            // Subtle gradient fill
             color: areaColor.withOpacity(0.08),
             borderColor: areaColor,
             borderWidth: 1.5,
@@ -868,32 +1031,32 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
               end: Alignment.bottomCenter,
               colors: [areaColor.withOpacity(0.18), areaColor.withOpacity(0.0)],
             ),
-            animationDuration: 500,
+            animationDuration: 0,
             animationDelay: 0,
           ),
         ];
     }
   }
 
+  // EMA: pair each value with its CANDLE index so the line aligns correctly
+  // on the index-based x-axis (not the indicator's own list position).
   List<CartesianSeries> _buildEmaSeries(
     List<TradingCandle> data,
     List<double?> emaValues,
   ) {
-    final emaData = <(DateTime, double)>[];
+    final emaData = <(int, double)>[];
     for (var i = 0; i < data.length; i++) {
-      if (emaValues[i] != null) {
-        emaData.add((data[i].time, emaValues[i]!));
-      }
+      if (emaValues[i] != null) emaData.add((i, emaValues[i]!));
     }
     return [
-      FastLineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(int, double), num>(
         name: 'EMA 20',
         dataSource: emaData,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
-        color: const Color(0xFFFFA726), // amber
+        color: const Color(0xFFFFA726),
         width: 1.2,
-        animationDuration: 400,
+        animationDuration: 0,
       ),
     ];
   }
@@ -902,29 +1065,29 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     List<TradingCandle> data,
     List<(double?, double?, double?)> bbValues,
   ) {
-    final upper = <(DateTime, double)>[];
-    final middle = <(DateTime, double)>[];
-    final lower = <(DateTime, double)>[];
+    final upper  = <(int, double)>[];
+    final middle = <(int, double)>[];
+    final lower  = <(int, double)>[];
     for (var i = 0; i < data.length; i++) {
       final bb = bbValues[i];
       if (bb.$1 != null) {
-        upper.add((data[i].time, bb.$1!));
-        middle.add((data[i].time, bb.$2!));
-        lower.add((data[i].time, bb.$3!));
+        upper.add((i, bb.$1!));
+        middle.add((i, bb.$2!));
+        lower.add((i, bb.$3!));
       }
     }
-    const bbColor = Color(0xFF9C27B0); // purple
+    const bbColor = Color(0xFF9C27B0);
     return [
-      FastLineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(int, double), num>(
         name: 'BB Upper',
         dataSource: upper,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
         color: bbColor.withOpacity(0.8),
         width: 1,
-        animationDuration: 400,
+        animationDuration: 0,
       ),
-      FastLineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(int, double), num>(
         name: 'BB Middle',
         dataSource: middle,
         xValueMapper: (d, _) => d.$1,
@@ -932,29 +1095,34 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         color: bbColor.withOpacity(0.4),
         width: 1,
         dashArray: const [4, 3],
-        animationDuration: 400,
+        animationDuration: 0,
       ),
-      FastLineSeries<(DateTime, double), DateTime>(
+      FastLineSeries<(int, double), num>(
         name: 'BB Lower',
         dataSource: lower,
         xValueMapper: (d, _) => d.$1,
         yValueMapper: (d, _) => d.$2,
         color: bbColor.withOpacity(0.8),
         width: 1,
-        animationDuration: 400,
+        animationDuration: 0,
       ),
     ];
   }
 
-  CartesianSeries _buildCompareSeries(TradingChartSeries compareSeries) {
-    return FastLineSeries<TradingCandle, DateTime>(
+  // Compare series: map by index position so it aligns with the main chart.
+  // [mainN] is the candle count of the main series (used to clamp indices).
+  CartesianSeries _buildCompareSeries(TradingChartSeries compareSeries, int mainN) {
+    final cData = compareSeries.data;
+    // Align compare series to the same index range as the main series.
+    final offset = mainN - cData.length;
+    return FastLineSeries<TradingCandle, num>(
       name: _compareSymbol ?? 'Compare',
-      dataSource: compareSeries.data,
-      xValueMapper: (c, _) => c.time,
+      dataSource: cData,
+      xValueMapper: (c, i) => offset + i,
       yValueMapper: (c, _) => c.close,
-      color: const Color(0xFFFFD600), // yellow
+      color: const Color(0xFFFFD600),
       width: 1.5,
-      animationDuration: 400,
+      animationDuration: 0,
     );
   }
 

@@ -37,6 +37,15 @@ class _OrdersScreenState extends State<OrdersScreen>
 
   @override
   Widget build(BuildContext context) {
+    final store = TradingScope.of(context);
+    AppNotification? sqOffNotif;
+    for (final n in store.notifications) {
+      if (n.relatedAlertType == AlertType.autoSquareOffWarning && !n.isRead) {
+        sqOffNotif = n;
+        break;
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -59,14 +68,26 @@ class _OrdersScreenState extends State<OrdersScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: const [
-          _OrderBookTab(),
-          _TradeBookTab(),
-          _OpenOrdersTab(),
-          GttOrdersScreen(),
-          BasketOrdersScreen(),
+      body: Column(
+        children: [
+          if (sqOffNotif != null)
+            _AutoSquareOffBanner(
+              title: sqOffNotif.title,
+              message: sqOffNotif.message,
+              onDismiss: () => store.markNotificationRead(sqOffNotif.id),
+            ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: const [
+                _OrderBookTab(),
+                _TradeBookTab(),
+                _OpenOrdersTab(),
+                GttOrdersScreen(),
+                BasketOrdersScreen(),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -887,6 +908,48 @@ class _PendingOrderCard extends StatelessWidget {
             icon: const Icon(LucideIcons.x, size: 16, color: AppColors.danger),
             onPressed: () => _cancelOrder(context, order.id),
             tooltip: 'Cancel',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Auto Square-Off Banner ───────────────────────────────────────────────────
+
+class _AutoSquareOffBanner extends StatelessWidget {
+  final String title;
+  final String message;
+  final VoidCallback onDismiss;
+  const _AutoSquareOffBanner({required this.title, required this.message, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFFB71C1C);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        border: const Border(bottom: BorderSide(color: Color(0x33B71C1C))),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w700)),
+                Text(message,
+                    style: const TextStyle(fontSize: 11, color: color)),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: onDismiss,
+            child: const Icon(Icons.close, size: 16, color: color),
           ),
         ],
       ),

@@ -216,10 +216,10 @@ class _SummaryBar extends StatelessWidget {
           value: '${(winRate * 100).toStringAsFixed(1)}%',
           icon: LucideIcons.target,
           color: winRate >= 0.5 ? AppColors.success : AppColors.danger),
-      _SCard(label: 'User Gross P&L',  value: _fmtPnl(userGrossPnl),
+      _SCard(label: 'Users Gross P&L (All Time)',  value: _fmtPnl(userGrossPnl),
           icon: LucideIcons.trendingUp,
           color: userGrossPnl >= 0 ? AppColors.success : AppColors.danger),
-      _SCard(label: 'Admin Revenue',   value: _fmtV(adminRevenue),
+      _SCard(label: 'Brokerage Collected',   value: _fmtV(adminRevenue),
           icon: LucideIcons.coins,     color: const Color(0xFF7B61FF)),
     ];
 

@@ -48,36 +48,20 @@ class PositionsScreen extends StatefulWidget {
 }
 
 class _PositionsScreenState extends State<PositionsScreen> {
-  Timer? _squareOffTimer;
   final Set<String> _selected = {};
   final Set<String> _pending = {};
 
   @override
   void initState() {
     super.initState();
-    _scheduleMisWarning();
   }
 
   @override
   void dispose() {
-    _squareOffTimer?.cancel();
     super.dispose();
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
-
-  void _scheduleMisWarning() {
-    final now = DateTime.now();
-    final target = DateTime(now.year, now.month, now.day, 15, 20);
-    final delay = target.isAfter(now) ? target.difference(now) : Duration.zero;
-    _squareOffTimer = Timer(delay, () {
-      if (!mounted) return;
-      final store = TradingScope.of(context);
-      if (store.positions.any((p) => p.product == ProductType.mis)) {
-        store.setMisSquareOffWarning(true);
-      }
-    });
-  }
 
   /// Returns the best available price for a symbol, never falling back to 0.
   /// Priority: live WS tick → stock universe → stored Firestore price → prevClose → avgPrice
@@ -316,13 +300,6 @@ class _PositionsScreenState extends State<PositionsScreen> {
       children: [
         Column(
           children: [
-            // MIS warning
-            if (store.showMisSquareOffWarning &&
-                positions.any((p) => p.product == ProductType.mis))
-              _MisWarningBanner(
-                onDismiss: () => store.setMisSquareOffWarning(false),
-              ),
-
             // Portfolio summary
             if (hasContent)
               _PortfolioSummaryBar(
@@ -1169,41 +1146,6 @@ class _FloatingSquareOffFab extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─── MIS Warning Banner ───────────────────────────────────────────────────────
-
-class _MisWarningBanner extends StatelessWidget {
-  final VoidCallback onDismiss;
-  const _MisWarningBanner({required this.onDismiss});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.warning.withValues(alpha: 0.08),
-      child: Row(
-        children: [
-          Icon(LucideIcons.clock, size: 13, color: AppColors.warning),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Intraday positions will be auto squared-off before 3:30 PM.',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.warning,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: onDismiss,
-            child: Icon(LucideIcons.x, size: 14, color: AppColors.warning),
-          ),
-        ],
       ),
     );
   }

@@ -15,8 +15,13 @@ class RealisedPnlScreen extends StatelessWidget {
     final store = TradingScope.of(context);
     final today = DateTime.now();
 
+    // Only show closing orders — orders that actually realize P&L.
+    // Opening BUY orders have pnl = 0 and must be excluded so they don't
+    // count as "losers" (their charges were not applied in paper trading).
     final executedOrders = store.orders.where((o) {
       if (o.status != OrderStatus.executed) return false;
+      // Skip opening orders: pnl = 0 means no position was closed
+      if ((o.pnl ?? 0.0) == 0.0) return false;
       final execAt = o.executedAt ?? o.dateTime;
       return execAt.year == today.year &&
           execAt.month == today.month &&
@@ -477,17 +482,19 @@ class _TradePnl {
 
   factory _TradePnl.fromOrder(Order order) {
     final execPrice = order.executedPrice ?? order.price;
-    final avgPrice = order.price;
-    final qty = order.executedQuantity ?? order.quantity;
-    final tradeValue = execPrice * qty;
+    final avgPrice  = order.price;
+    final qty       = order.executedQuantity ?? order.quantity;
 
-    final grossPnl = order.type == OrderType.sell
-        ? (execPrice - avgPrice) * qty
-        : (avgPrice - execPrice) * qty;
+    // Use backend-computed gross P&L.
+    // The backend sets pnl = (exitPrice - avgEntryPrice) × qty for longs,
+    // and pnl = (avgEntryPrice - exitPrice) × qty for shorts.
+    // This is the ONLY reliable P&L source — deriving it from order.price
+    // vs order.executedPrice gives 0 because both fields are the fill price.
+    final grossPnl = order.pnl ?? 0.0;
 
-    final stt = tradeValue * 0.001;
-    const brokerage = 20.0;
-    final gst = brokerage * 0.18;
+    // Use backend-computed charges (brokerage + taxes combined).
+    // Fall back to 0 — in paper trading, charges are often not configured.
+    final totalBackendCharges = order.chargesApplied ?? 0.0;
 
     return _TradePnl(
       symbol: order.symbol,
@@ -496,9 +503,9 @@ class _TradePnl {
       avgPrice: avgPrice,
       execPrice: execPrice,
       grossPnl: grossPnl,
-      stt: stt,
-      brokerage: brokerage,
-      gst: gst,
+      stt: 0.0,
+      brokerage: totalBackendCharges,
+      gst: 0.0,
     );
   }
 }

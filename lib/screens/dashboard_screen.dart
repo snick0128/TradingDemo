@@ -652,12 +652,6 @@ class _MarginDetailSheet extends StatelessWidget {
                 padding: const EdgeInsets.all(20),
                 children: [
 
-                  // Alert banner (Auto Square-Off Risk only)
-                  if (isCritical) ...[
-                    _AlertBanner(isCritical: true, safeLevel: safeLevel, equity: equity),
-                    const SizedBox(height: 16),
-                  ],
-
                   // Equity formula card
                   _FormulaCard(
                     walletBalance: walletBalance,
@@ -765,40 +759,6 @@ class _FormulaLine extends StatelessWidget {
           ),
           Expanded(
             child: Text(formula, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontFamily: 'monospace')),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AlertBanner extends StatelessWidget {
-  final bool isCritical;
-  final double safeLevel;
-  final double equity;
-  const _AlertBanner({required this.isCritical, required this.safeLevel, required this.equity});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isCritical ? _kLoss : AppColors.warning;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Icon(isCritical ? Icons.warning_amber_rounded : Icons.info_outline, size: 16, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              isCritical
-                  ? 'Equity ≤ ₹${safeLevel.toStringAsFixed(0)} — auto square-off will trigger on the next price tick.'
-                  : 'Equity (₹${equity.toStringAsFixed(0)}) is approaching the safe level of ₹${safeLevel.toStringAsFixed(0)}. Add funds or reduce positions.',
-              style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
-            ),
           ),
         ],
       ),
@@ -1351,7 +1311,10 @@ class _IndicesRow extends StatelessWidget {
     final indices = <_IndexData>[];
     const want = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTYNXT50'];
     for (final sym in want) {
-      final m = stocks.where((s) => s.symbol.toUpperCase().contains(sym)).firstOrNull;
+      Stock? m;
+      for (final s in stocks) {
+        if (s.symbol.toUpperCase().contains(sym)) { m = s; break; }
+      }
       if (m != null) indices.add(_IndexData(m.symbol, m.currentPrice, m.changePercentage));
     }
     if (indices.isEmpty) {
@@ -1525,12 +1488,10 @@ class _WatchlistPreviewRow extends StatelessWidget {
             Expanded(
               child: Text(stock.symbol, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 15, color: AppColors.textPrimary)),
             ),
-            PriceFlashWidget(
-              price: stock.currentPrice,
-              child: Text(
-                '₹${stock.currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: AppColors.textPrimary, fontFeatures: const [FontFeature.tabularFigures()]),
-              ),
+            LivePriceText(
+              symbol: stock.symbol,
+              store: TradingScope.of(context),
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: AppColors.textPrimary, fontFeatures: const [FontFeature.tabularFigures()]),
             ),
             const SizedBox(width: 10),
             Container(

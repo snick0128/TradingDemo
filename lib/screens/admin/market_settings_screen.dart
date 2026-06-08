@@ -82,13 +82,24 @@ class _MarketSettingsScreenState extends State<MarketSettingsScreen> {
             child: ListView(
               children: [
                 _SegmentCard(
-                  title: 'NSE / BSE — Stocks',
+                  title: 'NSE / BSE — Equities',
                   icon: LucideIcons.barChart2,
                   color: AppColors.primary,
                   settings: _settings.stocks,
                   saving: _saving,
                   onChanged: (updated) => _save(
-                    MarketSettings(stocks: updated, mcx: _settings.mcx),
+                    MarketSettings(stocks: updated, mcx: _settings.mcx, nfo: _settings.nfo),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _SegmentCard(
+                  title: 'NFO / BFO — F&O Derivatives',
+                  icon: LucideIcons.trendingUp,
+                  color: const Color(0xFF1565C0),
+                  settings: _settings.nfo,
+                  saving: _saving,
+                  onChanged: (updated) => _save(
+                    MarketSettings(stocks: _settings.stocks, mcx: _settings.mcx, nfo: updated),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -99,7 +110,7 @@ class _MarketSettingsScreenState extends State<MarketSettingsScreen> {
                   settings: _settings.mcx,
                   saving: _saving,
                   onChanged: (updated) => _save(
-                    MarketSettings(stocks: _settings.stocks, mcx: updated),
+                    MarketSettings(stocks: _settings.stocks, mcx: updated, nfo: _settings.nfo),
                   ),
                 ),
                 const SizedBox(height: 32),

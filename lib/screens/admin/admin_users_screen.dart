@@ -99,45 +99,99 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   void _showFundDialog(BuildContext context, User user, AdminStore admin) {
     final ctrl = TextEditingController();
+    bool isAdd = true;
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Fund — ${user.clientId}',
-            style: GoogleFonts.inter(
-                fontSize: 15, fontWeight: FontWeight.w700)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Current balance: ₹${user.balance.toStringAsFixed(2)}',
-                style: GoogleFonts.inter(
-                    fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Amount (positive = add, negative = deduct)',
-                prefixText: '₹ ',
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text('Fund — ${user.clientId}',
+              style: GoogleFonts.inter(
+                  fontSize: 15, fontWeight: FontWeight.w700)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Current balance: ₹${user.balance.toStringAsFixed(2)}',
+                  style: GoogleFonts.inter(
+                      fontSize: 13, color: AppColors.textSecondary)),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setS(() => isAdd = true),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: isAdd ? Colors.green : Colors.transparent,
+                          border: Border.all(color: Colors.green),
+                          borderRadius: const BorderRadius.horizontal(
+                              left: Radius.circular(8)),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text('Add',
+                            style: GoogleFonts.inter(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isAdd ? Colors.white : Colors.green)),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setS(() => isAdd = false),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: !isAdd ? Colors.red : Colors.transparent,
+                          border: Border.all(color: Colors.red),
+                          borderRadius: const BorderRadius.horizontal(
+                              right: Radius.circular(8)),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text('Deduct',
+                            style: GoogleFonts.inter(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: !isAdd ? Colors.white : Colors.red)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Amount',
+                  prefixText: '₹ ',
+                  hintText: '0.00',
+                  suffixText: isAdd ? 'credit' : 'debit',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isAdd ? Colors.green : Colors.red,
+              ),
+              onPressed: () {
+                final raw = double.tryParse(ctrl.text);
+                if (raw != null && raw > 0) {
+                  final amount = isAdd ? raw : -raw;
+                  admin.adjustUserBalance(user.id, amount);
+                  Navigator.pop(context);
+                }
+              },
+              child: Text(isAdd ? 'Add Money' : 'Deduct Money'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              final amount = double.tryParse(ctrl.text);
-              if (amount != null) {
-                admin.adjustUserBalance(user.id, amount);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Apply'),
-          ),
-        ],
       ),
     );
   }
@@ -485,7 +539,7 @@ class _UserCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 16),
                   _MetricCol(
-                    label: 'Overall P&L',
+                    label: 'Net P&L (Lifetime)',
                     value: '${pnl >= 0 ? '+' : ''}${_fmtV(pnl)}',
                     color: pnlColor,
                   ),

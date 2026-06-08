@@ -17,6 +17,7 @@ import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../widgets/order_form_sheet.dart';
+import '../widgets/shared_widgets.dart';
 
 class StockDetailScreen extends StatefulWidget {
   final String symbol;
@@ -60,6 +61,13 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   double? _lastRealtimePrice;
   double? _pendingRealtimePrice;
   bool _firstTickLogged = false;
+
+  // ── Chart viewport tracking ────────────────────────────────────────────────
+  // Used to implement "Go To Live" and auto-follow behavior.
+  // _chartKey is incremented to force a zoom-reset to latest when needed.
+  int _chartKey = 0;
+  bool _isAtLive = true;
+  double _currentZoomFactor = 0.5; // fraction of candles visible
 
   @override
   void initState() {
@@ -306,24 +314,42 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     if (price <= 0 || price == _lastRealtimePrice) return;
     if (stock != null) _quoteCache[_cacheSymbol] = stock;
     _pendingRealtimePrice = price;
-    _tickDebounce ??= Timer(const Duration(milliseconds: 250), () {
+    if (!_firstTickLogged) {
+      _firstTickLogged = true;
+      _logStage('first_tick_latency_ms', _openElapsedMs());
+    }
+    _tickDebounce ??= Timer(Duration.zero, () {
       _tickDebounce = null;
       final pending = _pendingRealtimePrice;
       if (!mounted || pending == null || pending == _lastRealtimePrice) return;
       _lastRealtimePrice = pending;
-      if (!_firstTickLogged) {
-        _firstTickLogged = true;
-        _logStage('first_tick_latency_ms', _openElapsedMs());
-      }
       final current = _series;
       if (current == null) {
         setState(() {});
         return;
       }
+      debugPrint('[Chart] Tick ${widget.symbol} ₹$pending '
+          'candles=${current.data.length} range=$_selectedRange at_live=$_isAtLive');
+
+      final (:series, :isNewCandle) = TradingChartService.mergeRealtimeTick(
+        current,
+        pending,
+        intervalMinutes: _intervalMinutesForRange(_selectedRange),
+      );
+      _chartCache[_seriesCacheKey] = series;
+      _localChartCache.writeSeries(_seriesCacheKey, series);
+
+      debugPrint('[Chart] ${isNewCandle ? "🕯 New candle" : "📈 Updated"} '
+          'total=${series.data.length} latest=${series.data.last.time.toIso8601String()}');
+
       setState(() {
-        _series = TradingChartService.withRealtimePrice(current, pending);
-        _chartCache[_seriesCacheKey] = _series!;
-        _localChartCache.writeSeries(_seriesCacheKey, _series!);
+        _series = series;
+        // When a new candle starts and the user is watching live, bump
+        // _chartKey so the chart resets its viewport to show the new latest.
+        if (isNewCandle && _isAtLive) {
+          _currentZoomFactor = _defaultZoomFactor(series.data.length);
+          _chartKey++;
+        }
       });
     });
   }
@@ -395,6 +421,12 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           _loadingSeries = false;
           _seriesError = null;
           _chartStage = 'fresh';
+          // Reset viewport to live on fresh data load.
+          _isAtLive = true;
+          _currentZoomFactor = _defaultZoomFactor(nextSeries.data.length);
+          _chartKey++;
+          debugPrint('[Chart] Loaded ${nextSeries.data.length} candles for '
+              '${widget.symbol} zoom=${_currentZoomFactor.toStringAsFixed(3)}');
         });
         _fadeCtrl.forward();
         sw.stop();
@@ -511,6 +543,41 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final h = roundedHour.toString().padLeft(2, '0');
     final min = roundedMin.toString().padLeft(2, '0');
     return '${d.year}-$m-$day $h:$min';
+  }
+
+  /// Candle interval in minutes for the given range tab index.
+  int _intervalMinutesForRange(int rangeIdx) {
+    switch (rangeIdx) {
+      case 0: return 5;          // 1D  → 5m candles
+      case 1: return 15;         // 1W  → 15m candles
+      case 2: return 60;         // 1M  → 1h candles
+      case 3: return 24 * 60;    // 1Y  → daily candles
+      default: return 24 * 60 * 7; // 5Y/max → weekly candles
+    }
+  }
+
+  /// Compute default zoom factor so ~60 candles are visible initially.
+  double _defaultZoomFactor(int candleCount) {
+    if (candleCount <= 0) return 1.0;
+    final visible = 60.clamp(1, candleCount);
+    return (visible / candleCount).clamp(0.05, 1.0);
+  }
+
+  /// Format a DateTime for the x-axis label in the inline chart.
+  String _formatAxisLabel(DateTime t, int rangeIdx) {
+    final local = t.toLocal();
+    if (rangeIdx <= 1) {
+      // intraday / weekly — show HH:mm
+      return '${local.hour.toString().padLeft(2,'0')}:${local.minute.toString().padLeft(2,'0')}';
+    }
+    if (rangeIdx == 2) {
+      // monthly — show "dd MMM"
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return '${local.day} ${months[local.month - 1]}';
+    }
+    // yearly / max — show "MMM yy"
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${months[local.month - 1]} ${(local.year % 100).toString().padLeft(2,'0')}';
   }
 
   @override
@@ -842,8 +909,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    '₹${stock.currentPrice.toStringAsFixed(2)}',
+                  LivePriceText(
+                    symbol: widget.symbol,
+                    store: _store!,
                     style: GoogleFonts.inter(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -898,26 +966,70 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // Use line chart when only 1 candle exists — candle series can't render a single point
     final effectiveLineMode = use1DLine || series.data.length <= 1;
     final showVolume = series.data.any((c) => c.volume > 0);
+    final n = series.data.length;
 
     final prevCloseRef = _selectedRange == 0
-        ? series
-              .open // 1D: use today's open
-        : (series.data.isNotEmpty
-              ? series
-                    .data
-                    .first
-                    .close // other ranges: first candle close
-              : 0.0);
+        ? series.open
+        : (series.data.isNotEmpty ? series.data.first.close : 0.0);
 
-    // Clamp axis to data range so no empty gaps appear (e.g. NIFTY index charts)
-    final axisMin = hasRealCandles ? series.data.first.time : null;
-    final axisMax = hasRealCandles
-        ? series.data.last.time.add(
-            _selectedRange <= 1
-                ? const Duration(minutes: 5)
-                : const Duration(days: 1),
-          )
-        : null;
+    // ── Index-based x-axis setup ───────────────────────────────────────────
+    // Using candle list-index (0, 1, 2, …, n-1) as the x-value eliminates
+    // overnight gaps, weekend blanks, and any other timestamp-proportional
+    // spacing that caused the "candles compressed to one side" bug.
+    // The axis min/max are fixed to the data extents; labels are formatted
+    // from the actual candle timestamp via axisLabelFormatter.
+    final zoomFactor   = _currentZoomFactor.clamp(0.05, 1.0);
+    final zoomPosition = _isAtLive
+        ? (1.0 - zoomFactor).clamp(0.0, 1.0)   // right-anchored (live)
+        : (1.0 - zoomFactor).clamp(0.0, 1.0);   // same on initial; Syncfusion preserves pan after first render
+
+    NumericAxis _buildXAxis({bool visible = false}) => NumericAxis(
+      minimum: -0.5,           // half-candle gap on left edge
+      maximum: n - 0.5,        // half-candle gap on right edge
+      initialZoomFactor:   zoomFactor,
+      initialZoomPosition: zoomPosition,
+      isVisible: visible,
+      majorGridLines: const MajorGridLines(width: 0),
+      axisLine:        const AxisLine(width: 0),
+      majorTickLines:  const MajorTickLines(size: 0),
+      axisLabelFormatter: visible
+          ? (AxisLabelRenderDetails details) {
+              final idx = details.value.round();
+              if (idx >= 0 && idx < n) {
+                return ChartAxisLabel(
+                  _formatAxisLabel(series.data[idx].time, _selectedRange),
+                  details.textStyle,
+                );
+              }
+              return ChartAxisLabel('', details.textStyle);
+            }
+          : null,
+    );
+
+    // Track whether the user is at the live (right) edge so we can show
+    // or hide the "Go To Live" button without blocking panning.
+    void onRangeChanged(ActualRangeChangedArgs args) {
+      if (args.orientation != AxisOrientation.horizontal) return;
+      final vMax    = (args.visibleMax as num).toDouble();
+      final aMax    = (args.actualMax  as num).toDouble();
+      final vMin    = (args.visibleMin as num).toDouble();
+      final aMin    = (args.actualMin  as num).toDouble();
+      final span    = aMax - aMin;
+      if (span > 0) {
+        final newFactor = ((vMax - vMin) / span).clamp(0.05, 1.0);
+        if ((newFactor - _currentZoomFactor).abs() > 0.001) {
+          _currentZoomFactor = newFactor;
+        }
+      }
+      final atLive = vMax >= (aMax - 0.5);
+      if (atLive != _isAtLive) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _isAtLive = atLive);
+        });
+      }
+      debugPrint('[Chart] Viewport: idx ${vMin.toStringAsFixed(1)}–${vMax.toStringAsFixed(1)} '
+          'of 0–${aMax.toStringAsFixed(0)} | at_live=$atLive zoom=${_currentZoomFactor.toStringAsFixed(3)}');
+    }
 
     return Stack(
       children: [
@@ -935,27 +1047,19 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         ? const Center(
                             child: Text(
                               'Chart data unavailable',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF757575),
-                              ),
+                              style: TextStyle(fontSize: 13, color: Color(0xFF757575)),
                             ),
                           )
                         : effectiveLineMode
+                        // ── Line chart ─────────────────────────────────────
                         ? SfCartesianChart(
+                            key: ValueKey('line_${widget.symbol}_${_selectedRange}_$_chartKey'),
                             backgroundColor: Colors.white,
                             plotAreaBackgroundColor: Colors.white,
-                            enableAxisAnimation: true,
+                            enableAxisAnimation: false,
                             plotAreaBorderWidth: 0,
                             margin: const EdgeInsets.only(right: 8),
-                            primaryXAxis: DateTimeAxis(
-                              isVisible: false,
-                              minimum: axisMin,
-                              maximum: axisMax,
-                              majorGridLines: const MajorGridLines(width: 0),
-                              axisLine: const AxisLine(width: 0),
-                              majorTickLines: const MajorTickLines(size: 0),
-                            ),
+                            primaryXAxis: _buildXAxis(),
                             primaryYAxis: NumericAxis(
                               isVisible: false,
                               rangePadding: ChartRangePadding.round,
@@ -974,6 +1078,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               axisLine: const AxisLine(width: 0),
                               majorTickLines: const MajorTickLines(size: 0),
                             ),
+                            onActualRangeChanged: onRangeChanged,
                             trackballBehavior: TrackballBehavior(
                               enable: true,
                               activationMode: ActivationMode.singleTap,
@@ -981,9 +1086,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               lineWidth: 1,
                             ),
                             series: <CartesianSeries>[
-                              LineSeries<TradingCandle, DateTime>(
+                              // xValueMapper uses index `i` — equal spacing, no gaps
+                              FastLineSeries<TradingCandle, num>(
                                 dataSource: series.data,
-                                xValueMapper: (c, _) => c.time,
+                                xValueMapper: (c, i) => i,
                                 yValueMapper: (c, _) => c.close,
                                 color: chartColor,
                                 width: 2.2,
@@ -991,20 +1097,15 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               ),
                             ],
                           )
+                        // ── Candle chart ────────────────────────────────────
                         : SfCartesianChart(
+                            key: ValueKey('candle_${widget.symbol}_${_selectedRange}_$_chartKey'),
                             backgroundColor: Colors.white,
                             plotAreaBackgroundColor: Colors.white,
-                            enableAxisAnimation: true,
+                            enableAxisAnimation: false,
                             plotAreaBorderWidth: 0,
                             margin: const EdgeInsets.only(right: 8),
-                            primaryXAxis: DateTimeAxis(
-                              isVisible: false,
-                              minimum: axisMin,
-                              maximum: axisMax,
-                              majorGridLines: const MajorGridLines(width: 0),
-                              axisLine: const AxisLine(width: 0),
-                              majorTickLines: const MajorTickLines(size: 0),
-                            ),
+                            primaryXAxis: _buildXAxis(),
                             primaryYAxis: NumericAxis(
                               isVisible: false,
                               rangePadding: ChartRangePadding.round,
@@ -1023,6 +1124,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               axisLine: const AxisLine(width: 0),
                               majorTickLines: const MajorTickLines(size: 0),
                             ),
+                            onActualRangeChanged: onRangeChanged,
                             trackballBehavior: TrackballBehavior(
                               enable: true,
                               activationMode: ActivationMode.singleTap,
@@ -1036,18 +1138,18 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                               zoomMode: ZoomMode.x,
                             ),
                             series: <CartesianSeries>[
-                              CandleSeries<TradingCandle, DateTime>(
+                              CandleSeries<TradingCandle, num>(
                                 dataSource: series.data,
-                                xValueMapper: (c, _) => c.time,
-                                lowValueMapper: (c, _) => c.low,
-                                highValueMapper: (c, _) => c.high,
-                                openValueMapper: (c, _) => c.open,
+                                xValueMapper: (c, i) => i,
+                                lowValueMapper:   (c, _) => c.low,
+                                highValueMapper:  (c, _) => c.high,
+                                openValueMapper:  (c, _) => c.open,
                                 closeValueMapper: (c, _) => c.close,
                                 enableSolidCandles: true,
                                 bearColor: const Color(0xFFE53935),
                                 bullColor: const Color(0xFF00C853),
-                                width: series.data.length > 100 ? 0.7 : 0.6,
-                                spacing: series.data.length > 100 ? 0.1 : 0.15,
+                                width:   n > 100 ? 0.7 : 0.6,
+                                spacing: n > 100 ? 0.1 : 0.15,
                                 animationDuration: 0,
                               ),
                             ],
@@ -1056,25 +1158,36 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                 ),
               ),
             ),
-            // ── Volume overlay ─────────────────────────────────────────────
+            // ── Volume bar chart ───────────────────────────────────────────
+            // Also uses index-based x-axis so it stays aligned with the main chart.
             if (showVolume)
               SizedBox(
                 height: 44,
                 child: FadeTransition(
                   opacity: fadeOpacity,
                   child: SfCartesianChart(
+                    key: ValueKey('vol_${widget.symbol}_${_selectedRange}_$_chartKey'),
                     enableAxisAnimation: false,
                     plotAreaBorderWidth: 0,
-                    margin: const EdgeInsets.only(right: 4),
-                    primaryXAxis: DateTimeAxis(isVisible: false),
+                    margin: const EdgeInsets.only(right: 8),
+                    primaryXAxis: NumericAxis(
+                      minimum: -0.5,
+                      maximum: n - 0.5,
+                      initialZoomFactor:   zoomFactor,
+                      initialZoomPosition: zoomPosition,
+                      isVisible: false,
+                      majorGridLines: const MajorGridLines(width: 0),
+                      axisLine:       const AxisLine(width: 0),
+                      majorTickLines: const MajorTickLines(size: 0),
+                    ),
                     primaryYAxis: NumericAxis(
                       isVisible: false,
                       majorGridLines: const MajorGridLines(width: 0),
                     ),
                     series: <CartesianSeries>[
-                      ColumnSeries<TradingCandle, DateTime>(
+                      ColumnSeries<TradingCandle, num>(
                         dataSource: series.data,
-                        xValueMapper: (c, _) => c.time,
+                        xValueMapper: (c, i) => i,
                         yValueMapper: (c, _) => c.volume,
                         pointColorMapper: (c, _) => c.close >= c.open
                             ? const Color(0xFF00C853).withOpacity(0.28)
@@ -1089,7 +1202,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               ),
           ],
         ),
-        // Loading shimmer overlay
+        // ── Loading shimmer ────────────────────────────────────────────────
         if (_loadingSeries)
           Positioned.fill(
             child: IgnorePointer(
@@ -1112,7 +1225,50 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               ),
             ),
           ),
-        // Expand icon
+        // ── "Go To Live" button — shown when user has panned away ──────────
+        if (!_isAtLive && hasRealCandles && _selectedRange <= 1)
+          Positioned(
+            top: 24,
+            right: 52,
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isAtLive = true;
+                  _chartKey++;   // recreate chart scrolled to latest candle
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1565C0),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.12),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.flash_on, size: 12, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text(
+                      'Go To Live',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        // ── Expand icon ────────────────────────────────────────────────────
         Positioned(
           bottom: 8,
           right: 8,

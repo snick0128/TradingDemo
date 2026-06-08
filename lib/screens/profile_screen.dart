@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
 import '../models/trading_models.dart';
+import 'ipo_screen.dart';
 import 'settings_hub_screen.dart';
 import 'settings/about_screen.dart';
 import 'settings/app_permissions_screen.dart';
@@ -282,6 +283,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: EdgeInsets.zero,
       child: Column(
         children: [
+          _actionTile(
+            icon: LucideIcons.barChart2,
+            title: 'IPO',
+            subtitle: 'Upcoming, ongoing, and recently listed IPOs',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const IPOScreen()),
+            ),
+          ),
+          const Divider(height: 1, indent: 56),
           _actionTile(
             icon: LucideIcons.link2,
             title: 'Linked Accounts',

@@ -600,6 +600,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     // Subscribe to real-time updates from admin_config/rms_settings so that
     // leverage changes made by the admin propagate to all open sessions
     // without requiring a page reload.
+    // Guard: only subscribe when a user is authenticated — unauthenticated reads
+    // hit a Firestore permission-denied which is harmless but noisy in logs.
+    final authedUid = _authSession.user?.uid;
+    if (authedUid == null || authedUid.isEmpty) return;
     _rmsSub?.cancel();
     _rmsSub = FirebaseFirestore.instance
         .collection('admin_config')
@@ -609,7 +613,9 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
           if (!doc.exists) return;
           final updated = PlatformRmsSettings.fromMap(doc.data()!);
           _tradingStore.updateRmsSettings(updated);
-        }, onError: (_) {});
+        }, onError: (e) {
+          debugPrint('[RMS] Firestore subscription error (check security rules for admin_config/rms_settings): $e');
+        });
   }
 
   OrderStatus _mapOrderStatus(String status) {

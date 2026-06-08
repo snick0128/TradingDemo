@@ -83,10 +83,13 @@ class _FundsScreenState extends State<FundsScreen>
     bool isSameDay(DateTime d) =>
         d.year == now.year && d.month == now.month && d.day == now.day;
 
+    // Sum today's realized P&L across ALL closing orders (both SELL to close
+    // longs, and BUY to close shorts). Opening orders have pnl = 0 so they
+    // do not contribute.
     final realizedPnl = store.orders
         .where((o) =>
             o.status == OrderStatus.executed &&
-            o.type == OrderType.sell &&
+            (o.pnl ?? 0.0) != 0.0 &&
             isSameDay(o.executedAt ?? o.dateTime))
         .fold(0.0, (sum, o) => sum + (o.pnl ?? 0.0));
 

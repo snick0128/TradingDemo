@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -25,13 +23,31 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
     final store = TradingScope.of(context);
     final sym = widget.symbol ?? 'NIFTY';
 
+    // Seed with any depth already cached on the stock so the screen isn't blank
+    // while waiting for the next tick. The StreamBuilder will overwrite this as
+    // real-time ticks arrive.
+    final cachedDepth = store.stockBySymbolOrNull(sym)?.depth;
+
     return StreamBuilder<MarketDepth>(
       stream: store.marketDataService.depthUpdates(sym),
+      initialData: cachedDepth,
       builder: (context, snapshot) {
         final depth = snapshot.data;
 
         final body = depth == null
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 12),
+                    Text(
+                      'Waiting for live depth data…',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    ),
+                  ],
+                ),
+              )
             : SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
                 child: Column(

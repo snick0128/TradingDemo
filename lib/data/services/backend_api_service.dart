@@ -152,6 +152,15 @@ class BackendApiService {
     return body;
   }
 
+  // ── Generic helpers ──────────────────────────────────────────────────────────
+
+  /// Public wrapper around [_post] for ad-hoc endpoints (e.g. debug traces).
+  Future<Map<String, dynamic>> postJson(String path, Map<String, dynamic> body) =>
+      _post(path, body);
+
+  /// GET without a typed wrapper — returns raw JSON map.
+  Future<Map<String, dynamic>> getJson(String path) => _get(path);
+
   // ── Health ──────────────────────────────────────────────────────────────────
 
   // Cache the health ping for 60s — it's purely a warmup call, not live data.
@@ -224,6 +233,8 @@ class BackendApiService {
     required String type, // 'BUY' or 'SELL'
     String productType = 'MIS', // 'MIS' | 'CNC' | 'NRML'
     String exchange = 'NSE', // 'NSE' | 'MCX' | 'BSE' etc.
+    String variety = 'MARKET', // 'MARKET' | 'LIMIT'
+    double? limitPrice, // required when variety == 'LIMIT'
     // For F&O contracts (options/futures) not tracked by the live WebSocket feed,
     // pass the current LTP from the options chain or detail screen so the backend
     // can price the order instead of throwing "Live price unavailable".
@@ -238,6 +249,8 @@ class BackendApiService {
       'type': type,
       'productType': productType,
       'exchange': exchange,
+      'variety': variety,
+      if (limitPrice != null && limitPrice > 0) 'limitPrice': limitPrice,
       if (lockedLtp != null && lockedLtp > 0) 'lockedLtp': lockedLtp,
       if (clientRequestId != null) 'clientRequestId': clientRequestId,
       if (symbolToken != null && symbolToken.isNotEmpty) 'symbolToken': symbolToken,
@@ -428,10 +441,59 @@ class BackendApiService {
     return List<Map<String, dynamic>>.from(res['data'] as List);
   }
 
+  /// Admin: sync IPO listings from Angel One SmartAPI into Firestore.
+  Future<Map<String, dynamic>> syncIPOsFromAngelOne() async {
+    final res = await _post('/ipos/sync', {});
+    invalidate('/ipos');
+    return res;
+  }
+
   /// Returns a single IPO by [id].
   Future<Map<String, dynamic>> getIPOById(String id) async {
     final res = await _get('/ipos/$id');
     return res['data'] as Map<String, dynamic>;
+  }
+
+  /// Admin: create a new IPO listing.
+  Future<Map<String, dynamic>> createIPO(Map<String, dynamic> data) async {
+    final res = await _post('/ipos', data);
+    invalidate('/ipos');
+    return res;
+  }
+
+  /// Admin: update an existing IPO listing.
+  Future<Map<String, dynamic>> updateIPO(
+      String id, Map<String, dynamic> data) async {
+    final uri = Uri.parse('$baseUrl/ipos/$id');
+    try {
+      final response = await _client
+          .put(uri, headers: _headers, body: jsonEncode(data))
+          .timeout(const Duration(seconds: 10));
+      invalidate('/ipos');
+      return _parse(response);
+    } on BackendException {
+      rethrow;
+    } catch (e) {
+      throw BackendException(
+          'Could not reach the server. Please check your connection.');
+    }
+  }
+
+  /// Admin: delete an IPO listing.
+  Future<void> deleteIPO(String id) async {
+    final uri = Uri.parse('$baseUrl/ipos/$id');
+    try {
+      final response = await _client
+          .delete(uri, headers: _headers)
+          .timeout(const Duration(seconds: 10));
+      invalidate('/ipos');
+      _parse(response);
+    } on BackendException {
+      rethrow;
+    } catch (e) {
+      throw BackendException(
+          'Could not reach the server. Please check your connection.');
+    }
   }
 
   // ── FCM Notifications ────────────────────────────────────────────────────────

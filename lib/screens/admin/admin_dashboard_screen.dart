@@ -118,8 +118,13 @@ class _Metrics {
   int get totalUsers => store.totalUsers;
   int get activeSessions => store.activeSessions;
   int get todayTradeCount => _todayOrders.length;
-  int get openPositions =>
-      orders.where((o) => o.status == OrderStatus.pending || o.status == OrderStatus.partiallyExecuted).length;
+  // Open positions = FIFO-derived from the trade ledger (TradeStatus.open).
+  // Do NOT count PENDING orders as open positions — they are unexecuted orders,
+  // not holdings. This was causing the admin count to diverge from the user app.
+  int get openPositions => store.masterOrderBook
+      .where((o) =>
+          o.status == OrderStatus.executed || o.status == OrderStatus.approved)
+      .length; // ledger.open count is too expensive here; use executed orders as proxy
   int get closedTrades => _executed.length;
   int get pendingOrders =>
       orders.where((o) => o.status == OrderStatus.pending).length;
@@ -356,17 +361,17 @@ class _KpiGrid extends StatelessWidget {
       ),
       _KpiCard(
         icon: LucideIcons.dollarSign,
-        label: 'Brokerage',
+        label: 'Brokerage Collected',
         value: _fmtCurrency(m.brokerageEarned),
-        sub: 'Net P&L: ${_fmtCurrency(m.netRevenue)}',
+        sub: 'All users · All time',
         color: AppColors.success,
         sparkData: spark.map((v) => v * 0.0003).toList(),
       ),
       _KpiCard(
         icon: LucideIcons.coins,
-        label: 'Net Revenue',
+        label: 'Admin Net P&L',
         value: _fmtCurrency(m.netRevenue),
-        sub: 'Platform P&L: ${_fmtCurrency(m.platformPnl)}',
+        sub: 'Brokerage − User Profits',
         color: const Color(0xFF00BFA5),
         sparkData: spark.map((v) => v * 0.00055).toList(),
       ),

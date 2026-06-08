@@ -12,6 +12,7 @@ import '../models/market_settings.dart';
 import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import 'app_dialog.dart';
 
 /// Shows the buy/sell order form as a modal bottom sheet.
@@ -117,6 +118,13 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   // Global admin defaults — cached from TradingStore via didChangeDependencies
   PlatformRmsSettings _rmsSettings = PlatformRmsSettings.defaults;
 
+  // Live price tracking
+  TradingStore? _store;
+  double _livePrice = 0;
+
+  double get _effectiveLtp =>
+      _livePrice > 0 ? _livePrice : widget.stock.currentPrice;
+
   @override
   void initState() {
     super.initState();
@@ -136,9 +144,25 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Sync admin global leverage defaults from the trading store.
-    // These are the fallback when no category rule matches.
     _rmsSettings = TradingScope.of(context).rmsSettings;
+
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.removeListener(_onStoreTick);
+      _store?.unmonitorSymbol(widget.stock.symbol);
+      _store = store;
+      store.addListener(_onStoreTick);
+      store.monitorSymbol(widget.stock.symbol);
+      _onStoreTick();
+    }
+  }
+
+  void _onStoreTick() {
+    if (!mounted) return;
+    final ltp = _store?.lastValidLtp(widget.stock.symbol) ?? 0;
+    if (ltp > 0 && ltp != _livePrice) {
+      setState(() => _livePrice = ltp);
+    }
   }
 
   void _subscribeCategoryLeverage() {
@@ -184,6 +208,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   @override
   void dispose() {
+    _store?.removeListener(_onStoreTick);
+    _store?.unmonitorSymbol(widget.stock.symbol);
     _priceController.dispose();
     _qtyController.dispose();
     _settingsSub?.cancel();
@@ -283,8 +309,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       _marketSettings.checkAction(widget.stock.exchange, isBuy: _isBuy);
 
   double get _effectivePrice => _isPriceEnabled
-      ? (double.tryParse(_priceController.text) ?? widget.stock.currentPrice)
-      : widget.stock.currentPrice;
+      ? (double.tryParse(_priceController.text) ?? _effectiveLtp)
+      : _effectiveLtp;
 
   double get _estimatedCharges {
     final categoryKey = _resolveCategoryKey();
@@ -324,12 +350,17 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
+    final store = TradingScope.read(context);
     final balance = store.balance;
 
     // Use freeMargin for validation (equity-aware — accounts for running losses).
     // For users with no open positions, freeMargin == balance.
     final freeMargin = store.freeMargin;
+
+    // Guard: Firestore balance arrives asynchronously after auth.
+    // Before the first snapshot, _balance is 0.0 (a stub, not a real balance).
+    // Never treat 0.0 stub as "insufficient funds" — wait for real data first.
+    final isUserDataLoaded = store.isUserDataLoaded;
 
     // Determine if this is a futures/options/MIS instrument that allows short selling.
     // For such instruments we skip the "insufficient holdings" check on SELL.
@@ -364,8 +395,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
     // BUY and short SELL both block margin — validate against freeMargin (not raw balance).
     // freeMargin = equity - usedMargin, so it correctly reflects running losses.
+    // Only evaluate after user data has loaded — otherwise freeMargin is 0.0 stub.
     final hasInsufficientFunds =
-        (_isBuy || isShortSell) && _requiredMargin > freeMargin;
+        isUserDataLoaded && (_isBuy || isShortSell) && _requiredMargin > freeMargin;
 
     final blockReason = _marketBlockReason;
     final isBlocked = blockReason != null;
@@ -420,7 +452,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                     _buildPriceField(),
                     const SizedBox(height: 16),
                   ],
-                  _buildCostBreakdown(freeMargin),
+                  _buildCostBreakdown(freeMargin, isShortSell: isShortSell),
                   const SizedBox(height: 8),
                 ],
               ),
@@ -475,7 +507,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          if (_isBuy)
+                          if (_isBuy || isShortSell)
                             Flexible(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -566,7 +598,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  _isBuy ? 'Free Margin' : 'Breakdown',
+                                  (_isBuy || isShortSell) ? 'Free Margin' : 'Breakdown',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,
@@ -578,7 +610,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 FittedBox(
                                   fit: BoxFit.scaleDown,
                                   child: Text(
-                                    _isBuy
+                                    (_isBuy || isShortSell)
                                         ? '₹${freeMargin.toStringAsFixed(2)}'
                                         : '$_qty @ ₹${_effectivePrice.toStringAsFixed(2)}',
                                     style: TextStyle(
@@ -664,7 +696,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          'Lot size: $_lotSize${_isBuy && _leverage > 1 ? '  ·  $_leverageLabel leverage' : ''}',
+                          'Lot size: $_lotSize${(_isBuy || isShortSell) && _leverage > 1 ? '  ·  $_leverageLabel leverage' : ''}',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
@@ -903,7 +935,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                 Row(
                   children: [
                     Text(
-                      'LTP ₹${widget.stock.currentPrice.toStringAsFixed(2)}',
+                      'LTP ₹${_effectiveLtp.toStringAsFixed(2)}',
                       style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF888888),
@@ -912,7 +944,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                     const SizedBox(width: 8),
                     Text(
                       _isMarket
-                          ? 'Exec ₹${(_isBuy ? widget.stock.currentPrice * 1.0002 : widget.stock.currentPrice * 0.9998).toStringAsFixed(2)}'
+                          ? 'Exec ₹${(_isBuy ? _effectiveLtp * 1.0002 : _effectiveLtp * 0.9998).toStringAsFixed(2)}'
                           : '',
                       style: TextStyle(
                         fontSize: 12,
@@ -1307,11 +1339,18 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   // ── Cost breakdown ─────────────────────────────────────────────────────────
 
-  Widget _buildCostBreakdown(double freeMargin) {
+  Widget _buildCostBreakdown(double freeMargin, {bool isShortSell = false}) {
     final tv = _qty * _effectivePrice;
     final margin = _requiredMargin;
     final lev = _leverage;
+    final marginsMargin = _isBuy || isShortSell;
     final afterMargin = freeMargin - margin - _estimatedCharges;
+    // Margin utilization = (margin blocked + charges) as % of current free margin.
+    // Clamped at 999% to avoid overflow display on edge cases.
+    final utilization = freeMargin > 0
+        ? ((margin + _estimatedCharges) / freeMargin * 100).clamp(0.0, 999.0)
+        : 0.0;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1327,7 +1366,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             const Color(0xFF111111),
           ),
           const SizedBox(height: 6),
-          if (_isBuy && lev > 1) ...[
+          // Show leverage + required margin for both BUY and SHORT SELL when
+          // leverage > 1.  Previously this block was gated on _isBuy only,
+          // which meant short-sell orders showed no leverage or margin info.
+          if (marginsMargin && lev > 1) ...[
             _row('Leverage', _leverageLabel, const Color(0xFF1565C0)),
             const SizedBox(height: 6),
             _row(
@@ -1349,20 +1391,39 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Divider(height: 1, color: Color(0xFFEEEEEE)),
           ),
+          // BUY → "Total deducted" (margin + charges)
+          // SHORT SELL → "Margin blocked" (same amount — NOT gross proceeds)
+          // Regular SELL (closing long) → "You receive" (gross proceeds - charges)
           _row(
-            _isBuy ? 'Total deducted' : 'You receive',
             _isBuy
+                ? 'Total deducted'
+                : isShortSell
+                    ? 'Margin blocked'
+                    : 'You receive',
+            marginsMargin
                 ? '₹${(margin + _estimatedCharges).toStringAsFixed(2)}'
                 : '₹${_totalCost.toStringAsFixed(2)}',
-            _isBuy ? const Color(0xFFD50000) : const Color(0xFF00C853),
+            marginsMargin ? const Color(0xFFD50000) : const Color(0xFF00C853),
             bold: true,
           ),
-          if (_isBuy) ...[
+          if (marginsMargin) ...[
             const SizedBox(height: 4),
             _row(
               'Free Margin after',
               '₹${afterMargin.toStringAsFixed(2)}',
-              afterMargin >= 0 ? const Color(0xFF888888) : const Color(0xFFD50000),
+              afterMargin >= 0
+                  ? const Color(0xFF888888)
+                  : const Color(0xFFD50000),
+            ),
+            const SizedBox(height: 4),
+            _row(
+              'Margin utilization',
+              '${utilization.toStringAsFixed(1)}%',
+              utilization > 80
+                  ? const Color(0xFFD50000)
+                  : utilization > 50
+                      ? const Color(0xFFE65100)
+                      : const Color(0xFF888888),
             ),
           ],
         ],
@@ -1461,10 +1522,49 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final qty = _qty;
     final isBuy = _isBuy;
     final symbol = widget.stock.symbol;
-    final productType = _product == ProductType.mis ? 'MIS' : 'NRML';
     final exchange = widget.stock.exchange.isNotEmpty
         ? widget.stock.exchange
         : 'NSE';
+
+    // For SELL orders: use the existing position/holding's product type so
+    // the backend writes the same productType that the original BUY had.
+    // This ensures FIFO matching works (groups by symbol+product).
+    // Without this, NRML positions closed via the order form got tagged as
+    // 'MIS' SELL orders → different FIFO group → trade always showed as OPEN.
+    String productType;
+    if (!isBuy) {
+      Holding? existingHolding;
+      for (final h in store.holdings) {
+        if (h.symbol == symbol) { existingHolding = h; break; }
+      }
+      Position? existingPosition;
+      for (final p in store.positions) {
+        if (p.symbol == symbol) { existingPosition = p; break; }
+      }
+      if (existingHolding != null) {
+        productType = switch (existingHolding.product) {
+          ProductType.nrml     => 'NRML',
+          ProductType.overnight => 'CNC',
+          ProductType.mtf       => 'MTF',
+          _                     => 'MIS',
+        };
+      } else if (existingPosition != null) {
+        productType = switch (existingPosition.product) {
+          ProductType.nrml     => 'NRML',
+          ProductType.overnight => 'CNC',
+          ProductType.mtf       => 'MTF',
+          _                     => 'MIS',
+        };
+      } else {
+        // Opening a new short — use user-selected product
+        productType = _product == ProductType.mis ? 'MIS' : 'NRML';
+      }
+    } else {
+      productType = _product == ProductType.mis ? 'MIS' : 'NRML';
+    }
+    // Snapshot variety and limit price before the sheet is dismissed
+    final snapshotVariety = _variety;
+    final snapshotLimitPriceText = _priceController.text;
     final requestId =
         '${sessionUser.uid}_${DateTime.now().microsecondsSinceEpoch}';
 
@@ -1520,6 +1620,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       Map<String, dynamic> result = {};
       for (int attempt = 0; ; attempt++) {
         try {
+          final isLimit = snapshotVariety == OrderVariety.limit;
+          final limitPriceValue = isLimit
+              ? double.tryParse(snapshotLimitPriceText)
+              : null;
+
           result = await api.placeOrder(
             userId: sessionUser.uid,
             symbol: symbol,
@@ -1527,11 +1632,11 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             type: isBuy ? 'BUY' : 'SELL',
             productType: productType,
             exchange: exchange,
+            variety: isLimit ? 'LIMIT' : 'MARKET',
+            limitPrice: limitPriceValue,
             // Pass current price so backend can execute F&O contracts that are
             // not in the live WebSocket feed (options, futures).
-            lockedLtp: widget.stock.currentPrice > 0
-                ? widget.stock.currentPrice
-                : null,
+            lockedLtp: _effectiveLtp > 0 ? _effectiveLtp : null,
             // Token is persisted in Firestore holdings so future position
             // lookups can use token-based indexing (globally unique per contract).
             symbolToken: widget.stock.token.isNotEmpty

@@ -26,6 +26,15 @@ class MarketDataService {
         .stream;
   }
 
+  /// Feed a live depth snapshot (from WS tick) into the depthUpdates stream.
+  /// Called by TradingStore when a tick carries depthBids/depthAsks from Angel One.
+  void pushDepth(String symbol, MarketDepth depth) {
+    final ctrl = _depthControllers[symbol];
+    if (ctrl != null && !ctrl.isClosed) {
+      ctrl.add(depth);
+    }
+  }
+
   Stream<Trade> tradeUpdates(String symbol) {
     return _tradeControllers
         .putIfAbsent(symbol, () => StreamController<Trade>.broadcast())

@@ -235,6 +235,16 @@ class Stock {
   /// Strike price — populated for options contracts only.
   final double? strikePrice;
 
+  /// Best bid price from live Angel One tick (null when not yet received).
+  final double? bid;
+
+  /// Best ask price from live Angel One tick (null when not yet received).
+  final double? ask;
+
+  /// Top-5 market depth levels — populated from Angel One WS ticks.
+  /// Null on first load; updated on every tick that carries depth data.
+  final MarketDepth? depth;
+
   Stock({
     required this.symbol,
     required this.name,
@@ -257,6 +267,9 @@ class Stock {
     this.expiry,
     this.instrumentType = InstrumentType.unknown,
     this.strikePrice,
+    this.bid,
+    this.ask,
+    this.depth,
   });
 
   bool get isPositive => changePercentage >= 0;

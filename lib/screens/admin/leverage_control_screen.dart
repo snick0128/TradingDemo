@@ -72,12 +72,18 @@ class _MarginData {
   double nrmlSellValue; // NRML leverage for overnight SELL (short)
   bool? blockOvernightShortSell; // null = not applicable for this category
 
+  // Brokerage charges — written to category_leverage and read by resolveCharges()
+  double fixedCharge;   // Fixed ₹ per trade (applied to both MIS and NRML)
+  double percentCharge; // % of turnover per trade (e.g. 0.03 = 0.03%)
+
   _MarginData({
     required this.misBuyValue,
     required this.misSellValue,
     required this.nrmlBuyValue,
     required this.nrmlSellValue,
     this.blockOvernightShortSell,
+    this.fixedCharge   = 0.0,
+    this.percentCharge = 0.0,
   });
 
   _MarginData copy() => _MarginData(
@@ -86,6 +92,8 @@ class _MarginData {
         nrmlBuyValue: nrmlBuyValue,
         nrmlSellValue: nrmlSellValue,
         blockOvernightShortSell: blockOvernightShortSell,
+        fixedCharge:   fixedCharge,
+        percentCharge: percentCharge,
       );
 
   bool equals(_MarginData o) =>
@@ -93,7 +101,9 @@ class _MarginData {
       misSellValue == o.misSellValue &&
       nrmlBuyValue == o.nrmlBuyValue &&
       nrmlSellValue == o.nrmlSellValue &&
-      blockOvernightShortSell == o.blockOvernightShortSell;
+      blockOvernightShortSell == o.blockOvernightShortSell &&
+      fixedCharge   == o.fixedCharge   &&
+      percentCharge == o.percentCharge;
 
   Map<String, dynamic> toFirestore(String key, String name, bool perLotMode) {
     final misBuyMar   = perLotMode || misBuyValue   <= 0 ? 0.0 : double.parse((100 / misBuyValue).toStringAsFixed(4));
@@ -142,6 +152,16 @@ class _MarginData {
       },
       if (blockOvernightShortSell != null)
         'block_overnight_short_sell': blockOvernightShortSell,
+      // Brokerage charges — read by backend resolveCharges()
+      // Same fixed/percent charge applied across all sides for simplicity.
+      'mis_buy_fixed_charge':    fixedCharge,
+      'mis_sell_fixed_charge':   fixedCharge,
+      'nrml_buy_fixed_charge':   fixedCharge,
+      'nrml_sell_fixed_charge':  fixedCharge,
+      'mis_buy_percent_charge':  percentCharge,
+      'mis_sell_percent_charge': percentCharge,
+      'nrml_buy_percent_charge': percentCharge,
+      'nrml_sell_percent_charge': percentCharge,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }
@@ -200,7 +220,10 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
       final loaded = <String, _MarginData>{};
       for (final doc in snap.docs) {
         final d   = doc.data();
-        final cat = _kCategories.where((c) => c.key == doc.id).firstOrNull;
+        _Category? cat;
+        for (final c in _kCategories) {
+          if (c.key == doc.id) { cat = c; break; }
+        }
         if (cat == null) continue;
 
         if (cat.perLotMode) {
@@ -214,6 +237,8 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
           final nrmlSell = (d['nrml_per_lot_sell'] as num?)?.toDouble() ??
                            (d['nrml_sell_leverage'] as num?)?.toDouble() ??
                            nrmlBuy;
+          final fixedCharge   = (d['mis_buy_fixed_charge']   as num?)?.toDouble() ?? 0.0;
+          final percentCharge = (d['mis_buy_percent_charge'] as num?)?.toDouble() ?? 0.0;
           loaded[doc.id] = _MarginData(
             misBuyValue:  misBuy,
             misSellValue: misSell,
@@ -222,6 +247,8 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
             blockOvernightShortSell: cat.allowOvernightShortSellBlock
                 ? (d['block_overnight_short_sell'] as bool? ?? true)
                 : null,
+            fixedCharge:   fixedCharge,
+            percentCharge: percentCharge,
           );
         } else {
           final misBuy  = (d['mis_buy_leverage']  as num?)?.toDouble() ??
@@ -235,6 +262,8 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                           (d['nrml_value']         as num?)?.toDouble() ??
                           cat.defaultNrmlValue;
           final nrmlSell = (d['nrml_sell_leverage'] as num?)?.toDouble() ?? nrmlBuy;
+          final fixedCharge   = (d['mis_buy_fixed_charge']   as num?)?.toDouble() ?? 0.0;
+          final percentCharge = (d['mis_buy_percent_charge'] as num?)?.toDouble() ?? 0.0;
           loaded[doc.id] = _MarginData(
             misBuyValue:  misBuy,
             misSellValue: misSell,
@@ -243,6 +272,8 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
             blockOvernightShortSell: cat.allowOvernightShortSellBlock
                 ? (d['block_overnight_short_sell'] as bool? ?? true)
                 : null,
+            fixedCharge:   fixedCharge,
+            percentCharge: percentCharge,
           );
         }
       }
@@ -474,6 +505,19 @@ class _LeverageControlScreenState extends State<LeverageControlScreen> {
                     draft: _draft,
                     saved: _saved,
                     onEdit: (cat, field) => _openEdit(context, cat, field),
+                  ),
+                  const SizedBox(height: 24),
+                  _ChargesCard(
+                    categories: _kCategories,
+                    draft: _draft,
+                    onChanged: (catKey, fixed, pct) {
+                      setState(() {
+                        final copy = _draft[catKey]!.copy();
+                        copy.fixedCharge   = fixed;
+                        copy.percentCharge = pct;
+                        _draft[catKey] = copy;
+                      });
+                    },
                   ),
                   const SizedBox(height: 24),
                   _GlobalRiskSection(
@@ -1530,6 +1574,171 @@ class _GlobalRiskSection extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+// ─── Charges card ─────────────────────────────────────────────────────────────
+
+class _ChargesCard extends StatelessWidget {
+  final List<_Category> categories;
+  final Map<String, _MarginData> draft;
+  final void Function(String catKey, double fixed, double pct) onChanged;
+
+  const _ChargesCard({
+    required this.categories,
+    required this.draft,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AdminPanel(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(LucideIcons.receipt, size: 18, color: AppColors.warning),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Brokerage & Charges',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  Text(
+                    'Fixed ₹ per trade + % of turnover per leg. '
+                    'Both are charged on entry and exit. Set 0 to disable.',
+                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 16),
+          // Header row
+          Row(children: [
+            const Expanded(flex: 3, child: Text('Category',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary))),
+            const Expanded(flex: 2, child: Text('Fixed (₹/trade)',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary))),
+            const Expanded(flex: 2, child: Text('% of Turnover',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary))),
+          ]),
+          const Divider(height: 16),
+          ...categories.map((cat) {
+            final data = draft[cat.key];
+            if (data == null) return const SizedBox.shrink();
+            return _ChargeRow(
+              label: cat.displayName,
+              fixedCharge: data.fixedCharge,
+              percentCharge: data.percentCharge,
+              onChanged: (f, p) => onChanged(cat.key, f, p),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChargeRow extends StatefulWidget {
+  final String label;
+  final double fixedCharge;
+  final double percentCharge;
+  final void Function(double fixed, double pct) onChanged;
+
+  const _ChargeRow({
+    required this.label,
+    required this.fixedCharge,
+    required this.percentCharge,
+    required this.onChanged,
+  });
+
+  @override
+  State<_ChargeRow> createState() => _ChargeRowState();
+}
+
+class _ChargeRowState extends State<_ChargeRow> {
+  late TextEditingController _fixedCtrl;
+  late TextEditingController _pctCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _fixedCtrl = TextEditingController(
+        text: widget.fixedCharge > 0 ? widget.fixedCharge.toStringAsFixed(2) : '');
+    _pctCtrl   = TextEditingController(
+        text: widget.percentCharge > 0 ? widget.percentCharge.toStringAsFixed(4) : '');
+  }
+
+  @override
+  void dispose() {
+    _fixedCtrl.dispose();
+    _pctCtrl.dispose();
+    super.dispose();
+  }
+
+  void _emit() {
+    final fixed = double.tryParse(_fixedCtrl.text.trim()) ?? 0.0;
+    final pct   = double.tryParse(_pctCtrl.text.trim())   ?? 0.0;
+    widget.onChanged(fixed, pct);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Expanded(flex: 3,
+            child: Text(widget.label,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+        Expanded(flex: 2, child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: TextField(
+            controller: _fixedCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12),
+            decoration: const InputDecoration(
+              hintText: '0',
+              prefixText: '₹',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            ),
+            onChanged: (_) => _emit(),
+          ),
+        )),
+        Expanded(flex: 2, child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: TextField(
+            controller: _pctCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12),
+            decoration: const InputDecoration(
+              hintText: '0.03',
+              suffixText: '%',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            ),
+            onChanged: (_) => _emit(),
+          ),
+        )),
+      ]),
     );
   }
 }

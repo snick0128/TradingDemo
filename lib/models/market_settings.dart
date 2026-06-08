@@ -66,8 +66,13 @@ class SegmentSettings {
 class MarketSettings {
   final SegmentSettings stocks;
   final SegmentSettings mcx;
+  final SegmentSettings nfo; // NSE/BSE F&O derivatives (NFO / BFO)
 
-  const MarketSettings({required this.stocks, required this.mcx});
+  const MarketSettings({
+    required this.stocks,
+    required this.mcx,
+    required this.nfo,
+  });
 
   static const MarketSettings defaults = MarketSettings(
     stocks: SegmentSettings(
@@ -88,6 +93,15 @@ class MarketSettings {
       maxLeverage: 100.0,
       marginPercent: 1.0,
     ),
+    nfo: SegmentSettings(
+      enabled: true,
+      buyEnabled: true,
+      sellEnabled: true,
+      marketOpen: '09:15',
+      marketClose: '15:30',
+      maxLeverage: 200.0,
+      marginPercent: 0.5,
+    ),
   );
 
   factory MarketSettings.fromMap(Map<String, dynamic> m) => MarketSettings(
@@ -95,23 +109,38 @@ class MarketSettings {
       (m['stocks'] as Map<String, dynamic>?) ?? {},
     ),
     mcx: SegmentSettings.fromMap((m['mcx'] as Map<String, dynamic>?) ?? {}),
+    nfo: SegmentSettings.fromMap(
+      (m['nfo'] as Map<String, dynamic>?) ??
+      {'marketOpen': '09:15', 'marketClose': '15:30',
+       'maxLeverage': 200.0, 'marginPercent': 0.5},
+    ),
   );
 
   Map<String, dynamic> toMap() => {
     'stocks': stocks.toMap(),
     'mcx': mcx.toMap(),
+    'nfo': nfo.toMap(),
   };
 
   /// Returns the segment settings for a given exchange string.
-  /// MCX → mcx, everything else → stocks.
-  SegmentSettings forExchange(String exchange) =>
-      exchange.toUpperCase() == 'MCX' ? mcx : stocks;
+  /// MCX → mcx, NFO/BFO → nfo, everything else → stocks.
+  SegmentSettings forExchange(String exchange) {
+    switch (exchange.toUpperCase()) {
+      case 'MCX': return mcx;
+      case 'NFO':
+      case 'BFO': return nfo;
+      default:    return stocks;
+    }
+  }
 
   /// Check if a buy/sell action is allowed for a given exchange.
   /// Returns null if allowed, or a human-readable reason string if blocked.
   String? checkAction(String exchange, {required bool isBuy}) {
     final seg = forExchange(exchange);
-    final label = exchange.toUpperCase() == 'MCX' ? 'MCX' : 'Stock';
+    final ex  = exchange.toUpperCase();
+    final label = ex == 'MCX' ? 'MCX'
+        : (ex == 'NFO' || ex == 'BFO') ? 'F&O'
+        : 'Stock';
 
     if (!seg.enabled) return '$label market is disabled';
     if (isBuy && !seg.buyEnabled) return '$label buying is disabled';

@@ -11,6 +11,11 @@ Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
   debugPrint('[FCM] Background: ${message.notification?.title} — ${message.notification?.body}');
 }
 
+// VAPID key for Web Push — from Firebase Console → Project Settings →
+// Cloud Messaging → Web Push certificates → Key pair.
+// Replace the value below with your project's actual VAPID key.
+const _kVapidKey = 'BKagOny0M...-replace-with-your-actual-vapid-key';
+
 /// FCM push notification service.
 ///
 /// Call [NotificationService.instance.initialize()] once in main() after
@@ -80,11 +85,11 @@ class NotificationService {
   }
 
   /// Returns the current FCM registration token for this device/browser.
-  /// On Flutter Web, pass [vapidKey] from Firebase Console → Cloud Messaging → Web Push.
-  /// If VAPID key is not set, token will be null on web.
+  /// The [vapidKey] defaults to [_kVapidKey] — required for Web Push on Flutter Web.
   Future<String?> getToken({String? vapidKey}) async {
+    final key = vapidKey ?? (kIsWeb ? _kVapidKey : null);
     try {
-      return await FirebaseMessaging.instance.getToken(vapidKey: vapidKey);
+      return await FirebaseMessaging.instance.getToken(vapidKey: key);
     } catch (e) {
       debugPrint('[FCM] getToken failed: $e');
       return null;

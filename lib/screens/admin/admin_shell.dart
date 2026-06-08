@@ -14,6 +14,7 @@ import 'risk_dashboard_screen.dart';
 import 'admin_analytics_screen.dart';
 import 'leverage_control_screen.dart';
 import 'market_settings_screen.dart';
+import 'admin_ipo_listings_screen.dart';
 import 'admin_ipo_orders_screen.dart';
 import 'platform_settings_screen.dart';
 import 'admin_change_password_screen.dart';
@@ -45,6 +46,7 @@ const _kSecondary = <_Dest>[
   (LucideIcons.zap,              'Leverage'),
   (LucideIcons.clock,            'Market'),
   (LucideIcons.settings,         'Platform'),
+  (LucideIcons.clipboardCheck,   'IPO Listings'),
   (LucideIcons.receipt,          'IPO Orders'),
   (LucideIcons.fileSearch,       'Audit Log'),
   (LucideIcons.megaphone,        'Broadcast'),
@@ -56,7 +58,7 @@ const _kSecondary = <_Dest>[
 ];
 
 // ── All screens ────────────────────────────────────────────────────────────────
-// Indices 0-5 = primary; 6-16 = secondary
+// Indices 0-5 = primary; 6-17 = secondary
 const _kAllScreens = [
   AdminDashboardScreen(),
   AdminOrdersScreen(),
@@ -67,6 +69,7 @@ const _kAllScreens = [
   LeverageControlScreen(),
   MarketSettingsScreen(),
   PlatformSettingsScreen(),
+  AdminIpoListingsScreen(),
   AdminIpoOrdersScreen(),
   AuditLogScreen(),
   BroadcastNotificationsScreen(),

@@ -6,9 +6,9 @@ import '../theme.dart';
 import '../utils/responsive.dart';
 import '../state/security_scope.dart';
 import '../state/security_store.dart';
+import '../state/trading_scope.dart';
 import '../widgets/shared_widgets.dart';
 import 'dashboard_screen.dart';
-import 'ipo_screen.dart';
 import 'orders_screen.dart';
 import 'portfolio_screen.dart';
 import 'wallet_screen.dart';
@@ -66,7 +66,6 @@ class _MainShellState extends State<MainShell> {
     OrdersScreen(),
     PortfolioScreen(),
     WalletScreen(),
-    IPOScreen(showAppBar: false),
     ProfileScreen(),
   ];
 
@@ -96,7 +95,10 @@ class _MainShellState extends State<MainShell> {
 
     return WidgetsBindingObserverWrapper(
       onPaused: security.onAppPaused,
-      onResumed: security.onAppResumed,
+      onResumed: () {
+        security.onAppResumed();
+        TradingScope.read(context).onAppResumed();
+      },
       child: Listener(
         behavior: HitTestBehavior.translucent,
         onPointerDown: (_) => security.registerActivity(),
@@ -145,10 +147,6 @@ class _MainShellState extends State<MainShell> {
                         NavigationRailDestination(
                           icon: Icon(LucideIcons.wallet),
                           label: Text('Wallet'),
-                        ),
-                        NavigationRailDestination(
-                          icon: Icon(LucideIcons.barChart2),
-                          label: Text('IPO'),
                         ),
                         NavigationRailDestination(
                           icon: Icon(LucideIcons.user),
@@ -209,10 +207,6 @@ class _MainShellState extends State<MainShell> {
                             BottomNavigationBarItem(
                               icon: Icon(LucideIcons.wallet),
                               label: 'Wallet',
-                            ),
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.barChart2),
-                              label: 'IPO',
                             ),
                             BottomNavigationBarItem(
                               icon: Icon(LucideIcons.user),

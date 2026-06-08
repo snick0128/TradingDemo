@@ -893,7 +893,9 @@ class AdminStore extends ChangeNotifier {
       executedAt: executedAt,
       rejectionReason: data['rejectionReason'] as String?,
       exchange: ((data['exchange'] as String?) ?? 'NSE').toUpperCase(),
-      product: ((data['product'] as String?) ?? 'MIS').toUpperCase(),
+      // Backend (Node.js) writes `productType`; Dart TradingService writes `product`.
+      // Try productType first so Node.js orders get the correct value.
+      product: ((data['productType'] as String?) ?? (data['product'] as String?) ?? 'MIS').toUpperCase(),
       variety: ((data['variety'] as String?) ?? 'MARKET').toUpperCase(),
     );
   }

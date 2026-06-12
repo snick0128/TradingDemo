@@ -9,6 +9,7 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 import '../models/trading_models.dart';
 import 'ipo_screen.dart';
 import 'settings_hub_screen.dart';
@@ -65,7 +66,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context)),
         child: Column(
           children: [
             _buildHeaderCard(context, user),

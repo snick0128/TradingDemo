@@ -6,6 +6,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DOMAIN MODELS
@@ -845,6 +846,9 @@ class _TradeList extends StatelessWidget {
                   ),
                 ),
               ],
+              SliverToBoxAdapter(
+                child: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
+              ),
             ],
           ),
         ),
@@ -879,6 +883,9 @@ class _TradeList extends StatelessWidget {
               ),
             ),
           ],
+          SliverToBoxAdapter(
+            child: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
+          ),
         ],
       );
     }

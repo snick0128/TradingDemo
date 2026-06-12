@@ -7,6 +7,7 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 
 class GttOrdersScreen extends StatelessWidget {
   const GttOrdersScreen({super.key});
@@ -33,7 +34,7 @@ class GttOrdersScreen extends StatelessWidget {
                 ),
               )
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context) + 72),
                 itemCount: orders.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
@@ -46,7 +47,7 @@ class GttOrdersScreen extends StatelessWidget {
                 },
               ),
         Positioned(
-          bottom: 16,
+          bottom: TradingBottomNavBar.bottomInset(context) + 8,
           right: 16,
           child: FloatingActionButton.extended(
             onPressed: () => _showGttForm(context),

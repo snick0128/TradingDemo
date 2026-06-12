@@ -192,6 +192,96 @@
         });
     }
   </script>
+  <script>
+    // ── SW update detection ───────────────────────────────────────────────────
+    // When Flutter's flutter_service_worker.js activates a new version we either:
+    //   a) Signal the app (shows "Update Now" dialog) — normal case.
+    //   b) Auto-reload silently — when the user already clicked "Update Now" and
+    //      we are mid-reload; the new SW just took over, so one more reload loads
+    //      the fresh files without showing the dialog again.
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+
+      var _hadController = !!navigator.serviceWorker.controller;
+
+      function _signalUpdate() {
+        // Skip if this version was already acknowledged by the user (Update Now pressed).
+        // localStorage['_acked_build_id'] is written by AppUpdateService.reload() in Dart.
+        // We can't know the exact server buildId here (would need a fetch), so we rely on
+        // Dart's _checkForUpdate() — which guards on _acked_build_id — to suppress the dialog.
+        sessionStorage.setItem('_sw_update_ready', '1');
+        window.dispatchEvent(new Event('swupdateready'));
+        console.log('[SW] New version ready — update dialog will appear.');
+      }
+
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        // _sw_reloading is set by AppUpdateService.reload() before triggering a
+        // reload.  If it is present here, the new SW just took over during that
+        // reload — do a second silent reload so the new SW serves the fresh app.
+        if (sessionStorage.getItem('_sw_reloading') === '1') {
+          sessionStorage.removeItem('_sw_reloading');
+          sessionStorage.removeItem('_sw_update_ready');
+          console.log('[SW] New SW active after update-reload — reloading to serve new app.');
+          window.location.reload();
+          return;
+        }
+        if (_hadController) {
+          _signalUpdate();
+        }
+        if (!_hadController) {
+          _hadController = !!navigator.serviceWorker.controller;
+        }
+      });
+
+      // Re-broadcast after Flutter has mounted (~3 s) in case the event fired
+      // before the Dart event listener was registered.
+      if (sessionStorage.getItem('_sw_update_ready') === '1') {
+        setTimeout(function () { window.dispatchEvent(new Event('swupdateready')); }, 3000);
+      }
+    }());
+
+    // ── Cache-clearing reload helper ─────────────────────────────────────────
+    // Called by AppUpdateService.reload() in Dart.
+    //
+    // Steps (all run in parallel, reload fires after both finish):
+    //   1. Clear all Cache API buckets — forces the SW to re-fetch from network.
+    //   2. Signal any already-waiting SW to activate (skipWaiting) so it takes
+    //      over before the reload.  Also calls reg.update() to trigger a fresh
+    //      server check for the latest flutter_service_worker.js — critical for
+    //      Android / iOS "Add to Home Screen" PWA users who may have a stale SW
+    //      even after the manifest-based update dialog has already appeared.
+    //
+    // After the reload the existing controllerchange handler (above) detects the
+    // new SW taking control and performs a second silent reload so the new SW
+    // actually serves the fresh app files.
+    window._clearAllCachesAndReload = function () {
+      var doReload = function () { window.location.reload(); };
+
+      // 1. Clear Cache API storage.
+      var clearP = window.caches
+        ? caches.keys().then(function (ns) {
+            return Promise.all(ns.map(function (n) { return caches.delete(n); }));
+          })
+        : Promise.resolve();
+
+      // 2. Activate any waiting SW and force the browser to check for a newer
+      //    flutter_service_worker.js on the server.  The Flutter-generated SW
+      //    calls self.skipWaiting() in its install handler, but reg.update()
+      //    ensures the browser downloads the latest version even when the
+      //    background update check has not run yet (common in installed PWAs
+      //    that are rarely backgrounded / refreshed).
+      var swP = ('serviceWorker' in navigator)
+        ? navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (reg) {
+              if (reg.waiting) reg.waiting.postMessage('skipWaiting');
+              return reg.update().catch(function () {});
+            }));
+          })
+        : Promise.resolve();
+
+      Promise.all([clearP, swP]).then(doReload, doReload);
+    };
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

@@ -6,13 +6,18 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
+import '../services/persistence_service.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/backend_error_widget.dart';
 import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 import 'stock_detail_screen.dart';
+
+// SharedPreferences key for persisted watchlist data (v2 = multi-list format).
+const _kWatchlistsKey = 'watchlist.lists_v2';
 
 // ─── Sort options ─────────────────────────────────────────────────────────────
 
@@ -61,26 +66,46 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   }
 
   void _initWatchlists() {
-    final store = TradingScope.of(context);
-    final allSymbols = store.watchlist.map((s) => s.symbol).toList();
-    final nifty50Symbols = allSymbols.take(4).toList();
+    // Load from persistence first — this survives navigation, hot restarts,
+    // and full page reloads (SharedPreferences is backed by localStorage on web).
+    final saved = PersistenceService.instance.getJson<List<dynamic>>(_kWatchlistsKey);
+    if (saved != null && saved.isNotEmpty) {
+      try {
+        _watchlists = saved.map((e) {
+          final m = e as Map<String, dynamic>;
+          return Watchlist(
+            id: m['id'] as String? ?? 'wl-${m.hashCode}',
+            name: m['name'] as String? ?? 'Watchlist',
+            symbols: (m['symbols'] as List<dynamic>? ?? []).cast<String>(),
+            order: (m['order'] as num?)?.toInt() ?? 0,
+          );
+        }).toList();
+        _rebuildTabController();
+        return;
+      } catch (_) {
+        // Corrupted data — fall through to defaults.
+      }
+    }
 
+    // First-ever launch: start with one empty watchlist.
     _watchlists = [
-      Watchlist(
-        id: 'wl-1',
-        name: 'My Watchlist',
-        symbols: allSymbols,
-        order: 0,
-      ),
-      Watchlist(
-        id: 'wl-2',
-        name: 'Nifty 50',
-        symbols: nifty50Symbols,
-        order: 1,
-      ),
+      Watchlist(id: 'wl-1', name: 'My Watchlist', symbols: const [], order: 0),
     ];
-
     _rebuildTabController();
+    _saveWatchlists(); // persist the default immediately
+  }
+
+  // Persist the current watchlist state to SharedPreferences.
+  void _saveWatchlists() {
+    final maps = _watchlists
+        .map((wl) => {
+              'id': wl.id,
+              'name': wl.name,
+              'symbols': wl.symbols,
+              'order': wl.order,
+            })
+        .toList();
+    PersistenceService.instance.setJson(_kWatchlistsKey, maps);
   }
 
   void _rebuildTabController() {
@@ -156,6 +181,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
             _tabController.animateTo(_watchlists.length - 1);
           });
         });
+        _saveWatchlists();
       },
     );
   }
@@ -200,6 +226,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
               symbols: symbols,
             );
           });
+          _saveWatchlists();
         } catch (_) {
           AppToast.error(context, 'Invalid JSON format');
         }
@@ -297,6 +324,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
                   ..insert(newIndex, sym);
                 _watchlists[i] = _watchlists[i].copyWith(symbols: newSymbols);
               });
+              _saveWatchlists();
             },
             onBuy: (stock) => _openOrderSheet(stock, OrderType.buy),
             onSell: (stock) => _openOrderSheet(stock, OrderType.sell),
@@ -314,6 +342,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
                       .toList(),
                 );
               });
+              _saveWatchlists();
             },
           );
         }),
@@ -348,6 +377,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
                   .copyWith(symbols: [...current, symbol]);
             }
           });
+          _saveWatchlists();
         },
       ),
     );
@@ -685,6 +715,7 @@ class _WatchlistTabState extends State<_WatchlistTab> {
                   ),
                 )
               : ReorderableListView.builder(
+                  padding: EdgeInsets.only(bottom: TradingBottomNavBar.bottomInset(context)),
                   itemCount: filtered.length,
                   onReorder: widget.onReorder,
                   buildDefaultDragHandles: false,

@@ -13,6 +13,7 @@ import 'alert_creation_screen.dart';
 import '../screens/advanced_chart_screen.dart';
 import '../screens/options_chain_screen.dart';
 import '../services/local_chart_cache.dart';
+import '../services/subscription_manager.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
@@ -58,6 +59,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   Timer? _refreshTimer;
   Timer? _tickDebounce;
   TradingStore? _store;
+  ValueNotifier<double>? _ltpNotifier;
   double? _lastRealtimePrice;
   double? _pendingRealtimePrice;
   bool _firstTickLogged = false;
@@ -91,15 +93,18 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     });
   }
 
+  String get _screenId => 'stock_detail_${widget.symbol}';
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final store = TradingScope.read(context);
     if (_store == store) return;
-    _store?.removeListener(_onStorePriceTick);
+    _ltpNotifier?.removeListener(_onLtpChanged);
     _store = store;
-    store.addListener(_onStorePriceTick);
-    store.monitorSymbol(widget.symbol);
+    _ltpNotifier = store.ltpNotifier(widget.symbol);
+    _ltpNotifier!.addListener(_onLtpChanged);
+    SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
     _primeInstantState(store);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _startProgressiveHydration();
@@ -154,7 +159,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   void _startProgressiveHydration() {
     if (_hydrationStarted || !mounted) return;
     _hydrationStarted = true;
-    _store?.monitorSymbol(widget.symbol);
+    // Subscription already registered in didChangeDependencies via SubscriptionManager
     _logStage('instant_render_ms', _openElapsedMs());
 
     // Independent background work. Quote, chart, and websocket subscription are
@@ -300,18 +305,18 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   void dispose() {
     _refreshTimer?.cancel();
     _tickDebounce?.cancel();
-    _store?.unmonitorSymbol(widget.symbol);
-    _store?.removeListener(_onStorePriceTick);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId);
+    _ltpNotifier?.removeListener(_onLtpChanged);
     _fadeCtrl.dispose();
     _settingsSub?.cancel();
     super.dispose();
   }
 
-  void _onStorePriceTick() {
+  void _onLtpChanged() {
     if (!mounted || _selectedRange > 1) return;
-    final stock = _store?.stockBySymbol(widget.symbol);
-    final price = stock?.currentPrice ?? 0;
+    final price = _ltpNotifier!.value;
     if (price <= 0 || price == _lastRealtimePrice) return;
+    final stock = _store?.stockBySymbol(widget.symbol);
     if (stock != null) _quoteCache[_cacheSymbol] = stock;
     _pendingRealtimePrice = price;
     if (!_firstTickLogged) {
@@ -337,15 +342,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         intervalMinutes: _intervalMinutesForRange(_selectedRange),
       );
       _chartCache[_seriesCacheKey] = series;
-      _localChartCache.writeSeries(_seriesCacheKey, series);
+      // writeSeries is intentionally omitted from the tick path — it runs
+      // in _loadSeries (30s refresh timer) to avoid blocking localStorage writes.
 
       debugPrint('[Chart] ${isNewCandle ? "🕯 New candle" : "📈 Updated"} '
           'total=${series.data.length} latest=${series.data.last.time.toIso8601String()}');
 
       setState(() {
         _series = series;
-        // When a new candle starts and the user is watching live, bump
-        // _chartKey so the chart resets its viewport to show the new latest.
         if (isNewCandle && _isAtLive) {
           _currentZoomFactor = _defaultZoomFactor(series.data.length);
           _chartKey++;

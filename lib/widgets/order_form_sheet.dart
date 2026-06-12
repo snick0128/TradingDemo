@@ -13,6 +13,7 @@ import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
+import '../services/subscription_manager.dart';
 import 'app_dialog.dart';
 
 /// Shows the buy/sell order form as a modal bottom sheet.
@@ -141,6 +142,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     _subscribeCategoryLeverage();
   }
 
+  String get _screenId => 'order_form_${widget.stock.symbol}';
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -149,10 +152,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final store = TradingScope.read(context);
     if (_store != store) {
       _store?.removeListener(_onStoreTick);
-      _store?.unmonitorSymbol(widget.stock.symbol);
       _store = store;
       store.addListener(_onStoreTick);
-      store.monitorSymbol(widget.stock.symbol);
+      SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.stock.symbol});
       _onStoreTick();
     }
   }
@@ -209,7 +211,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   @override
   void dispose() {
     _store?.removeListener(_onStoreTick);
-    _store?.unmonitorSymbol(widget.stock.symbol);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId);
     _priceController.dispose();
     _qtyController.dispose();
     _settingsSub?.cancel();
@@ -1542,12 +1544,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         if (p.symbol == symbol) { existingPosition = p; break; }
       }
       if (existingHolding != null) {
-        productType = switch (existingHolding.product) {
-          ProductType.nrml     => 'NRML',
-          ProductType.overnight => 'CNC',
-          ProductType.mtf       => 'MTF',
-          _                     => 'MIS',
-        };
+        // Holdings are always delivery/CNC — no product field needed.
+        productType = 'CNC';
       } else if (existingPosition != null) {
         productType = switch (existingPosition.product) {
           ProductType.nrml     => 'NRML',

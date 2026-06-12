@@ -11,6 +11,7 @@ import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../services/alert_service.dart';
 import '../services/market_data_service.dart';
+import '../services/subscription_manager.dart';
 
 // RMS FIX:
 // Bug #9  — Flutter state was in-memory only, lost on refresh.
@@ -75,6 +76,10 @@ class TradingStore extends ChangeNotifier {
   // Updated immediately on each tick (before the 16ms debounce).
   final Map<String, ValueNotifier<double>> _ltpNotifiers = {};
 
+  // Render tracing: batch addPostFrameCallback so we schedule at most 1 per frame.
+  bool _renderTracePending = false;
+  final List<({String symbol, double ltp, int storeExitTs})> _pendingRenderTrace = [];
+
   /// Returns a [ValueNotifier<double>] for [symbol] that fires on every tick.
   /// Use with [ValueListenableBuilder] for instant, targeted price rebuilds.
   ValueNotifier<double> ltpNotifier(String symbol) =>
@@ -127,7 +132,7 @@ class TradingStore extends ChangeNotifier {
   /// the 45-second heartbeat timeout. Also refreshes the subscription list in
   /// case positions/holdings changed while backgrounded.
   void onAppResumed() {
-    _liveMarketService?.reconnectNow();
+    // Handled by SubscriptionManager globally. Refresh registered screen subscriptions.
     _refreshMarketSubscriptions();
   }
 
@@ -202,6 +207,10 @@ class TradingStore extends ChangeNotifier {
     if (stocks.isEmpty) return;
 
     bool anyPriceChanged = false;
+    // Track whether any new symbol was added to the watchlist this batch.
+    // If so, we refresh the WS subscription list once after the loop so
+    // bootstrap symbols (NIFTY, BANKNIFTY, etc.) are subscribed immediately.
+    bool newSymbolAdded = false;
 
     // Clear error state — backend is responding
     if (_backendError) {
@@ -212,22 +221,33 @@ class TradingStore extends ChangeNotifier {
 
     for (final stock in stocks) {
       final newLtp = stock.currentPrice;
+      final storeEntryTs = DateTime.now().millisecondsSinceEpoch;
 
       if (newLtp > 0) {
         _lastLtpBySymbol[stock.symbol] = newLtp;
         _ltpNotifiers[stock.symbol]?.value = newLtp;
+        // Also update by raw token so _LiveOptionLtp can fall back to token
+        // as the notifier key when ceSymbol is absent from the options chain API.
+        if (stock.token.isNotEmpty) {
+          _ltpNotifiers[stock.token]?.value = newLtp;
+        }
       }
+      final ltpNotifierTs = DateTime.now().millisecondsSinceEpoch;
       anyPriceChanged = true;
 
       final existing = _watchlistUniverse[stock.symbol];
       final oldPrice = existing?.currentPrice;
 
-      // Update watchlist entry
-      final idx = _watchlist.indexWhere((s) => s.symbol == stock.symbol);
+      // Update watchlist entry — O(1) via index map.
+      final idx = _watchlistIndex[stock.symbol] ?? -1;
       if (idx >= 0) {
+        _diagWatchlistIndexHits++;
         _watchlist[idx] = stock;
       } else {
+        _diagWatchlistIndexMisses++;
+        _watchlistIndex[stock.symbol] = _watchlist.length;
         _watchlist.add(stock);
+        newSymbolAdded = true;
       }
       _watchlistUniverse[stock.symbol] = stock;
 
@@ -258,7 +278,34 @@ class TradingStore extends ChangeNotifier {
       if (holdingIdx != null) {
         _holdings[holdingIdx] = _holdings[holdingIdx].copyWith(currentPrice: newLtp);
       }
+
+      // Latency audit: record store-side timestamps for traced symbols.
+      if (newLtp > 0 && (_liveMarketService?.isTraced(stock.symbol) ?? false)) {
+        final storeExitTs = DateTime.now().millisecondsSinceEpoch;
+        _liveMarketService!.patchLastStoreTrace(
+          stock.symbol, newLtp,
+          storeEntryTs:  storeEntryTs,
+          ltpNotifierTs: ltpNotifierTs,
+          storeExitTs:   storeExitTs,
+        );
+        _pendingRenderTrace.add((symbol: stock.symbol, ltp: newLtp, storeExitTs: storeExitTs));
+        if (!_renderTracePending) {
+          _renderTracePending = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _renderTracePending = false;
+            final renderTs = DateTime.now().millisecondsSinceEpoch;
+            for (final entry in _pendingRenderTrace) {
+              _liveMarketService?.recordRenderCompletion(
+                  entry.symbol, entry.ltp, renderTs, entry.storeExitTs);
+            }
+            _pendingRenderTrace.clear();
+          });
+        }
+      }
     }
+
+    // Refresh WS subscriptions once when new symbols arrive (e.g., bootstrap).
+    if (newSymbolAdded) _refreshMarketSubscriptions();
 
     if (!anyPriceChanged) return;
 
@@ -271,26 +318,20 @@ class TradingStore extends ChangeNotifier {
   }
 
   void _refreshMarketSubscriptions() {
-    final service = _liveMarketService;
-    if (service == null) return;
-    final symbols = {
+    final dashboardSymbols = {
+      'NIFTY',
+      'BANKNIFTY',
       ..._watchlist.map((s) => s.symbol),
-      ..._monitoredSymbols,
       ..._positions.map((p) => p.symbol),
       ..._holdings.map((h) => h.symbol),
     };
-    if (symbols.isEmpty) {
-      // Default subscription covers all tracked symbols — NSE + MCX
-      symbols.addAll(const [
-        // NSE Equities
-        'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK',
-        'SBIN', 'WIPRO', 'AXISBANK', 'BAJFINANCE', 'HINDUNILVR',
-        // MCX Commodities
-        'GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS',
-        'COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL', 'COTTON',
-      ]);
-    }
-    service.setSubscribedSymbols(symbols);
+    SubscriptionManager.instance.replaceScreenSubscriptions('dashboard', dashboardSymbols);
+
+    final portfolioSymbols = {
+      ..._positions.map((p) => p.symbol),
+      ..._holdings.map((h) => h.symbol),
+    };
+    SubscriptionManager.instance.replaceScreenSubscriptions('portfolio', portfolioSymbols);
   }
 
   void monitorSymbol(String symbol) {
@@ -303,6 +344,28 @@ class TradingStore extends ChangeNotifier {
     final normalized = symbol.trim().toUpperCase();
     if (!_monitoredSymbols.remove(normalized)) return;
     _refreshMarketSubscriptions();
+  }
+
+  void monitorSymbols(Iterable<String> symbols) {
+    var added = false;
+    for (final s in symbols) {
+      final n = s.trim().toUpperCase();
+      if (n.isNotEmpty && _monitoredSymbols.add(n)) added = true;
+    }
+    if (added) _refreshMarketSubscriptions();
+  }
+
+  void unmonitorSymbols(Iterable<String> symbols) {
+    var removed = false;
+    for (final s in symbols) {
+      final n = s.trim().toUpperCase();
+      if (_monitoredSymbols.remove(n)) removed = true;
+    }
+    if (removed) _refreshMarketSubscriptions();
+  }
+
+  void subscribeFnoTokens(List<String> tokens, String exchange) {
+    _liveMarketService?.subscribeFnoTokens(tokens, exchange);
   }
 
   final List<Stock> _watchlist;
@@ -322,6 +385,13 @@ class TradingStore extends ChangeNotifier {
   final Map<String, List<int>> _positionIndex      = {};
   final Map<String, List<int>> _positionTokenIndex = {};
   final Map<String, int> _holdingIndex = {}; // symbol → index (unique per symbol)
+  // symbol → index in _watchlist — O(1) replacement for indexWhere in the tick path.
+  // Maintained incrementally on add; fully rebuilt on removal (non-hot-path).
+  final Map<String, int> _watchlistIndex = {};
+
+  // ── Watchlist index diagnostics (lifetime counters) ───────────────────────
+  int _diagWatchlistIndexHits   = 0;
+  int _diagWatchlistIndexMisses = 0;
   User _currentUser;
 
   double _balance;
@@ -384,6 +454,12 @@ class TradingStore extends ChangeNotifier {
   }
 
   UnmodifiableListView<Stock> get watchlist => UnmodifiableListView(_watchlist);
+
+  Map<String, dynamic> get watchlistDiagnostics => {
+    'watchlistSize':        _watchlist.length,
+    'watchlistIndexHits':   _diagWatchlistIndexHits,
+    'watchlistIndexMisses': _diagWatchlistIndexMisses,
+  };
   UnmodifiableListView<Order> get orders => UnmodifiableListView(_orders);
   UnmodifiableListView<PortfolioItem> get portfolio =>
       UnmodifiableListView(_portfolio);
@@ -619,13 +695,13 @@ class TradingStore extends ChangeNotifier {
     // No notifyListeners — this is a silent registration
   }
 
-  bool isInWatchlist(String symbol) =>
-      _watchlist.any((stock) => stock.symbol == symbol);
+  bool isInWatchlist(String symbol) => _watchlistIndex.containsKey(symbol);
 
   void addToWatchlist(String symbol) {
     if (isInWatchlist(symbol)) return;
     final stock = _watchlistUniverse[symbol];
     if (stock == null) return;
+    _watchlistIndex[stock.symbol] = _watchlist.length;
     _watchlist.add(stock);
     _refreshMarketSubscriptions();
     notifyListeners();
@@ -633,8 +709,16 @@ class TradingStore extends ChangeNotifier {
 
   void removeFromWatchlist(String symbol) {
     _watchlist.removeWhere((stock) => stock.symbol == symbol);
+    _rebuildWatchlistIndex();
     _refreshMarketSubscriptions();
     notifyListeners();
+  }
+
+  void _rebuildWatchlistIndex() {
+    _watchlistIndex.clear();
+    for (var i = 0; i < _watchlist.length; i++) {
+      _watchlistIndex[_watchlist[i].symbol] = i;
+    }
   }
 
   void setFontSizePreset(String preset) {

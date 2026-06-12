@@ -56,6 +56,11 @@ class BackendPriceProvider implements PriceProvider {
         cancelOnError: true,
       );
       _connected = true;
+      // Re-send subscriptions on every connect (including reconnects). Without
+      // this, existing stream listeners don't re-trigger onListen, so the
+      // backend never learns which symbols to deliver after a reconnect and all
+      // price caches stay stale until the next explicit subscription event.
+      _sendSubscribe();
     } catch (_) {
       _reconnect();
     }

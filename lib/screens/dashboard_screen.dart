@@ -11,6 +11,7 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/backend_error_widget.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 import 'advanced_chart_screen.dart';
 import 'fno_dashboard_screen.dart';
 import 'fno_market_screen.dart';
@@ -84,7 +85,7 @@ class DashboardScreen extends StatelessWidget {
       ),
       backgroundColor: AppColors.background,
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context)),
         children: [
 
           // ── 1. Primary balance card ────────────────────────────────────

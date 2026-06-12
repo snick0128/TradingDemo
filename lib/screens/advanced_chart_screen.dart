@@ -7,6 +7,7 @@ import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../services/trading_chart_service.dart';
+import '../services/subscription_manager.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../theme.dart';
@@ -87,6 +88,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     }
   }
 
+  String get _screenId => 'advanced_chart_${widget.symbol}';
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -95,7 +98,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     _advStore?.removeListener(_onAdvLiveTick);
     _advStore = store;
     store.addListener(_onAdvLiveTick);
-    store.monitorSymbol(widget.symbol);
+    SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
   }
 
   void _onAdvLiveTick() {
@@ -166,7 +169,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   @override
   void dispose() {
     _advStore?.removeListener(_onAdvLiveTick);
-    _advStore?.unmonitorSymbol(widget.symbol);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId);
     _fadeCtrl.dispose();
     _compareController.dispose();
     super.dispose();

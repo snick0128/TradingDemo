@@ -783,6 +783,10 @@ class OptionStrike {
   final String ceToken;
   /// Angel One instrument token for the PE contract. Empty for mock/fallback strikes.
   final String peToken;
+  /// Angel One symbol name for the CE contract (e.g. "NIFTY25JUN24500CE").
+  final String ceSymbol;
+  /// Angel One symbol name for the PE contract (e.g. "NIFTY25JUN24500PE").
+  final String peSymbol;
 
   const OptionStrike({
     required this.strike,
@@ -791,6 +795,8 @@ class OptionStrike {
     this.isAtm = false,
     this.ceToken = '',
     this.peToken = '',
+    this.ceSymbol = '',
+    this.peSymbol = '',
   });
 }
 

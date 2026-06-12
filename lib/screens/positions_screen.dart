@@ -15,6 +15,7 @@ import '../widgets/app_dialog.dart';
 import '../widgets/multi_square_off_dialog.dart';
 import '../widgets/position_detail_sheet.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 
 // ─── List item types ──────────────────────────────────────────────────────────
 
@@ -322,7 +323,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
               child: !hasContent
                   ? _EmptyState()
                   : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 100),
+                      padding: EdgeInsets.fromLTRB(12, 4, 12, TradingBottomNavBar.bottomInset(context) + 72),
                       itemCount: items.length,
                       itemBuilder: (ctx, i) {
                         final item = items[i];
@@ -396,7 +397,7 @@ class _PositionsScreenState extends State<PositionsScreen> {
         Positioned(
           left: 12,
           right: 12,
-          bottom: 16,
+          bottom: TradingBottomNavBar.bottomInset(context) + 8,
           child: _FloatingSquareOffFab(
             count: selCount,
             onTap: () => _openMultiSquareOff(context, positions, holdings),

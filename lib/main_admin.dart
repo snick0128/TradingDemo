@@ -14,6 +14,7 @@ import 'data/services/trading_service.dart';
 import 'domain/auth/auth_session.dart';
 import 'firebase_options.dart';
 import 'screens/auth/admin_login_screen.dart';
+import 'services/app_update_service.dart';
 import 'state/admin_scope.dart';
 import 'state/admin_store.dart';
 import 'state/security_scope.dart';
@@ -21,6 +22,7 @@ import 'state/security_store.dart';
 import 'state/trading_scope.dart';
 import 'state/trading_store.dart';
 import 'theme.dart';
+import 'widgets/update_banner.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,6 +64,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
   @override
   void initState() {
     super.initState();
+    AppUpdateService.instance.start();
     _securityStore = SecurityStore(lockTimeout: const Duration(minutes: 15));
     _tradingStore = TradingStore();
     _authSession = AuthSession();
@@ -131,6 +134,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
 
   @override
   void dispose() {
+    AppUpdateService.instance.dispose();
     _orderEngineService?.stop();
     _authSession.removeListener(_syncAdminContext);
     _adminStore.dispose();
@@ -199,7 +203,7 @@ class _BoxTradingAdminAppState extends State<BoxTradingAdminApp> {
           data: mq.copyWith(
             textScaler: TextScaler.linear(tradingStore.textScaleFactor),
           ),
-          child: child ?? const SizedBox.shrink(),
+          child: UpdateBannerOverlay(child: child ?? const SizedBox.shrink()),
         );
       },
     );

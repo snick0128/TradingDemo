@@ -8,11 +8,13 @@ import '../state/security_scope.dart';
 import '../state/security_store.dart';
 import '../state/trading_scope.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 import 'dashboard_screen.dart';
+import 'market_watch_screen.dart';
 import 'orders_screen.dart';
 import 'portfolio_screen.dart';
-import 'wallet_screen.dart';
 import 'profile_screen.dart';
+import '../services/subscription_manager.dart';
 
 /// Thin route wrapper so auth screens can navigate here without importing main.dart.
 class MainShellRoute extends StatelessWidget {
@@ -61,13 +63,59 @@ class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   bool _monitoringStarted = false;
 
+  // Tab indices:
+  //   0 → Home (Dashboard)
+  //   1 → Markets (Market Watch)
+  //   2 → Orders
+  //   3 → Portfolio
+  //   4 → Profile
   final List<Widget> _screens = const [
     DashboardScreen(),
+    MarketWatchScreen(),
     OrdersScreen(),
     PortfolioScreen(),
-    WalletScreen(),
     ProfileScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _updateTabSubscription(_selectedIndex);
+      }
+    });
+  }
+
+  void _onTabSelected(int idx) {
+    setState(() => _selectedIndex = idx);
+    _updateTabSubscription(idx);
+  }
+
+  void _updateTabSubscription(int idx) {
+    final store = TradingScope.read(context);
+    if (idx == 0) {
+      // Home — subscribe to dashboard symbols (watchlist + open positions/holdings)
+      final symbols = {
+        'NIFTY',
+        'BANKNIFTY',
+        ...store.watchlist.map((s) => s.symbol),
+        ...store.positions.map((p) => p.symbol),
+        ...store.holdings.map((h) => h.symbol),
+      };
+      SubscriptionManager.instance.switchTab('dashboard', symbols);
+    } else if (idx == 3) {
+      // Portfolio — subscribe to live P&L symbols
+      final symbols = {
+        ...store.positions.map((p) => p.symbol),
+        ...store.holdings.map((h) => h.symbol),
+      };
+      SubscriptionManager.instance.switchTab('portfolio', symbols);
+    } else {
+      // Markets / Orders / Profile — MarketWatchScreen manages its own subs
+      SubscriptionManager.instance.switchTab('other', {});
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -106,13 +154,18 @@ class _MainShellState extends State<MainShell> {
         child: Stack(
           children: [
             Scaffold(
+              // Allow the body to extend behind the floating glass nav bar
+              // so BackdropFilter actually picks up real content to blur.
+              extendBody: true,
+              // ── Desktop: side rail ───────────────────────────────────
+              // ── Mobile/Tablet: body fills screen; floating nav overlaid
+              //    below in the Stack with a transparent spacer here.
               body: Row(
                 children: [
                   if (isDesktop)
                     NavigationRail(
                       selectedIndex: _selectedIndex,
-                      onDestinationSelected: (idx) =>
-                          setState(() => _selectedIndex = idx),
+                      onDestinationSelected: _onTabSelected,
                       labelType: NavigationRailLabelType.all,
                       minWidth: 80,
                       backgroundColor: AppColors.surface,
@@ -137,16 +190,16 @@ class _MainShellState extends State<MainShell> {
                           label: Text('Home'),
                         ),
                         NavigationRailDestination(
+                          icon: Icon(LucideIcons.trendingUp),
+                          label: Text('Markets'),
+                        ),
+                        NavigationRailDestination(
                           icon: Icon(LucideIcons.listTodo),
                           label: Text('Orders'),
                         ),
                         NavigationRailDestination(
                           icon: Icon(LucideIcons.pieChart),
                           label: Text('Portfolio'),
-                        ),
-                        NavigationRailDestination(
-                          icon: Icon(LucideIcons.wallet),
-                          label: Text('Wallet'),
                         ),
                         NavigationRailDestination(
                           icon: Icon(LucideIcons.user),
@@ -168,56 +221,28 @@ class _MainShellState extends State<MainShell> {
                   ),
                 ],
               ),
+
+              // Invisible spacer so Scaffold reserves bottom space and inner
+              // screens' scroll views don't go behind the floating pill.
+              // TradingBottomNavBar renders the actual UI in the Stack below.
               bottomNavigationBar: !isDesktop
-                  ? Container(
-                      decoration: const BoxDecoration(
-                        color: AppColors.surface,
-                        border: Border(
-                          top: BorderSide(color: AppColors.border, width: 1),
-                        ),
-                      ),
-                      child: SizedBox(
-                        height: 60,
-                        child: BottomNavigationBar(
-                          currentIndex: _selectedIndex,
-                          onTap: (idx) => setState(() => _selectedIndex = idx),
-                          backgroundColor: AppColors.surface,
-                          selectedItemColor: const Color(0xFF2962FF),
-                          unselectedItemColor: const Color(0xFF9E9E9E),
-                          type: BottomNavigationBarType.fixed,
-                          elevation: 0,
-                          selectedLabelStyle: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          unselectedLabelStyle: const TextStyle(fontSize: 11),
-                          items: const [
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.home),
-                              label: 'Home',
-                            ),
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.listTodo),
-                              label: 'Orders',
-                            ),
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.pieChart),
-                              label: 'Portfolio',
-                            ),
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.wallet),
-                              label: 'Wallet',
-                            ),
-                            BottomNavigationBarItem(
-                              icon: Icon(LucideIcons.user),
-                              label: 'Profile',
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
+                  ? SizedBox(height: TradingBottomNavBar.kReservedHeight)
                   : null,
             ),
+
+            // ── Floating bottom nav (mobile + tablet) ────────────────────
+            if (!isDesktop)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: TradingBottomNavBar(
+                  selectedIndex: _selectedIndex,
+                  onTap: _onTabSelected,
+                ),
+              ),
+
+            // ── Security lock overlay ─────────────────────────────────────
             if (security.isLocked)
               const Positioned.fill(child: PinLockOverlay()),
           ],

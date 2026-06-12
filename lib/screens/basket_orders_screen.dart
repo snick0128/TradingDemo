@@ -7,6 +7,7 @@ import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 
 class BasketOrdersScreen extends StatelessWidget {
   const BasketOrdersScreen({super.key});
@@ -18,6 +19,7 @@ class BasketOrdersScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Basket Orders')),
+      bottomNavigationBar: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showCreateBasketDialog(context),
         icon: const Icon(LucideIcons.plus),

@@ -7,6 +7,7 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 import 'basket_orders_screen.dart';
 import 'gtt_orders_screen.dart';
 import 'market_watch_screen.dart';
@@ -74,7 +75,7 @@ class _OrdersScreenState extends State<OrdersScreen>
             _AutoSquareOffBanner(
               title: sqOffNotif.title,
               message: sqOffNotif.message,
-              onDismiss: () => store.markNotificationRead(sqOffNotif.id),
+              onDismiss: () => store.markNotificationRead(sqOffNotif!.id),
             ),
           Expanded(
             child: TabBarView(
@@ -195,7 +196,7 @@ class _OrderBookTabState extends State<_OrderBookTab> {
           child: filtered.isEmpty
               ? _emptyOrdersState(context)
               : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, TradingBottomNavBar.bottomInset(context)),
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
                     final order = filtered[index];
@@ -808,7 +809,7 @@ class _OpenOrdersTab extends StatelessWidget {
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context)),
       itemCount: pending.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) => _PendingOrderCard(order: pending[index]),

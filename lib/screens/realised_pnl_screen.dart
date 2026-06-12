@@ -4,6 +4,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/trading_bottom_nav_bar.dart';
 
 class RealisedPnlScreen extends StatelessWidget {
   final bool showAppBar;
@@ -38,7 +39,7 @@ class RealisedPnlScreen extends StatelessWidget {
     final body = trades.isEmpty
         ? _buildEmptyState()
         : SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+            padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
+import '../data/services/live_market_service.dart';
+import '../services/device_tier.dart';
+import '../services/subscription_manager.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
@@ -157,18 +161,16 @@ const _kBfoUnderlyings  = ['SENSEX', 'BANKEX'];
 
 class OptionsChainScreen extends StatefulWidget {
   final bool showAppBar;
-
-  /// Underlying symbol to show the chain for (e.g. "NIFTY", "RELIANCE").
   final String symbol;
-
-  /// Exchange segment: 'NFO' | 'BFO' | 'MCX'. Defaults to 'NFO'.
   final String exchange;
+  final int strikeCount;
 
   const OptionsChainScreen({
     super.key,
     this.showAppBar = true,
     this.symbol = 'NIFTY',
     this.exchange = 'NFO',
+    this.strikeCount = 10,
   });
 
   @override
@@ -184,6 +186,13 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
   bool _isLoadingChain = false;
   String? _error;
   final Map<String, OptionsChain?> _chainCache = {};
+
+  // Non-tracking store reference — used for imperative calls (monitorSymbol).
+  TradingStore? _storeRef;
+  // Periodic silent refresh for OI/IV data (REST snapshot every 30 s).
+  Timer? _refreshTimer;
+  // CE/PE symbols currently monitored for WS tick delivery.
+  final Set<String> _monitoredOptionSymbols = {};
 
   // Skeleton pulse animation
   late AnimationController _skeletonController;
@@ -221,12 +230,113 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
     );
 
     _loadRealExpiriesAndChain();
+    // Wire rebuild metrics provider so LiveMarketService can upload heatmap data.
+    LiveMarketService.setRebuildMetricsProvider(RebuildMetrics.instance.snapshot);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_storeRef == null) {
+      _storeRef = TradingScope.read(context);
+      SubscriptionManager.instance.subscribeForScreen('options_chain', {_selectedSymbol});
+      // Silently refresh OI/IV data every 30 s (LTPs are now real-time via WS).
+      _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted) _silentRefreshChain();
+      });
+    }
   }
 
   @override
   void dispose() {
+    _unsubscribeOptionSymbols();
+    _refreshTimer?.cancel();
     _skeletonController.dispose();
     super.dispose();
+  }
+
+  /// Subscribe all visible CE/PE symbols to the WS tick stream.
+  /// Uses replaceScreenSubscriptions (single _applySubscriptions call) rather
+  /// than unsubscribe-then-subscribe (which caused two back-to-back WS messages
+  /// and a brief gap in tick delivery every time this was called).
+  void _subscribeOptionSymbols(OptionsChain chain) {
+    _monitoredOptionSymbols.clear();
+    final tokens = <String>[];
+    
+    // Sort and filter strikes to ATM ± strikeCount (default 10)
+    final strikes = chain.strikes.toList()..sort((a, b) => a.strike.compareTo(b.strike));
+    if (strikes.isNotEmpty) {
+      final underlying = chain.underlyingPrice;
+      int atmIndex = -1;
+      double minDiff = double.infinity;
+      for (int i = 0; i < strikes.length; i++) {
+        final diff = (strikes[i].strike - underlying).abs();
+        if (diff < minDiff) {
+          minDiff = diff;
+          atmIndex = i;
+        }
+      }
+      
+      if (atmIndex != -1) {
+        final strikeCount = DeviceTierDetector.tier.value.strikeRadius;
+        final start = math.max(0, atmIndex - strikeCount);
+        final end = math.min(strikes.length - 1, atmIndex + strikeCount);
+        final subStrikes = strikes.sublist(start, end + 1);
+        
+        for (final s in subStrikes) {
+          // Prefer symbol name; fall back to token string so the notifier key
+          // is non-empty even when the API omits the ceSymbol/peSymbol fields.
+          if (s.ceToken.isNotEmpty) {
+            tokens.add(s.ceToken);
+            _monitoredOptionSymbols.add(s.ceSymbol.isNotEmpty ? s.ceSymbol : s.ceToken);
+          }
+          if (s.peToken.isNotEmpty) {
+            tokens.add(s.peToken);
+            _monitoredOptionSymbols.add(s.peSymbol.isNotEmpty ? s.peSymbol : s.peToken);
+          }
+        }
+      }
+    }
+
+    final symbols = {_selectedSymbol, ..._monitoredOptionSymbols};
+    // replaceScreenSubscriptions avoids the remove-then-add cycle that would
+    // trigger two consecutive _applySubscriptions() calls and send a spurious
+    // dashboard-only subscribe message to the backend.
+    SubscriptionManager.instance.replaceScreenSubscriptions(
+      'options_chain',
+      symbols,
+      fnoTokens: tokens,
+      fnoExchange: _resolvedExchange,
+    );
+  }
+
+  /// Stop receiving WS ticks for the currently visible CE/PE symbols.
+  void _unsubscribeOptionSymbols() {
+    _monitoredOptionSymbols.clear();
+    SubscriptionManager.instance.unsubscribeScreen('options_chain');
+  }
+
+  /// Re-fetches the current symbol/expiry chain without showing the loading
+  /// skeleton. Updates the cache in place so the UI reflects new CE/PE LTPs.
+  Future<void> _silentRefreshChain() async {
+    if (!mounted || _isLoadingChain) return;
+    final symbol    = _selectedSymbol;
+    final expiry    = _selectedExpiry;
+    final expiryStr = DateFormat('yyyy-MM-dd').format(expiry);
+    try {
+      final raw   = await BackendApiService().getOptionsChainData(
+        symbol, expiryStr, exchange: _resolvedExchange,
+      );
+      final chain = _parseChain(raw, symbol, expiry);
+      if (mounted && chain.strikes.isNotEmpty) {
+        // Update OI/IV data only — live LTPs come from ValueNotifier ticks.
+        // Do NOT re-subscribe here: the subscription from _loadOptionsChain stays
+        // active and re-subscribing every 30 s causes a brief tick gap each cycle.
+        setState(() => _chainCache['$symbol-$expiryStr'] = chain);
+      }
+    } catch (_) {
+      // Silent — don't clear existing data on transient errors.
+    }
   }
 
   Future<void> _loadRealExpiriesAndChain() async {
@@ -292,6 +402,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
           _isLoadingChain = false;
           _error = null;
         });
+        if (chain.strikes.isNotEmpty) _subscribeOptionSymbols(chain);
       }
     } catch (e) {
       debugPrint('[OptionsChain] API error for $symbol/$expiryStr: $e');
@@ -418,8 +529,10 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       return OptionStrike(
         strike: strike,
         isAtm: strike == atmStrike,
-        ceToken: m['ceToken']?.toString() ?? '',
-        peToken: m['peToken']?.toString() ?? '',
+        ceToken:  m['ceToken']?.toString()  ?? '',
+        ceSymbol: m['ceSymbol']?.toString() ?? '',
+        peToken:  m['peToken']?.toString()  ?? '',
+        peSymbol: m['peSymbol']?.toString() ?? '',
         ce: OptionData(
           ltp: ceLtp,
           oi: ceOi,
@@ -462,6 +575,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
 
   void _onSymbolChanged(String sym) {
     if (sym == _selectedSymbol) return;
+    _unsubscribeOptionSymbols();
+    SubscriptionManager.instance.subscribeForScreen('options_chain', {sym});
     _chainCache.removeWhere((k, v) => k.startsWith('$sym-') && v == null);
     setState(() {
       _selectedSymbol = sym;
@@ -480,6 +595,12 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Non-tracking read — screen does NOT rebuild on price ticks.
+    // Each live-updating sub-widget subscribes to its own ValueNotifier<double>
+    // via ltpNotifier(symbol), so only the specific Text that changed re-renders.
+    // This eliminates ~365 widget.build() calls per tick that previously caused
+    // the render queue to back up to 37s P95.
+    assert(() { RebuildMetrics.instance.record('OptionsChainScreen'); return true; }());
     final store = TradingScope.read(context);
     final stock = store.stockBySymbol(_selectedSymbol);
     final expiryStr = DateFormat('yyyy-MM-dd').format(_selectedExpiry);
@@ -513,13 +634,17 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
           ],
         ),
       ),
-      // Market summary in bottomNavigationBar — no Stack/Positioned overlay
-      bottomNavigationBar: _BottomSummaryBar(stock: stock),
+      // Live bottom bar — subscribes to its own ltpNotifier, never triggers
+      // a full screen rebuild.
+      bottomNavigationBar: _LiveBottomSummaryBar(
+        fallbackStock: stock,
+        ltpNotifier: store.ltpNotifier(_selectedSymbol),
+      ),
       body: SafeArea(
         bottom: false,
         child: Column(
           children: [
-            // ── Symbol scroller ──────────────────────────────────────────────
+            // ── Symbol scroller — each chip has its own ValueListenableBuilder
             _buildUnderlyingScroller(store),
             // ── Expiry selector row ──────────────────────────────────────────
             _buildExpiryRow(context),
@@ -542,7 +667,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
                       ? _buildErrorState()
                       : chain == null
                           ? _buildEmptyState()
-                          : _buildChainBody(stock, chain),
+                          : _buildChainBody(store, stock, chain),
             ),
           ],
         ),
@@ -551,6 +676,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
   }
 
   // ── Symbol horizontal scroller ───────────────────────────────────────────────
+  // Each chip is a _LiveSymbolChip that subscribes to its own ltpNotifier.
+  // Only the chip whose symbol just ticked rebuilds — no full-scroller rebuild.
 
   Widget _buildUnderlyingScroller(TradingStore store) {
     return Container(
@@ -565,66 +692,14 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
         itemCount: _underlyings.length,
         itemBuilder: (context, i) {
           final sym = _underlyings[i];
-          final s = store.stockBySymbol(sym);
-          final selected = sym == _selectedSymbol;
-          final price = s.currentPrice > 0 ? s.currentPrice : _basePriceFor(sym);
-          final isUp = s.changePercentage >= 0;
-
-          return GestureDetector(
-            onTap: () => _onSymbolChanged(sym),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              margin: const EdgeInsets.only(right: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              constraints: const BoxConstraints(minWidth: 72),
-              decoration: BoxDecoration(
-                color: selected
-                    ? _kStrikePrimary.withOpacity(0.08)
-                    : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: selected ? _kStrikePrimary : _kBorderGray,
-                  width: selected ? 1.5 : 1,
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    sym,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: selected ? _kStrikePrimary : Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        price >= 1000
-                            ? price.toStringAsFixed(0)
-                            : price.toStringAsFixed(2),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: isUp
-                              ? const Color(0xFF00897B)
-                              : const Color(0xFFC62828),
-                        ),
-                      ),
-                      const SizedBox(width: 2),
-                      Text(
-                        '${isUp ? '+' : ''}${s.changePercentage.toStringAsFixed(1)}%',
-                        style: TextStyle(fontSize: 8, color: Colors.grey[500]),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+          final s   = store.stockBySymbol(sym); // non-reactive read — for prevClose + fallback
+          return _LiveSymbolChip(
+            symbol:       sym,
+            ltpNotifier:  store.ltpNotifier(sym),
+            prevClose:    s.prevClose ?? s.currentPrice,
+            baseFallback: _basePriceFor(sym),
+            selected:     sym == _selectedSymbol,
+            onTap:        () => _onSymbolChanged(sym),
           );
         },
       ),
@@ -767,7 +842,8 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
 
   // ── Chain body ────────────────────────────────────────────────────────────────
 
-  Widget _buildChainBody(Stock stock, OptionsChain chain) {
+  Widget _buildChainBody(TradingStore store, Stock stock, OptionsChain chain) {
+    assert(() { RebuildMetrics.instance.record('_buildChainBody'); return true; }());
     final selectedExpiry = _selectedExpiry;
 
     if (chain.strikes.isEmpty) {
@@ -782,14 +858,15 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
     int spotIndex = sortedStrikes.indexWhere((s) => s.strike > underlying);
     if (spotIndex == -1) spotIndex = sortedStrikes.length;
 
-    // Limit to top 6 and bottom 6 from the spot price
+    // Limit displayed rows to tier.strikeRadius on each side of spot.
+    final displayRadius = DeviceTierDetector.tier.value.strikeRadius;
     final belowSpot = sortedStrikes.sublist(
-      math.max(0, spotIndex - 6),
+      math.max(0, spotIndex - displayRadius),
       spotIndex,
     );
     final aboveSpot = sortedStrikes.sublist(
       spotIndex,
-      math.min(sortedStrikes.length, spotIndex + 6),
+      math.min(sortedStrikes.length, spotIndex + displayRadius),
     );
 
     final newSpotIndex = belowSpot.length;
@@ -800,12 +877,12 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: itemCount,
       itemBuilder: (context, index) {
-        // Insert spot price row at the right position
+        // Live spot price row — subscribes to its own ltpNotifier
         if (index == newSpotIndex) {
-          return _SpotPriceRow(
-            price: underlying,
-            symbol: _selectedSymbol,
-            stock: stock,
+          return _LiveSpotPriceRow(
+            symbol:       _selectedSymbol,
+            ltpNotifier:  store.ltpNotifier(_selectedSymbol),
+            fallbackStock: stock,
           );
         }
         final strikeIdx = index > newSpotIndex ? index - newSpotIndex - 1 : index;
@@ -1007,75 +1084,191 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
   }
 }
 
-// ─── Spot Price Row ───────────────────────────────────────────────────────────
+// ─── Rebuild metrics singleton (debug instrumentation) ────────────────────────
+// Records how many times each widget type's build() method ran in the current
+// window. Flutter uploads a snapshot to /debug/flutter-rebuilds every 60s.
+// Only active in debug builds (all record() calls are inside assert()).
 
-class _SpotPriceRow extends StatelessWidget {
-  final double price;
+class RebuildMetrics {
+  RebuildMetrics._();
+  static final instance = RebuildMetrics._();
+
+  final Map<String, int> _counts = {};
+  int _windowStartMs = DateTime.now().millisecondsSinceEpoch;
+
+  void record(String widgetType) {
+    _counts[widgetType] = (_counts[widgetType] ?? 0) + 1;
+  }
+
+  Map<String, dynamic> snapshot() {
+    final now     = DateTime.now().millisecondsSinceEpoch;
+    final elapsed = now - _windowStartMs;
+    final counts  = Map<String, int>.from(_counts);
+    final rates   = counts.map((k, v) =>
+        MapEntry(k, elapsed > 0 ? (v * 1000 / elapsed).toStringAsFixed(1) : '0'));
+    _counts.clear();
+    _windowStartMs = now;
+    return {'windowMs': elapsed, 'counts': counts, 'ratePerSec': rates};
+  }
+}
+
+// ─── Live Symbol Chip ─────────────────────────────────────────────────────────
+// Subscribes to its own ltpNotifier — rebuilds ONLY when this symbol ticks.
+// The parent ListView.builder is NOT re-invoked on ticks.
+
+class _LiveSymbolChip extends StatelessWidget {
   final String symbol;
-  final Stock stock;
+  final ValueNotifier<double> ltpNotifier;
+  final double prevClose;
+  final double baseFallback;
+  final bool selected;
+  final VoidCallback onTap;
 
-  const _SpotPriceRow({
-    required this.price,
+  const _LiveSymbolChip({
     required this.symbol,
-    required this.stock,
+    required this.ltpNotifier,
+    required this.prevClose,
+    required this.baseFallback,
+    required this.selected,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isUp = stock.changePercentage >= 0;
-    final changeColor =
-        isUp ? const Color(0xFF00897B) : const Color(0xFFC62828);
-    final changeSign = isUp ? '+' : '';
+    assert(() { RebuildMetrics.instance.record('_LiveSymbolChip'); return true; }());
+    return ValueListenableBuilder<double>(
+      valueListenable: ltpNotifier,
+      builder: (_, ltp, __) {
+        final price = ltp > 0 ? ltp : baseFallback;
+        final pc    = prevClose > 0 ? prevClose : price;
+        final changePct = pc > 0 ? (price - pc) / pc * 100 : 0.0;
+        final isUp  = changePct >= 0;
 
-    return Container(
-      color: _kSpotBg,
-      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        return GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            margin: const EdgeInsets.only(right: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            constraints: const BoxConstraints(minWidth: 72),
             decoration: BoxDecoration(
-              color: changeColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              'SPOT',
-              style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: changeColor,
-                letterSpacing: 0.5,
+              color: selected ? _kStrikePrimary.withOpacity(0.08) : Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected ? _kStrikePrimary : _kBorderGray,
+                width: selected ? 1.5 : 1,
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Icon(
-            isUp ? Icons.arrow_drop_up : Icons.arrow_drop_down,
-            color: changeColor,
-            size: 18,
-          ),
-          Text(
-            price >= 1000
-                ? price.toStringAsFixed(2)
-                : price.toStringAsFixed(2),
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: changeColor,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  symbol,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? _kStrikePrimary : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      price >= 1000 ? price.toStringAsFixed(0) : price.toStringAsFixed(2),
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: isUp ? const Color(0xFF00897B) : const Color(0xFFC62828),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${isUp ? '+' : ''}${changePct.toStringAsFixed(1)}%',
+                      style: TextStyle(fontSize: 8, color: Colors.grey[500]),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            '$changeSign${stock.changePercentage.toStringAsFixed(2)}%',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: changeColor.withOpacity(0.8),
-            ),
+        );
+      },
+    );
+  }
+}
+
+// ─── Live Spot Price Row ──────────────────────────────────────────────────────
+// Subscribes to the underlying's ltpNotifier — rebuilds only when spot ticks.
+
+class _LiveSpotPriceRow extends StatelessWidget {
+  final String symbol;
+  final ValueNotifier<double> ltpNotifier;
+  final Stock fallbackStock;
+
+  const _LiveSpotPriceRow({
+    required this.symbol,
+    required this.ltpNotifier,
+    required this.fallbackStock,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    assert(() { RebuildMetrics.instance.record('_LiveSpotPriceRow'); return true; }());
+    return ValueListenableBuilder<double>(
+      valueListenable: ltpNotifier,
+      builder: (_, ltp, __) {
+        final price    = ltp > 0 ? ltp : fallbackStock.currentPrice;
+        final pc       = fallbackStock.prevClose ?? fallbackStock.currentPrice;
+        final changePct = pc > 0 ? (price - pc) / pc * 100 : fallbackStock.changePercentage;
+        final isUp     = changePct >= 0;
+        final changeColor = isUp ? const Color(0xFF00897B) : const Color(0xFFC62828);
+        final changeSign  = isUp ? '+' : '';
+
+        return Container(
+          color: _kSpotBg,
+          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: changeColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'SPOT',
+                  style: TextStyle(
+                    fontSize: 9, fontWeight: FontWeight.w700,
+                    color: changeColor, letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                isUp ? Icons.arrow_drop_up : Icons.arrow_drop_down,
+                color: changeColor, size: 18,
+              ),
+              Text(
+                price.toStringAsFixed(2),
+                style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: changeColor,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$changeSign${changePct.toStringAsFixed(2)}%',
+                style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w500,
+                  color: changeColor.withOpacity(0.8),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -1097,6 +1290,8 @@ class _StrikeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Non-tracking read — this widget rebuilds only via ValueListenableBuilder below.
+    final store = TradingScope.read(context);
     final isAtm = strike.isAtm;
 
     return Container(
@@ -1123,8 +1318,14 @@ class _StrikeRow extends StatelessWidget {
                 child: InkWell(
                   splashColor: _kCallColor.withOpacity(0.08),
                   highlightColor: _kCallColor.withOpacity(0.04),
-                  onTap: () =>
-                      onTap(strike.strike, InstrumentType.optionCE, strike.ce.ltp, strike.ceToken),
+                  onTap: () {
+                    double ltp = strike.ce.ltp;
+                    if (strike.ceSymbol.isNotEmpty) {
+                      final live = store.ltpNotifier(strike.ceSymbol).value;
+                      if (live > 0) ltp = live;
+                    }
+                    onTap(strike.strike, InstrumentType.optionCE, ltp, strike.ceToken);
+                  },
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
                     child: Row(
@@ -1135,13 +1336,16 @@ class _StrikeRow extends StatelessWidget {
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '₹${_fmtPrice(strike.ce.ltp)}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: _kCallColor,
-                                ),
+                              _LiveOptionLtp(
+                                // Prefer symbol-keyed notifier; fall back to token
+                                // when ceSymbol is absent (API returned null).
+                                notifier: strike.ceSymbol.isNotEmpty
+                                    ? store.ltpNotifier(strike.ceSymbol)
+                                    : strike.ceToken.isNotEmpty
+                                        ? store.ltpNotifier(strike.ceToken)
+                                        : null,
+                                fallback: strike.ce.ltp,
+                                color: _kCallColor,
                               ),
                               const SizedBox(height: 1),
                               Text(
@@ -1224,8 +1428,14 @@ class _StrikeRow extends StatelessWidget {
                 child: InkWell(
                   splashColor: _kPutColor.withOpacity(0.08),
                   highlightColor: _kPutColor.withOpacity(0.04),
-                  onTap: () =>
-                      onTap(strike.strike, InstrumentType.optionPE, strike.pe.ltp, strike.peToken),
+                  onTap: () {
+                    double ltp = strike.pe.ltp;
+                    if (strike.peSymbol.isNotEmpty) {
+                      final live = store.ltpNotifier(strike.peSymbol).value;
+                      if (live > 0) ltp = live;
+                    }
+                    onTap(strike.strike, InstrumentType.optionPE, ltp, strike.peToken);
+                  },
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
                     child: Row(
@@ -1243,13 +1453,14 @@ class _StrikeRow extends StatelessWidget {
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(
-                                '₹${_fmtPrice(strike.pe.ltp)}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: _kPutColor,
-                                ),
+                              _LiveOptionLtp(
+                                notifier: strike.peSymbol.isNotEmpty
+                                    ? store.ltpNotifier(strike.peSymbol)
+                                    : strike.peToken.isNotEmpty
+                                        ? store.ltpNotifier(strike.peToken)
+                                        : null,
+                                fallback: strike.pe.ltp,
+                                color: _kPutColor,
                               ),
                               const SizedBox(height: 1),
                               Text(
@@ -1272,14 +1483,50 @@ class _StrikeRow extends StatelessWidget {
     );
   }
 
-  String _fmtPrice(double p) {
-    if (p >= 10000) return p.toStringAsFixed(0);
-    if (p >= 100) return p.toStringAsFixed(1);
-    return p.toStringAsFixed(2);
-  }
+}
+
+String _fmtPrice(double p) {
+  if (p >= 10000) return p.toStringAsFixed(0);
+  if (p >= 100) return p.toStringAsFixed(1);
+  return p.toStringAsFixed(2);
 }
 
 // ─── OI Bar ───────────────────────────────────────────────────────────────────
+
+// ─── Live LTP for option CE/PE ────────────────────────────────────────────────
+// Uses ValueListenableBuilder so only this Text rebuilds on each tick, not
+// the entire _StrikeRow. Falls back to the REST-fetched price until a WS tick
+// arrives (notifier value == 0.0 means no tick yet).
+
+class _LiveOptionLtp extends StatelessWidget {
+  final ValueNotifier<double>? notifier;
+  final double fallback;
+  final Color color;
+
+  const _LiveOptionLtp({
+    required this.notifier,
+    required this.fallback,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (notifier == null) return _text(fallback);
+    return ValueListenableBuilder<double>(
+      valueListenable: notifier!,
+      builder: (_, ltp, __) => _text(ltp > 0 ? ltp : fallback),
+    );
+  }
+
+  Widget _text(double v) => Text(
+    '₹${_fmtPrice(v)}',
+    style: TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      color: color,
+    ),
+  );
+}
 
 class _OiBar extends StatelessWidget {
   final int oi;
@@ -1413,101 +1660,102 @@ class _SkeletonStrikeRow extends StatelessWidget {
   }
 }
 
-// ─── Bottom Summary Bar ───────────────────────────────────────────────────────
+// ─── Live Bottom Summary Bar ──────────────────────────────────────────────────
+// Subscribes to ltpNotifier — rebuilds ONLY when the underlying spot price ticks.
+// The parent OptionsChainScreen never rebuilds from this widget's updates.
 
-class _BottomSummaryBar extends StatelessWidget {
-  final Stock stock;
-  const _BottomSummaryBar({required this.stock});
+class _LiveBottomSummaryBar extends StatelessWidget {
+  final Stock fallbackStock;
+  final ValueNotifier<double> ltpNotifier;
+
+  const _LiveBottomSummaryBar({
+    required this.fallbackStock,
+    required this.ltpNotifier,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final isUp = stock.isPositive;
-    final priceColor = isUp ? AppColors.success : AppColors.danger;
-    final price = stock.currentPrice > 0
-        ? stock.currentPrice
-        : _basePriceFor(stock.symbol);
+    assert(() { RebuildMetrics.instance.record('_LiveBottomSummaryBar'); return true; }());
+    return ValueListenableBuilder<double>(
+      valueListenable: ltpNotifier,
+      builder: (_, ltp, __) {
+        final price   = ltp > 0 ? ltp : (fallbackStock.currentPrice > 0 ? fallbackStock.currentPrice : _basePriceFor(fallbackStock.symbol));
+        final pc      = fallbackStock.prevClose ?? fallbackStock.currentPrice;
+        final changePct = pc > 0 ? (price - pc) / pc * 100 : fallbackStock.changePercentage;
+        final isUp    = changePct >= 0;
+        final priceColor = isUp ? AppColors.success : AppColors.danger;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: _kBorderGray)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black12, blurRadius: 8, offset: Offset(0, -2)),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              // Instrument icon badge
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceAlt,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  isUp ? Icons.trending_up : Icons.trending_down,
-                  color: priceColor,
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Symbol + exchange
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    stock.symbol,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF111111),
-                    ),
-                  ),
-                  Text(
-                    'Underlying Spot',
-                    style: TextStyle(
-                      fontSize: 9,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              // Price + change
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '₹${price >= 1000 ? price.toStringAsFixed(2) : price.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: priceColor,
-                    ),
-                  ),
-                  Text(
-                    '${isUp ? '+' : ''}${stock.changePercentage.toStringAsFixed(2)}%',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: priceColor,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: _kBorderGray)),
+            boxShadow: [
+              BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, -2)),
             ],
           ),
-        ),
-      ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32, height: 32,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceAlt,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      isUp ? Icons.trending_up : Icons.trending_down,
+                      color: priceColor, size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fallbackStock.symbol,
+                        style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700,
+                          color: Color(0xFF111111),
+                        ),
+                      ),
+                      Text(
+                        'Underlying Spot',
+                        style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '₹${price.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800,
+                          color: priceColor,
+                        ),
+                      ),
+                      Text(
+                        '${isUp ? '+' : ''}${changePct.toStringAsFixed(2)}%',
+                        style: TextStyle(
+                          fontSize: 11, color: priceColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

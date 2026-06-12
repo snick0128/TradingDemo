@@ -19,6 +19,11 @@ import 'domain/auth/app_user_profile.dart';
 import 'domain/auth/auth_session.dart';
 import 'models/trading_models.dart';
 import 'screens/main_shell.dart';
+import 'services/app_update_service.dart';
+import 'services/device_tier.dart';
+import 'services/performance_monitor.dart';
+import 'services/persistence_service.dart';
+import 'services/subscription_manager.dart';
 import 'state/admin_scope.dart';
 import 'state/admin_store.dart';
 import 'state/security_scope.dart';
@@ -26,9 +31,19 @@ import 'state/security_store.dart';
 import 'state/trading_scope.dart';
 import 'state/trading_store.dart';
 import 'theme.dart';
+import 'widgets/perf_overlay.dart';
+import 'widgets/update_banner.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Detect device tier before any screen opens (synchronous JS interop).
+  DeviceTierDetector.detect();
+  // Start frame-timing collection immediately after Flutter binding is ready.
+  PerformanceMonitor.instance.start();
+
+  // Initialize SharedPreferences-backed storage before any screen runs.
+  await PersistenceService.instance.init();
 
   bool firebaseReady = false;
   try {
@@ -81,6 +96,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   @override
   void initState() {
     super.initState();
+    AppUpdateService.instance.start();
     _tradingStore = TradingStore();
     _securityStore = SecurityStore(lockTimeout: const Duration(minutes: 5));
     _authSession = AuthSession();
@@ -91,6 +107,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
     // Set BackendConfig.useLiveBackend = false to run fully offline.
     if (BackendConfig.useLiveBackend) {
       _tradingStore.connectLiveBackend();
+      // Wire SubscriptionManager — must be called after connectLiveBackend so
+      // that liveMarketService is non-null.
+      final svc = _tradingStore.liveMarketService;
+      if (svc != null) SubscriptionManager.instance.attach(svc);
     }
 
     if (widget.firebaseReady) {
@@ -217,6 +237,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
 
   @override
   void dispose() {
+    AppUpdateService.instance.dispose();
+    SubscriptionManager.instance.detach();
     _authSession.removeListener(_syncTradingUserFromAuthSession);
     _ordersSub?.cancel();
     _gttSub?.cancel();
@@ -716,7 +738,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         final mq = MediaQuery.of(context);
         return MediaQuery(
           data: mq.copyWith(textScaler: TextScaler.linear(ts.textScaleFactor)),
-          child: child ?? const SizedBox.shrink(),
+          child: PerfOverlay(
+            marketService: _tradingStore.liveMarketService,
+            child: UpdateBannerOverlay(child: child ?? const SizedBox.shrink()),
+          ),
         );
       },
     );

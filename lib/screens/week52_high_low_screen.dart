@@ -27,7 +27,7 @@ class Week52HighLowScreen extends StatelessWidget {
         body: Builder(
           builder: (context) {
             final store = TradingScope.of(context);
-            final all = store.watchlist.toList();
+            final all = store.knownStocks.toList();
 
             final highs =
                 all

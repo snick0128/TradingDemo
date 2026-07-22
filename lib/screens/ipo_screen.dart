@@ -42,13 +42,27 @@ class _IPOScreenState extends State<IPOScreen>
       _loading = true;
       _error = null;
     });
+    debugPrint('[IPO_FETCH_START] Loading IPOs from backend...');
     try {
       final raw = await _api.getIPOs();
+      debugPrint('[IPO_FETCH_SUCCESS] Response received. count=${raw.length}');
+      if (raw.isEmpty) {
+        debugPrint('[IPO_FETCH_EMPTY] Backend returned 0 IPOs. Firestore collection may be empty — run admin sync or add IPOs via admin panel.');
+      }
+      final parsed = <IPO>[];
+      for (final m in raw) {
+        try {
+          parsed.add(_parseIPO(m));
+        } catch (parseErr) {
+          debugPrint('[IPO_FETCH_ERROR] Could not parse IPO entry: $parseErr — data=$m');
+        }
+      }
       setState(() {
-        _ipoFeed = raw.map(_parseIPO).toList();
+        _ipoFeed = parsed;
         _loading = false;
       });
     } catch (e) {
+      debugPrint('[IPO_FETCH_ERROR] Failed to load IPOs: $e');
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -232,8 +246,8 @@ class _IPOScreenState extends State<IPOScreen>
   }
 
   IPO _parseIPO(Map<String, dynamic> m) {
-    IPOStatus parseStatus(String s) {
-      switch (s) {
+    IPOStatus parseStatus(String? s) {
+      switch ((s ?? '').toLowerCase()) {
         case 'upcoming':
           return IPOStatus.upcoming;
         case 'ongoing':
@@ -246,18 +260,22 @@ class _IPOScreenState extends State<IPOScreen>
       }
     }
 
+    DateTime? tryParseDate(dynamic v) {
+      if (v == null) return null;
+      try { return DateTime.parse(v as String); } catch (_) { return null; }
+    }
+
+    final now = DateTime.now();
     return IPO(
-      id: m['id'] as String,
-      companyName: m['companyName'] as String,
-      priceMin: (m['priceMin'] as num).toDouble(),
-      priceMax: (m['priceMax'] as num).toDouble(),
-      openDate: DateTime.parse(m['openDate'] as String),
-      closeDate: DateTime.parse(m['closeDate'] as String),
-      listingDate: m['listingDate'] != null
-          ? DateTime.parse(m['listingDate'] as String)
-          : null,
-      status: parseStatus(m['status'] as String),
-      lotSize: (m['lotSize'] as num).toInt(),
+      id: (m['id'] ?? m['companyName'] ?? 'ipo_${now.millisecondsSinceEpoch}') as String,
+      companyName: (m['companyName'] ?? 'Unknown') as String,
+      priceMin: ((m['priceMin'] ?? m['priceMax'] ?? 0) as num).toDouble(),
+      priceMax: ((m['priceMax'] ?? 0) as num).toDouble(),
+      openDate: tryParseDate(m['openDate']) ?? now,
+      closeDate: tryParseDate(m['closeDate']) ?? now,
+      listingDate: tryParseDate(m['listingDate']),
+      status: parseStatus(m['status'] as String?),
+      lotSize: ((m['lotSize'] ?? 1) as num).toInt(),
       listingPrice: m['listingPrice'] != null
           ? (m['listingPrice'] as num).toDouble()
           : null,

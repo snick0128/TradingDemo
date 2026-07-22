@@ -70,6 +70,7 @@ class _PerfBadgeState extends State<_PerfBadge> {
   // Polled values (snapshot — not streams)
   double _msgsPerSec = 0.0;
   int _activeSubs = 0;
+  int _changesPerMin = 0;
 
   Timer? _pollTimer;
 
@@ -83,10 +84,12 @@ class _PerfBadgeState extends State<_PerfBadge> {
       final diag = widget.marketService?.tickBatchDiagnostics;
       final msgs = (diag?['messagesReceivedPerSecond'] as double?) ?? 0.0;
       final subs = SubscriptionManager.instance.activeSymbolCount;
-      if (msgs != _msgsPerSec || subs != _activeSubs) {
+      final changes = SubscriptionManager.instance.subscriptionChangesPerMinute;
+      if (msgs != _msgsPerSec || subs != _activeSubs || changes != _changesPerMin) {
         setState(() {
           _msgsPerSec = msgs;
           _activeSubs = subs;
+          _changesPerMin = changes;
         });
       }
     });
@@ -117,6 +120,7 @@ class _PerfBadgeState extends State<_PerfBadge> {
               janky: janky,
               activeSubs: _activeSubs,
               msgsPerSec: _msgsPerSec,
+              changesPerMin: _changesPerMin,
             ),
           ),
         ),
@@ -136,6 +140,7 @@ class _Badge extends StatelessWidget {
   final int janky;
   final int activeSubs;
   final double msgsPerSec;
+  final int changesPerMin;
 
   const _Badge({
     required this.tier,
@@ -144,6 +149,7 @@ class _Badge extends StatelessWidget {
     required this.janky,
     required this.activeSubs,
     required this.msgsPerSec,
+    required this.changesPerMin,
   });
 
   Color get _fpsColor {
@@ -154,14 +160,15 @@ class _Badge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Format: [H] 58fps 14ms 0j 42subs 180msg/s
+    // Format: [H] 58fps 14ms 0j 42subs 180msg/s 3ch/m
     final text =
         '[${tier.label}] '
         '${fps.toStringAsFixed(0)}fps '
         '${avgMs.toStringAsFixed(0)}ms '
         '${janky}j '
         '${activeSubs}subs '
-        '${msgsPerSec.toStringAsFixed(0)}msg/s';
+        '${msgsPerSec.toStringAsFixed(0)}msg/s '
+        '${changesPerMin}ch/m';
 
     return IgnorePointer(
       child: Container(

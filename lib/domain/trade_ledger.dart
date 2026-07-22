@@ -4,7 +4,8 @@
 // matching BUYs with SELLs for the same (userId, symbol, product) key.
 //
 // P&L is derived entirely from real fill prices — no synthetic multipliers.
-// Brokerage = 0.03% of turnover per leg (standard retail rate).
+// Brokerage = actual chargesApplied from the order document (backend-computed);
+// falls back to 0.03% of turnover per leg for pre-migration orders that lack the field.
 
 import '../models/trading_models.dart';
 import '../state/admin_store.dart';
@@ -38,9 +39,10 @@ class TradeLedgerEntry {
   final String? exitOrderId;
 
   // Financials — all derived from real fill prices
-  final double grossPnl;  // (exit - entry) * qty for long; (entry - exit) * qty for short
-  final double brokerage; // 0.03% * total turnover (both legs)
-  final double netPnl;    // grossPnl - brokerage
+  final double grossPnl;    // (exit - entry) * qty for long; (entry - exit) * qty for short
+  final double brokerage;   // 0.03% * total turnover (both legs)
+  final double netPnl;      // grossPnl - brokerage
+  final double marginUsed;  // actual margin blocked (0 for closed/pending entries)
 
   // Meta
   final TradeStatus status;
@@ -68,6 +70,7 @@ class TradeLedgerEntry {
     required this.grossPnl,
     required this.brokerage,
     required this.netPnl,
+    this.marginUsed = 0.0,
     required this.status,
     required this.health,
     required this.holdingDuration,
@@ -135,8 +138,8 @@ class TradeLedgerEntry {
         ? Duration.zero
         : DateTime.now().difference(fillTime);
     final notional  = o.price * fillQty;
-    // Prorate brokerage if only a portion of the order is open
-    final brokerage = notional * 0.0003;
+    // Open positions have no exit yet — no brokerage is charged until the trade closes.
+    const brokerage = 0.0;
     final health    = notional > 500000 ? TradeHealth.large : TradeHealth.neutral;
     return TradeLedgerEntry(
       id: 'open_${o.id}_q$fillQty',
@@ -152,7 +155,8 @@ class TradeLedgerEntry {
       entryOrderId: o.id,
       grossPnl: 0,
       brokerage: brokerage,
-      netPnl: -brokerage,
+      netPnl: 0,
+      marginUsed: o.marginUsed,
       status: TradeStatus.open,
       health: health,
       holdingDuration: duration,
@@ -171,8 +175,20 @@ class TradeLedgerEntry {
     final grossPnl = isLong
         ? (exit.price - entry.price) * qty
         : (entry.price - exit.price) * qty;
-    final turnover  = entry.price * qty + exit.price * qty;
-    final brokerage = turnover * 0.0003;
+    // H-03: use the actual brokerage the backend charged rather than a hardcoded rate.
+    // chargesApplied is prorated by matchQty/filledQty when a partial FIFO match is used.
+    // filledQty is the actually-executed qty the backend used to compute chargesApplied;
+    // fall back to quantity for pre-migration orders where filledQty is zero.
+    // Fall back to 0.03% of each leg's turnover for pre-migration orders that lack the field.
+    final entryFilled = entry.filledQty > 0 ? entry.filledQty : entry.quantity;
+    final exitFilled  = exit.filledQty  > 0 ? exit.filledQty  : exit.quantity;
+    final entryBrok = (entry.chargesApplied != null && entryFilled > 0)
+        ? entry.chargesApplied! * qty / entryFilled
+        : entry.price * qty * 0.0003;
+    final exitBrok  = (exit.chargesApplied != null && exitFilled > 0)
+        ? exit.chargesApplied! * qty / exitFilled
+        : exit.price * qty * 0.0003;
+    final brokerage = entryBrok + exitBrok;
     final netPnl    = grossPnl - brokerage;
     final entryFillTime = entry.executedAt ?? entry.dateTime;
     final exitFillTime  = exit.executedAt  ?? exit.dateTime;
@@ -252,10 +268,12 @@ List<TradeLedgerEntry> buildTradeLedger(
     }
   }
 
-  // Step 3 — executed: group then match
+  // Step 3 — executed: group then match.
+  // Admin ISSUE 1/2: exclude 'approved' — those are still-pending limit orders that
+  // haven't executed yet and carry no executedPrice, so including them produced
+  // phantom closed-trade entries with wrong entry/exit prices.
   final executed = orders.where((o) =>
       o.status == OrderStatus.executed ||
-      o.status == OrderStatus.approved ||
       o.status == OrderStatus.partiallyExecuted).toList();
 
   final groups = <String, List<AdminOrderRecord>>{};
@@ -265,7 +283,11 @@ List<TradeLedgerEntry> buildTradeLedger(
   }
 
   for (final group in groups.values) {
-    // Sort each group by actual fill time ascending (oldest first for FIFO).
+    // Sort by actual fill time ascending (oldest first) for FIFO matching.
+    // L-02: executedAt is set by the backend at execution time; dateTime (createdAt)
+    // is the fallback for legacy orders created before executedAt was added. Both
+    // fields are always present on current orders; the fallback is for pre-migration
+    // records only and will be removed once all orders have been migrated.
     group.sort((a, b) {
       final ta = a.executedAt ?? a.dateTime;
       final tb = b.executedAt ?? b.dateTime;
@@ -278,8 +300,10 @@ List<TradeLedgerEntry> buildTradeLedger(
     // Quantity-aware FIFO: each order tracks its own remaining fill qty so
     // partial closes (e.g. BUY 100 + SELL 80) produce one closed slice (80)
     // and one open remainder (20) instead of marking the whole BUY as closed.
-    final buyRem  = List<int>.from(buys.map((o) => o.quantity));
-    final sellRem = List<int>.from(sells.map((o) => o.quantity));
+    // Use filledQty (actually-executed qty) when available; fall back to
+    // quantity (requested qty) for pre-migration orders that lack the field.
+    final buyRem  = List<int>.from(buys.map((o) => o.filledQty > 0 ? o.filledQty : o.quantity));
+    final sellRem = List<int>.from(sells.map((o) => o.filledQty > 0 ? o.filledQty : o.quantity));
 
     // Long FIFO: each BUY absorbs earliest subsequent SELL(s).
     for (int bi = 0; bi < buys.length; bi++) {

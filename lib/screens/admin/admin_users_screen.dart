@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../../domain/trade_ledger.dart';
 import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
@@ -89,6 +90,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                       onFund: () => _showFundDialog(context, users[i], admin),
                       onViewDetail: () =>
                           _showUserDetail(context, users[i], pnlMap[users[i].id] ?? 0),
+                      onViewTrades: () => _showUserTrades(context, users[i]),
                     ),
                   ),
           ),
@@ -212,6 +214,27 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         builder: (_, scrollCtrl) => _UserDetailSheet(
           user: user,
           pnl: pnl,
+          scrollController: scrollCtrl,
+        ),
+      ),
+    );
+  }
+
+  void _showUserTrades(BuildContext context, User user) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
+        expand: false,
+        builder: (_, scrollCtrl) => _UserTradesSheet(
+          user: user,
           scrollController: scrollCtrl,
         ),
       ),
@@ -426,6 +449,7 @@ class _UserCard extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onFund;
   final VoidCallback onViewDetail;
+  final VoidCallback onViewTrades;
 
   const _UserCard({
     required this.user,
@@ -433,6 +457,7 @@ class _UserCard extends StatelessWidget {
     required this.onToggle,
     required this.onFund,
     required this.onViewDetail,
+    required this.onViewTrades,
   });
 
   static String _fmtV(double v) {
@@ -564,14 +589,21 @@ class _UserCard extends StatelessWidget {
                     label: 'Details',
                     onTap: onViewDetail,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
+                  _CardBtn(
+                    icon: LucideIcons.clipboardList,
+                    label: 'Trades',
+                    onTap: onViewTrades,
+                    color: const Color(0xFF7C3AED),
+                  ),
+                  const SizedBox(width: 5),
                   _CardBtn(
                     icon: LucideIcons.wallet,
                     label: 'Fund',
                     onTap: onFund,
                     color: AppColors.primary,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   _CardBtn(
                     icon: user.isActive
                         ? LucideIcons.userX
@@ -913,6 +945,409 @@ class _InfoRow extends StatelessWidget {
                 )),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── User Trades Sheet ──────────────────────────────────────────────────────────
+
+class _UserTradesSheet extends StatefulWidget {
+  final User user;
+  final ScrollController scrollController;
+  const _UserTradesSheet({required this.user, required this.scrollController});
+  @override
+  State<_UserTradesSheet> createState() => _UserTradesSheetState();
+}
+
+class _UserTradesSheetState extends State<_UserTradesSheet> {
+  TradeStatus? _filter;
+
+  static String _fmtV(double v) {
+    if (v.abs() >= 100000) return '₹${(v / 100000).toStringAsFixed(2)}L';
+    if (v.abs() >= 1000) return '₹${(v / 1000).toStringAsFixed(1)}K';
+    return '₹${v.toStringAsFixed(2)}';
+  }
+
+  static String _fmtDate(DateTime dt) {
+    if (dt.year < 2000) return '—';
+    return DateFormat('dd MMM · h:mm a').format(dt);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final admin = AdminScope.of(context);
+    final liveUser = admin.users.firstWhere(
+      (u) => u.id == widget.user.id,
+      orElse: () => widget.user,
+    );
+    final userOrders = admin.masterOrderBook
+        .where((o) => o.userId == widget.user.id)
+        .toList();
+    final allTrades = buildTradeLedger(userOrders)
+      ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+
+    final closedTrades =
+        allTrades.where((t) => t.status == TradeStatus.closed).toList();
+    final openCount =
+        allTrades.where((t) => t.status == TradeStatus.open).length;
+    final totalRealized =
+        closedTrades.fold<double>(0, (s, t) => s + t.netPnl);
+    final unrealizedPnl = liveUser.runningPnL;
+    final wins = closedTrades.where((t) => t.netPnl > 0).length;
+    final losses = closedTrades.where((t) => t.netPnl < 0).length;
+
+    final trades = _filter == null
+        ? allTrades
+        : allTrades.where((t) => t.status == _filter).toList();
+
+    final pnlColor =
+        totalRealized >= 0 ? AppColors.success : AppColors.danger;
+    final unrealizedColor =
+        unrealizedPnl >= 0 ? AppColors.success : AppColors.danger;
+
+    return Column(
+      children: [
+        // Drag handle
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 12),
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: AppColors.border,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+
+        // ── Header ────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.user.name,
+                      style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary),
+                    ),
+                    Text(
+                      '${widget.user.clientId} · Trade History',
+                      style: GoogleFonts.inter(
+                          fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _TradeStat(
+                  label: 'Realized P&L',
+                  value: '${totalRealized >= 0 ? '+' : ''}${_fmtV(totalRealized)}',
+                  color: pnlColor),
+              const SizedBox(width: 8),
+              _TradeStat(
+                  label: 'Unrealized',
+                  value: '${unrealizedPnl >= 0 ? '+' : ''}${_fmtV(unrealizedPnl)}',
+                  color: unrealizedColor),
+              const SizedBox(width: 8),
+              _TradeStat(
+                  label: 'Win / Loss',
+                  value: '$wins / $losses',
+                  color: AppColors.primary),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Filter tabs ───────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              _TradeFilterTab(
+                label: 'All (${allTrades.length})',
+                selected: _filter == null,
+                onTap: () => setState(() => _filter = null),
+              ),
+              const SizedBox(width: 6),
+              _TradeFilterTab(
+                label: 'Open ($openCount)',
+                selected: _filter == TradeStatus.open,
+                onTap: () => setState(() => _filter = TradeStatus.open),
+              ),
+              const SizedBox(width: 6),
+              _TradeFilterTab(
+                label: 'Closed (${closedTrades.length})',
+                selected: _filter == TradeStatus.closed,
+                onTap: () => setState(() => _filter = TradeStatus.closed),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+
+        // ── Trade list ────────────────────────────────────────────────
+        Expanded(
+          child: trades.isEmpty
+              ? Center(
+                  child: Text(
+                    'No trades found.',
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                )
+              : ListView.separated(
+                  controller: widget.scrollController,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  itemCount: trades.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) =>
+                      _TradeTile(trade: trades[i], fmtV: _fmtV, fmtDate: _fmtDate),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TradeStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _TradeStat(
+      {required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(value,
+              style: GoogleFonts.jetBrainsMono(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: color)),
+          Text(label,
+              style: GoogleFonts.inter(
+                  fontSize: 9, color: AppColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+}
+
+class _TradeFilterTab extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _TradeFilterTab(
+      {required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.primary.withOpacity(0.1)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected
+                ? AppColors.primary.withOpacity(0.4)
+                : AppColors.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? AppColors.primary : AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TradeTile extends StatelessWidget {
+  final TradeLedgerEntry trade;
+  final String Function(double) fmtV;
+  final String Function(DateTime) fmtDate;
+  const _TradeTile(
+      {required this.trade, required this.fmtV, required this.fmtDate});
+
+  @override
+  Widget build(BuildContext context) {
+    final isBuy = trade.direction == OrderType.buy;
+    final dirColor = isBuy ? AppColors.success : AppColors.danger;
+
+    // Subtitle: shows entry→exit price and date per status
+    final bool hasValidEntry = trade.entryPrice > 0;
+    final bool hasValidExit  = trade.status == TradeStatus.closed &&
+        trade.exitPrice != null && trade.exitPrice! > 0;
+    final String entryStr = hasValidEntry ? fmtV(trade.entryPrice) : '—';
+    final String subtitle;
+    switch (trade.status) {
+      case TradeStatus.closed:
+        subtitle = hasValidExit
+            ? '$entryStr → ${fmtV(trade.exitPrice!)}  ·  ${trade.quantity} qty  ·  ${fmtDate(trade.sortTime)}'
+            : '$entryStr → Exit pending  ·  ${trade.quantity} qty  ·  ${fmtDate(trade.sortTime)}';
+        break;
+      case TradeStatus.pending:
+        subtitle =
+            '$entryStr → Pending  ·  ${trade.quantity} qty  ·  ${fmtDate(trade.entryTime)}';
+        break;
+      case TradeStatus.rejected:
+        subtitle =
+            '$entryStr → Rejected  ·  ${trade.quantity} qty  ·  ${fmtDate(trade.entryTime)}';
+        break;
+      case TradeStatus.open:
+        subtitle =
+            '$entryStr → Open  ·  ${trade.quantity} qty  ·  ${fmtDate(trade.entryTime)}';
+        break;
+    }
+
+    // P&L column: only show realized P&L for closed trades with valid prices
+    Widget pnlWidget;
+    switch (trade.status) {
+      case TradeStatus.closed:
+        final pnlColor =
+            trade.netPnl >= 0 ? AppColors.success : AppColors.danger;
+        pnlWidget = hasValidExit && hasValidEntry
+            ? Text(
+                '${trade.netPnl >= 0 ? '+' : ''}${fmtV(trade.netPnl)}',
+                style: GoogleFonts.jetBrainsMono(
+                    fontSize: 13, fontWeight: FontWeight.w700, color: pnlColor),
+              )
+            : Text('—',
+                style: GoogleFonts.inter(
+                    fontSize: 11, color: AppColors.textSecondary));
+        break;
+      case TradeStatus.pending:
+        pnlWidget = Text(
+          'PENDING',
+          style: GoogleFonts.inter(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppColors.warning),
+        );
+        break;
+      case TradeStatus.rejected:
+        pnlWidget = Text(
+          'REJECTED',
+          style: GoogleFonts.inter(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppColors.danger),
+        );
+        break;
+      case TradeStatus.open:
+        pnlWidget = Text(
+          'OPEN',
+          style: GoogleFonts.inter(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textSecondary),
+        );
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          // Direction stripe
+          Container(
+            width: 3,
+            height: 42,
+            decoration: BoxDecoration(
+              color: dirColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // Symbol + meta
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      trade.symbol,
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary),
+                    ),
+                    const SizedBox(width: 6),
+                    _Badge(trade.product, AppColors.textSecondary),
+                    const SizedBox(width: 4),
+                    _Badge(
+                        isBuy ? 'BUY' : 'SELL',
+                        isBuy ? AppColors.success : AppColors.danger),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.inter(
+                      fontSize: 10, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+
+          // P&L / status
+          pnlWidget,
+        ],
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _Badge(this.label, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: GoogleFonts.inter(
+            fontSize: 8,
+            fontWeight: FontWeight.w700,
+            color: color),
       ),
     );
   }

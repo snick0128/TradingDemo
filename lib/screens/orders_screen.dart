@@ -3,15 +3,16 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
+import '../state/tab_notifier.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
-import '../widgets/shared_widgets.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/trading_bottom_nav_bar.dart';
 import 'basket_orders_screen.dart';
-import 'gtt_orders_screen.dart';
-import 'market_watch_screen.dart';
-import 'trade_history_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
@@ -24,35 +25,74 @@ class _OrdersScreenState extends State<OrdersScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
+  List<Order> _orders = const [];
+  List<AppNotification> _notifications = const [];
+
+  bool _isActiveTab = false;
+  TradingStore? _store;
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
+    _isActiveTab = activeTabNotifier.value == 2;
+    activeTabNotifier.addListener(_onTabVisibilityChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.ordersVersion.removeListener(_onOrdersChanged);
+      _store = store;
+      store.ordersVersion.addListener(_onOrdersChanged);
+      _syncFromStore(store);
+    }
+  }
+
+  void _syncFromStore(TradingStore store) {
+    _orders = store.orders.toList();
+    _notifications = store.notifications.toList();
+  }
+
+  void _onOrdersChanged() {
+    if (_store == null) return;
+    _syncFromStore(_store!);
+    if (_isActiveTab) setState(() {});
+  }
+
+  void _onTabVisibilityChanged() {
+    final active = activeTabNotifier.value == 2;
+    if (active == _isActiveTab) return;
+    _isActiveTab = active;
+    if (active) setState(() {});
   }
 
   @override
   void dispose() {
+    activeTabNotifier.removeListener(_onTabVisibilityChanged);
+    _store?.ordersVersion.removeListener(_onOrdersChanged);
     _tabController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
     AppNotification? sqOffNotif;
-    for (final n in store.notifications) {
+    for (final n in _notifications) {
       if (n.relatedAlertType == AlertType.autoSquareOffWarning && !n.isRead) {
         sqOffNotif = n;
         break;
       }
     }
 
+    // Badge counts
+    final pendingCount = _orders.where((o) => o.status == OrderStatus.pending).length;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Orders',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
-        ),
+        title: const Text('Orders', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500)),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -60,12 +100,30 @@ class _OrdersScreenState extends State<OrdersScreen>
           unselectedLabelColor: const Color(0xFF9E9E9E),
           indicatorColor: const Color(0xFF1565C0),
           indicatorWeight: 2,
-          tabs: const [
-            Tab(text: 'Order Book'),
-            Tab(text: 'Trade Book'),
-            Tab(text: 'Open'),
-            Tab(text: 'GTT'),
-            Tab(text: 'Basket'),
+          tabs: [
+            Tab(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Order Book'),
+                  if (pendingCount > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1565C0),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$pendingCount',
+                        style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const Tab(text: 'Basket'),
           ],
         ),
       ),
@@ -75,17 +133,14 @@ class _OrdersScreenState extends State<OrdersScreen>
             _AutoSquareOffBanner(
               title: sqOffNotif.title,
               message: sqOffNotif.message,
-              onDismiss: () => store.markNotificationRead(sqOffNotif!.id),
+              onDismiss: () => TradingScope.read(context).markNotificationRead(sqOffNotif!.id),
             ),
           Expanded(
             child: TabBarView(
               controller: _tabController,
-              children: const [
-                _OrderBookTab(),
-                _TradeBookTab(),
-                _OpenOrdersTab(),
-                GttOrdersScreen(),
-                BasketOrdersScreen(),
+              children: [
+                _OrderBookTab(orders: _orders, store: _store),
+                const BasketOrdersScreen(),
               ],
             ),
           ),
@@ -95,122 +150,121 @@ class _OrdersScreenState extends State<OrdersScreen>
   }
 }
 
-// ─── Order Book Tab (all orders with cancel/modify) ───────────────────────────
+// ─── Order Book Tab — 4 clear sections + filter ──────────────────────────────
 
 class _OrderBookTab extends StatefulWidget {
-  const _OrderBookTab();
+  final List<Order> orders;
+  final TradingStore? store;
+
+  const _OrderBookTab({required this.orders, required this.store});
 
   @override
   State<_OrderBookTab> createState() => _OrderBookTabState();
 }
 
 class _OrderBookTabState extends State<_OrderBookTab> {
-  OrderStatus? _filter; // null = All
+  String _filter = 'all'; // 'all' | 'open' | 'closed'
+
+  static bool _isOpen(Order o) =>
+      o.status == OrderStatus.pending || o.status == OrderStatus.partiallyExecuted;
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
+    final sorted = widget.orders.toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
-    final allOrders = store.orders.toList()
-      ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    final displayed = switch (_filter) {
+      'open'   => sorted.where(_isOpen).toList(),
+      'closed' => sorted.where((o) => !_isOpen(o)).toList(),
+      _        => sorted,
+    };
 
-    final today = allOrders.where((o) {
-      final now = DateTime.now();
-      return o.dateTime.year == now.year &&
-          o.dateTime.month == now.month &&
-          o.dateTime.day == now.day;
-    }).toList();
+    final pending   = displayed.where((o) => o.status == OrderStatus.pending).toList();
+    final executed  = displayed.where((o) => o.status == OrderStatus.executed || o.status == OrderStatus.approved).toList();
+    final cancelled = displayed.where((o) => o.status == OrderStatus.cancelled).toList();
+    final rejected  = displayed.where((o) => o.status == OrderStatus.rejected).toList();
 
-    final pendingCount = allOrders
-        .where((o) => o.status == OrderStatus.pending)
-        .length;
-    final executedCount = allOrders
-        .where(
-          (o) =>
-              o.status == OrderStatus.executed ||
-              o.status == OrderStatus.approved,
-        )
-        .length;
+    if (sorted.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(LucideIcons.inbox, size: 56, color: AppColors.border),
+            const SizedBox(height: 16),
+            const Text(
+              'No orders yet',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Place your first trade to see orders here.',
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      );
+    }
 
-    final filtered = _filter == null
-        ? allOrders
-        : allOrders.where((o) => o.status == _filter).toList();
+    // Build flat item list for the single scrollable list
+    final items = <_BookItem>[];
+
+    if (pending.isNotEmpty) {
+      items.add(_SectionHeaderItem('Pending Orders', pending.length, const Color(0xFF1565C0), const Color(0xFFE3F2FD)));
+      items.addAll(pending.map((o) => _OrderItem(o, isPending: true)));
+    }
+    if (executed.isNotEmpty) {
+      items.add(_SectionHeaderItem('Closed Trades', executed.length, const Color(0xFF2E7D32), const Color(0xFFE8F5E9)));
+      items.addAll(executed.map((o) => _OrderItem(o, isPending: false)));
+    }
+    if (cancelled.isNotEmpty) {
+      items.add(_SectionHeaderItem('Cancelled', cancelled.length, const Color(0xFF757575), const Color(0xFFF5F5F5)));
+      items.addAll(cancelled.map((o) => _OrderItem(o, isPending: false)));
+    }
+    if (rejected.isNotEmpty) {
+      items.add(_SectionHeaderItem('Rejected', rejected.length, AppColors.danger, const Color(0xFFFFEBEE)));
+      items.addAll(rejected.map((o) => _OrderItem(o, isPending: false)));
+    }
+
+    final openCount   = sorted.where(_isOpen).length;
+    final closedCount = sorted.length - openCount;
 
     return Column(
       children: [
-        // ── Summary strip ──────────────────────────────────────────────────
+        // ── Filter chips ──────────────────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           decoration: const BoxDecoration(
-            color: AppColors.surface,
-            border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
           child: Row(
             children: [
-              _summaryItem(
-                'Today',
-                today.length.toString(),
-                const Color(0xFF757575),
-              ),
-              const SizedBox(width: 24),
-              _summaryItem(
-                'Pending',
-                pendingCount.toString(),
-                const Color(0xFF757575),
-              ),
-              const SizedBox(width: 24),
-              _summaryItem(
-                'Executed',
-                executedCount.toString(),
-                const Color(0xFF00C853),
-              ),
+              _filterChip('All',    'all',    sorted.length),
+              const SizedBox(width: 8),
+              _filterChip('Open',   'open',   openCount),
+              const SizedBox(width: 8),
+              _filterChip('Closed', 'closed', closedCount),
             ],
           ),
         ),
-        // ── Filter chips ───────────────────────────────────────────────────
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
-          ),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _filterChip('All', null),
-                const SizedBox(width: 8),
-                _filterChip('Pending', OrderStatus.pending),
-                const SizedBox(width: 8),
-                _filterChip('Executed', OrderStatus.executed),
-                const SizedBox(width: 8),
-                _filterChip('Rejected', OrderStatus.rejected),
-                const SizedBox(width: 8),
-                _filterChip('Cancelled', OrderStatus.cancelled),
-              ],
-            ),
-          ),
-        ),
-        // ── Orders list ────────────────────────────────────────────────────
+
+        // ── Order list ────────────────────────────────────────────────────────
         Expanded(
-          child: filtered.isEmpty
-              ? _emptyOrdersState(context)
+          child: displayed.isEmpty
+              ? Center(
+                  child: Text(
+                    _filter == 'open' ? 'No open orders' : 'No closed orders',
+                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                )
               : ListView.builder(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, TradingBottomNavBar.bottomInset(context)),
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
-                    final order = filtered[index];
-                    final prev = index > 0 ? filtered[index - 1] : null;
-                    final showDateHeader =
-                        prev == null ||
-                        !_sameDay(prev.dateTime, order.dateTime);
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (showDateHeader) _DateGroupLabel(order.dateTime),
-                        _OrderCard(order: order),
-                        const SizedBox(height: 10),
-                      ],
+                  padding: EdgeInsets.fromLTRB(16, 8, 16, TradingBottomNavBar.bottomInset(context) + 16),
+                  itemCount: items.length,
+                  itemBuilder: (ctx, i) {
+                    final item = items[i];
+                    if (item is _SectionHeaderItem) return _SectionHeader(item: item);
+                    final oi = item as _OrderItem;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _OrderCard(order: oi.order, isPendingSection: oi.isPending, store: widget.store),
                     );
                   },
                 ),
@@ -219,83 +273,76 @@ class _OrderBookTabState extends State<_OrderBookTab> {
     );
   }
 
-  bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  Widget _summaryItem(String label, String value, Color valueColor) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          '$label: ',
-          style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
-        ),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-            color: valueColor,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _filterChip(String label, OrderStatus? status) {
-    final selected = _filter == status;
+  Widget _filterChip(String label, String value, int count) {
+    final selected = _filter == value;
     return GestureDetector(
-      onTap: () => setState(() => _filter = status),
+      onTap: () => setState(() => _filter = value),
       child: Container(
-        height: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1565C0) : AppColors.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? const Color(0xFF1565C0) : const Color(0xFFE0E0E0),
-          ),
+          color: selected ? AppColors.primary : AppColors.surface,
+          border: Border.all(color: selected ? AppColors.primary : AppColors.border),
+          borderRadius: BorderRadius.circular(20),
         ),
-        alignment: Alignment.center,
         child: Text(
-          label,
+          count > 0 ? '$label ($count)' : label,
           style: TextStyle(
             fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: selected ? Colors.white : const Color(0xFF9E9E9E),
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : AppColors.textSecondary,
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _emptyOrdersState(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+// ─── Section item types ───────────────────────────────────────────────────────
+
+sealed class _BookItem {}
+
+class _SectionHeaderItem extends _BookItem {
+  final String title;
+  final int count;
+  final Color color;
+  final Color bg;
+  _SectionHeaderItem(this.title, this.count, this.color, this.bg);
+}
+
+class _OrderItem extends _BookItem {
+  final Order order;
+  final bool isPending;
+  _OrderItem(this.order, {required this.isPending});
+}
+
+// ─── Section Header ───────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final _SectionHeaderItem item;
+  const _SectionHeader({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Row(
         children: [
-          const Icon(LucideIcons.inbox, size: 56, color: AppColors.border),
-          const SizedBox(height: 16),
-          const Text(
-            'No orders yet',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: item.bg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: item.color.withValues(alpha: 0.3)),
+            ),
+            child: Text(
+              item.title,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: item.color),
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Place your first trade to see orders here.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: () => Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const MarketWatchScreen()),
-            ),
-            child: const Text('Start Trading'),
+          const SizedBox(width: 8),
+          Text(
+            '${item.count}',
+            style: TextStyle(fontSize: 12, color: item.color, fontWeight: FontWeight.w500),
           ),
         ],
       ),
@@ -303,108 +350,236 @@ class _OrderBookTabState extends State<_OrderBookTab> {
   }
 }
 
-// ─── Date Group Label ─────────────────────────────────────────────────────────
+// ─── Order Card — compact, clear visual hierarchy ─────────────────────────────
 
-class _DateGroupLabel extends StatelessWidget {
-  final DateTime date;
-  const _DateGroupLabel(this.date);
+class _OrderCard extends StatefulWidget {
+  final Order order;
+  final bool isPendingSection;
+  final TradingStore? store;
+
+  const _OrderCard({required this.order, required this.isPendingSection, required this.store});
 
   @override
-  Widget build(BuildContext context) {
-    final label = DateFormat('dd MMM yyyy').format(date).toUpperCase();
-    return Padding(
-      padding: const EdgeInsets.only(top: 20, bottom: 8),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: Color(0xFF9E9E9E),
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
+  State<_OrderCard> createState() => _OrderCardState();
 }
 
-// ─── Order Card ───────────────────────────────────────────────────────────────
+class _OrderCardState extends State<_OrderCard> {
+  bool _loading = false;
 
-class _OrderCard extends StatelessWidget {
-  final Order order;
-  const _OrderCard({required this.order});
+  Order get o => widget.order;
 
-  Future<void> _cancelOrder(BuildContext context, String orderId) async {
-    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
-    if (appScope != null) {
-      try {
-        await appScope.tradingService.cancelOrder(orderId);
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Order cancelled')));
-      } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Cancellation failed: $e'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+  Future<void> _cancel() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    try {
+      final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+      if (appScope != null) {
+        final userId = appScope.notifier?.user?.uid ?? '';
+        final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        await api.cancelPendingOrder(userId: userId, orderId: o.id);
+        if (mounted) AppToast.success(context, 'Order cancelled');
+      } else {
+        TradingScope.read(context).cancelOrder(o.id);
       }
-      return;
+    } catch (e) {
+      if (mounted) AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    TradingScope.of(context).cancelOrder(orderId);
+  }
+
+  Future<void> _modify() async {
+    if (_loading) return;
+    // Stop-loss pending orders must stay SL when modified — resubmitting as a
+    // plain LIMIT would silently drop the trigger and change the order's risk
+    // profile without the user asking for that.
+    final isStop = o.variety == OrderVariety.sl;
+    final seed = isStop ? (o.triggerPrice ?? o.price) : o.price;
+    final controller = TextEditingController(text: seed.toStringAsFixed(2));
+    final newPrice = await showDialog<double>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Modify ${o.symbol}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${o.type == OrderType.buy ? 'BUY' : 'SELL'} ${o.quantity} qty — new ${isStop ? 'trigger' : 'limit'} price:',
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: isStop ? 'New trigger price (₹)' : 'New limit price (₹)',
+                prefixText: '₹ ',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(controller.text.trim());
+              if (val != null && val > 0) Navigator.pop(context, val);
+            },
+            child: const Text('Modify'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newPrice == null || !mounted || newPrice == seed) return;
+
+    setState(() => _loading = true);
+    try {
+      final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+      final userId = appScope?.notifier?.user?.uid;
+      if (userId == null) throw Exception('Session expired.');
+
+      final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+      await api.cancelPendingOrder(userId: userId, orderId: o.id);
+      if (!mounted) return;
+
+      await api.placeOrder(
+        userId: userId,
+        symbol: o.symbol,
+        qty: o.quantity,
+        type: o.type == OrderType.buy ? 'BUY' : 'SELL',
+        productType: o.product.name.toUpperCase(),
+        exchange: o.exchange ?? 'NSE',
+        variety: isStop ? 'SL_MARKET' : 'LIMIT',
+        limitPrice: isStop ? null : newPrice,
+        triggerPrice: isStop ? newPrice : null,
+        clientRequestId: '${userId}_${DateTime.now().microsecondsSinceEpoch}_mod',
+      );
+      if (mounted) AppToast.success(context, 'Modified to ₹${newPrice.toStringAsFixed(2)}');
+    } catch (e) {
+      if (mounted) AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _convertToMarket() async {
+    if (_loading) return;
+    final ltp = widget.store?.lastValidLtp(o.symbol) ?? 0;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Convert to Market'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${o.type == OrderType.buy ? 'BUY' : 'SELL'} ${o.quantity} × ${o.symbol}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            if (ltp > 0) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F5F5),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, size: 14, color: AppColors.textSecondary),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Current Price: ₹${ltp.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ] else
+              const SizedBox(height: 10),
+            const Text(
+              'Will execute immediately at best available market price.',
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Convert')),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _loading = true);
+    try {
+      final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+      final userId = appScope?.notifier?.user?.uid;
+      if (userId == null) throw Exception('Session expired.');
+
+      final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+      await api.cancelPendingOrder(userId: userId, orderId: o.id);
+      if (!mounted) return;
+
+      await api.placeOrder(
+        userId: userId,
+        symbol: o.symbol,
+        qty: o.quantity,
+        type: o.type == OrderType.buy ? 'BUY' : 'SELL',
+        productType: o.product.name.toUpperCase(),
+        exchange: o.exchange ?? 'NSE',
+        variety: 'MARKET',
+        lockedLtp: ltp > 0 ? ltp : null,
+        clientRequestId: '${userId}_${DateTime.now().microsecondsSinceEpoch}_mkt',
+      );
+      if (mounted) AppToast.success(context, 'Converted to market order');
+    } catch (e) {
+      if (mounted) AppToast.error(context, e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isBuy = order.type == OrderType.buy;
-    final sideColor = isBuy ? const Color(0xFF00C853) : const Color(0xFFD50000);
-    final isPending = order.status == OrderStatus.pending;
-    final isExecuted = order.status == OrderStatus.executed ||
-        order.status == OrderStatus.approved;
+    final isBuy    = o.type == OrderType.buy;
+    final sideColor = isBuy ? AppColors.success : AppColors.danger;
+    final sideBg    = isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
 
-    Color statusBg, statusFg;
-    String statusLabel;
-    switch (order.status) {
-      case OrderStatus.approved:
-      case OrderStatus.executed:
-        statusBg = const Color(0xFFE8F5E9);
-        statusFg = const Color(0xFF2E7D32);
-        statusLabel = 'Executed';
-        break;
-      case OrderStatus.rejected:
-        statusBg = const Color(0xFFFFEBEE);
-        statusFg = const Color(0xFFC62828);
-        statusLabel = 'Rejected';
-        break;
-      case OrderStatus.cancelled:
-        statusBg = const Color(0xFFF5F5F5);
-        statusFg = const Color(0xFF616161);
-        statusLabel = 'Cancelled';
-        break;
-      case OrderStatus.partiallyExecuted:
-        statusBg = const Color(0xFFFFF8E1);
-        statusFg = const Color(0xFFF57F17);
-        statusLabel = 'Partial';
-        break;
+    // Status-based left bar color
+    final Color barColor;
+    switch (o.status) {
       case OrderStatus.pending:
-        statusBg = const Color(0xFFFFF8E1);
-        statusFg = const Color(0xFFF57F17);
-        statusLabel = 'Pending';
+        barColor = const Color(0xFF1565C0);
+      case OrderStatus.executed:
+      case OrderStatus.approved:
+        final pnl = o.pnl ?? 0;
+        barColor = pnl > 0 ? AppColors.success : (pnl < 0 ? AppColors.danger : const Color(0xFFFF9800));
+      case OrderStatus.cancelled:
+        barColor = const Color(0xFF9E9E9E);
+      case OrderStatus.rejected:
+        barColor = AppColors.danger;
+      case OrderStatus.partiallyExecuted:
+        barColor = const Color(0xFFFF9800);
     }
 
-    final pnl = order.pnl;
+    final isExecuted = o.status == OrderStatus.executed || o.status == OrderStatus.approved;
+    final pnl = o.pnl;
     final hasPnl = pnl != null && pnl != 0;
-    final pnlPositive = (pnl ?? 0) >= 0;
+    final execTime = o.executedAt ?? o.dateTime;
 
     return IntrinsicHeight(
       child: Container(
-        constraints: const BoxConstraints(minHeight: 72),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE0E0E0)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.border),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -413,196 +588,134 @@ class _OrderCard extends StatelessWidget {
             Container(
               width: 3,
               decoration: BoxDecoration(
-                color: sideColor,
+                color: barColor,
                 borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(12),
-                  bottomLeft: Radius.circular(12),
+                  topLeft: Radius.circular(10),
+                  bottomLeft: Radius.circular(10),
                 ),
               ),
             ),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Row 1: Symbol + cancel/time
+                    // Row 1: side badge + symbol + time/status
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          children: [
-                            Text(
-                              order.symbol,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF0D0D0D),
-                              ),
-                            ),
-                            if (order.isAutoSquareOff) ...[
-                              const SizedBox(width: 6),
-                              _chip(
-                                'Auto SQ-OFF',
-                                const Color(0xFFFFF3E0),
-                                const Color(0xFFE65100),
-                              ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(color: sideBg, borderRadius: BorderRadius.circular(5)),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(isBuy ? Icons.arrow_upward : Icons.arrow_downward, size: 9, color: sideColor),
+                              const SizedBox(width: 2),
+                              Text(isBuy ? 'BUY' : 'SELL', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: sideColor)),
                             ],
-                          ],
+                          ),
                         ),
-                        Row(
-                          children: [
-                            if (isPending)
-                              GestureDetector(
-                                onTap: () => _cancelOrder(context, order.id),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.surface,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: const Color(0xFFD50000),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Cancel',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFFD50000),
-                                    ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            o.symbol,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (o.isAutoSquareOff)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: _chip('Auto SQ', const Color(0xFFFFF3E0), const Color(0xFFE65100)),
+                          ),
+                        Text(
+                          DateFormat(isExecuted ? 'HH:mm:ss' : 'HH:mm').format(execTime),
+                          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+
+                    // Row 2: qty + price + product
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(
+                                '${o.executedQuantity ?? o.quantity} qty',
+                                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                              ),
+                              Text('·', style: TextStyle(color: AppColors.border)),
+                              if (isExecuted && o.executedPrice != null && o.executedPrice != o.price) ...[
+                                Text(
+                                  '₹${o.price.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, decoration: TextDecoration.lineThrough),
+                                ),
+                                Text(
+                                  '₹${o.executedPrice!.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                                ),
+                              ] else
+                                Text(
+                                  '₹${(o.executedPrice ?? o.price).toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: isExecuted ? FontWeight.w500 : FontWeight.w400,
+                                    color: isExecuted ? AppColors.textPrimary : AppColors.textSecondary,
                                   ),
                                 ),
-                              ),
-                            if (isPending) const SizedBox(width: 8),
-                            Text(
-                              DateFormat('HH:mm').format(order.dateTime),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF757575),
-                              ),
-                            ),
-                          ],
+                              Text('·', style: TextStyle(color: AppColors.border)),
+                              _chip(o.product.name.toUpperCase(), const Color(0xFFF3F3F3), AppColors.textSecondary),
+                              if (o.variety != OrderVariety.market)
+                                _chip(_varietyLabel(o.variety), const Color(0xFFF3E5F5), const Color(0xFF6A1B9A)),
+                              if (o.triggerPrice != null && o.triggerPrice! > 0)
+                                _chip(
+                                  'Trg ₹${o.triggerPrice!.toStringAsFixed(2)}',
+                                  const Color(0xFFFFF3E0),
+                                  const Color(0xFFE65100),
+                                ),
+                              if (o.exchange?.isNotEmpty == true)
+                                _chip(o.exchange!, const Color(0xFFF3F3F3), AppColors.textSecondary),
+                            ],
+                          ),
                         ),
+                        // P&L on the right
+                        if (hasPnl) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            '${(pnl >= 0) ? '+' : '−'}₹${pnl.abs().toStringAsFixed(2)}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: pnl >= 0 ? AppColors.success : AppColors.danger,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    // Row 2: Chips
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: [
-                        _chip(
-                          order.product.name.toUpperCase(),
-                          const Color(0xFFE3F2FD),
-                          const Color(0xFF1565C0),
-                        ),
-                        _chip(
-                          order.variety.name.toUpperCase(),
-                          const Color(0xFFF3E5F5),
-                          const Color(0xFF6A1B9A),
-                        ),
-                        if (order.exchange?.isNotEmpty == true)
-                          _chip(
-                            order.exchange!,
-                            const Color(0xFFE8F5E9),
-                            const Color(0xFF2E7D32),
-                          ),
-                        _chip(statusLabel, statusBg, statusFg),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    // Row 3: Side + qty + price(s)
-                    Row(
-                      children: [
-                        Text(
-                          isBuy ? 'Buy' : 'Sell',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: sideColor,
-                          ),
-                        ),
-                        Text(
-                          ' · ${order.executedQuantity ?? order.quantity} qty',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF757575),
-                          ),
-                        ),
-                        if (isExecuted) ...[
-                          Text(
-                            '  ·  ₹${order.price.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF9E9E9E),
-                            ),
-                          ),
-                          const Icon(
-                            Icons.arrow_forward,
-                            size: 11,
-                            color: Color(0xFF9E9E9E),
-                          ),
-                          Text(
-                            ' ₹${(order.executedPrice ?? order.price).toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: Color(0xFF0D0D0D),
-                            ),
-                          ),
-                        ] else
-                          Text(
-                            '  ·  ₹${order.price.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF757575),
-                            ),
-                          ),
-                      ],
-                    ),
-                    // Row 4: Margin / leverage / P&L (only when data is present)
-                    if (order.marginUsed != null ||
-                        order.leverageApplied != null ||
-                        (hasPnl && isExecuted) ||
-                        order.chargesApplied != null) ...[
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 2,
+
+                    // Row 3: Pending order actions
+                    if (widget.isPendingSection) ...[
+                      const SizedBox(height: 8),
+                      Row(
                         children: [
-                          if (order.marginUsed != null &&
-                              order.marginUsed! > 0)
-                            _metaItem(
-                              'Margin',
-                              '₹${order.marginUsed!.toStringAsFixed(0)}',
-                              const Color(0xFF757575),
-                            ),
-                          if (order.leverageApplied != null &&
-                              order.leverageApplied! > 1)
-                            _metaItem(
-                              'Leverage',
-                              '${order.leverageApplied!.toStringAsFixed(0)}x',
-                              const Color(0xFF757575),
-                            ),
-                          if (order.chargesApplied != null &&
-                              order.chargesApplied! > 0)
-                            _metaItem(
-                              'Charges',
-                              '₹${order.chargesApplied!.toStringAsFixed(2)}',
-                              const Color(0xFF757575),
-                            ),
-                          if (hasPnl && isExecuted)
-                            _metaItem(
-                              'P&L',
-                              '${pnlPositive ? '+' : ''}₹${pnl!.toStringAsFixed(2)}',
-                              pnlPositive
-                                  ? const Color(0xFF2E7D32)
-                                  : const Color(0xFFC62828),
-                            ),
+                          _actionBtn('Modify', LucideIcons.pencil, const Color(0xFF1565C0), _loading ? null : _modify),
+                          const SizedBox(width: 6),
+                          _actionBtn('Cancel', LucideIcons.x, AppColors.danger, _loading ? null : _cancel),
+                          const SizedBox(width: 6),
+                          _actionBtn('→ Market', LucideIcons.zap, const Color(0xFF6A1B9A), _loading ? null : _convertToMarket),
+                          if (_loading) ...[
+                            const Spacer(),
+                            const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                          ],
                         ],
                       ),
                     ],
@@ -616,301 +729,37 @@ class _OrderCard extends StatelessWidget {
     );
   }
 
-  Widget _chip(String label, Color bg, Color text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: text,
+  Widget _chip(String label, Color bg, Color fg) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5)),
+    child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: fg)),
+  );
+
+  static String _varietyLabel(OrderVariety v) => switch (v) {
+    OrderVariety.sl => 'SL',
+    OrderVariety.amo => 'AMO',
+    OrderVariety.iceberg => 'ICEBERG',
+    _ => 'LIMIT',
+  };
+
+  Widget _actionBtn(String label, IconData icon, Color color, VoidCallback? onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
         ),
-      ),
-    );
-  }
-
-  Widget _metaItem(String label, String value, Color valueColor) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          '$label: ',
-          style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
-        ),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: valueColor,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Trade Book Tab — delegates to TradeHistoryScreen ─────────────────────────
-
-class _TradeBookTab extends StatelessWidget {
-  const _TradeBookTab();
-
-  @override
-  Widget build(BuildContext context) => const TradeHistoryScreen();
-}
-
-class _TradeCard extends StatelessWidget {
-  final Order order;
-  const _TradeCard({required this.order});
-
-  @override
-  Widget build(BuildContext context) {
-    final isBuy = order.type == OrderType.buy;
-    final sideColor = isBuy ? const Color(0xFF00C853) : const Color(0xFFD50000);
-    final sideBg = isBuy ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
-    final execTime = order.executedAt ?? order.dateTime;
-    final avgPrice = order.executedPrice ?? order.price;
-    final pnl = order.pnl;
-    final hasPnl = pnl != null && pnl != 0;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE0E0E0)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        children: [
-          // Time
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                DateFormat('HH:mm:ss').format(execTime),
-                style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
-              ),
-              if (order.isAutoSquareOff)
-                const Text(
-                  'Auto SQ',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Color(0xFFE65100),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(width: 10),
-          // BUY/SELL chip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: sideBg,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              isBuy ? 'BUY' : 'SELL',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: sideColor,
-              ),
-            ),
-          ),
-          if (order.exchange?.isNotEmpty == true) ...[
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5F5F5),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                order.exchange!,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF555555),
-                ),
-              ),
-            ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: color),
+            const SizedBox(width: 4),
+            Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
           ],
-          const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    order.symbol,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF0D0D0D),
-                    ),
-                  ),
-                  if (order.product != ProductType.mis) ...[
-                    const SizedBox(width: 4),
-                    Text(
-                      order.product.name.toUpperCase(),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF1565C0),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              Text(
-                '${order.executedQuantity ?? order.quantity} qty · ₹${avgPrice.toStringAsFixed(2)}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF757575)),
-              ),
-              if (hasPnl)
-                Text(
-                  '${(pnl! >= 0) ? '+' : ''}₹${pnl.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: pnl >= 0
-                        ? const Color(0xFF2E7D32)
-                        : const Color(0xFFC62828),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Open Orders Tab (pending only) ──────────────────────────────────────────
-
-class _OpenOrdersTab extends StatelessWidget {
-  const _OpenOrdersTab();
-
-  @override
-  Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final pending =
-        store.orders.where((o) => o.status == OrderStatus.pending).toList()
-          ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
-
-    if (pending.isEmpty) {
-      return _emptyState('No open orders');
-    }
-
-    return ListView.separated(
-      padding: EdgeInsets.fromLTRB(16, 16, 16, TradingBottomNavBar.bottomInset(context)),
-      itemCount: pending.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, index) => _PendingOrderCard(order: pending[index]),
-    );
-  }
-}
-
-class _PendingOrderCard extends StatelessWidget {
-  final Order order;
-  const _PendingOrderCard({required this.order});
-
-  Future<void> _cancelOrder(BuildContext context, String orderId) async {
-    final appScope = context.dependOnInheritedWidgetOfExactType<AppScope>();
-    if (appScope != null) {
-      try {
-        await appScope.tradingService.cancelOrder(orderId);
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Order cancelled')));
-      } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Cancellation failed: $e'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-      return;
-    }
-    TradingScope.of(context).cancelOrder(orderId);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isBuy = order.type == OrderType.buy;
-    final color = isBuy ? AppColors.success : AppColors.danger;
-
-    return CustomCard(
-      child: Row(
-        children: [
-          Container(
-            width: 4,
-            height: 48,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        order.symbol,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    StatusBadge(
-                      label: order.variety.name,
-                      color: AppColors.primary,
-                    ),
-                    const SizedBox(width: 6),
-                    StatusBadge(label: 'PENDING', color: AppColors.warning),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${order.product.name.toUpperCase()} • ${order.quantity} qty @ ₹${order.price.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            DateFormat('HH:mm').format(order.dateTime),
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(LucideIcons.x, size: 16, color: AppColors.danger),
-            onPressed: () => _cancelOrder(context, order.id),
-            tooltip: 'Cancel',
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -930,7 +779,7 @@ class _AutoSquareOffBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.07),
+        color: color.withValues(alpha: 0.07),
         border: const Border(bottom: BorderSide(color: Color(0x33B71C1C))),
       ),
       child: Row(
@@ -941,10 +790,8 @@ class _AutoSquareOffBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: const TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w700)),
-                Text(message,
-                    style: const TextStyle(fontSize: 11, color: color)),
+                Text(title, style: const TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w700)),
+                Text(message, style: const TextStyle(fontSize: 11, color: color)),
               ],
             ),
           ),
@@ -956,19 +803,4 @@ class _AutoSquareOffBanner extends StatelessWidget {
       ),
     );
   }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-Widget _emptyState(String message) {
-  return Center(
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(LucideIcons.inbox, size: 48, color: AppColors.border),
-        const SizedBox(height: 16),
-        Text(message, style: const TextStyle(color: AppColors.textSecondary)),
-      ],
-    ),
-  );
 }

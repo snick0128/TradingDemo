@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../debug/crudeoil_tick_tracer.dart';
 import '../../models/trading_models.dart';
 import '../../services/subscription_manager.dart';
 import '../../widgets/connection_banner.dart';
@@ -30,19 +31,30 @@ class LiveMarketService {
   final Map<String, Stock> _latestMap = {};
   // Start with all known symbols — MCX commodities included.
   // This set is updated by setSubscribedSymbols() as the user navigates.
-  final Set<String> _subscriptions = {
-    // NSE Equities
-    'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK',
-    'SBIN', 'WIPRO', 'AXISBANK', 'BAJFINANCE', 'HINDUNILVR',
-    // MCX Commodities
-    'GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS',
-    'COPPER', 'ZINC', 'LEAD', 'ALUMINIUM', 'NICKEL', 'COTTON',
-  };
+  // Subscription set is managed exclusively by SubscriptionManager.
+  // Start empty — SubscriptionManager.replaceScreenSubscriptions() populates
+  // this after the first _refreshMarketSubscriptions() call in TradingStore.
+  final Set<String> _subscriptions = {};
 
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
   bool _isBackground = false;
   int? _appResumeTimestamp;
+  // Auto-clears _appResumeTimestamp after this duration so permanent clock-skew
+  // cannot block live ticks indefinitely (see setAppResumeTimestamp).
+  Timer? _resumeGateTimer;
+  static const int _resumeGateDurationMs = 15000;
+
+  // ── Tick filter counters ──────────────────────────────────────────────────
+  // Accumulated since last _filterStatsTimer report. Not reset by clearTickProcessingState
+  // (lifecycle resets) — these are session-level totals for observability.
+  int _acceptedTicks           = 0;
+  int _staleRejectedTicks      = 0;
+  int _backgroundRejectedTicks = 0;
+  int _sequenceRejectedTicks   = 0;
+  int _timestampRejectedTicks  = 0;
+  Timer? _filterStatsTimer;
+
   Timer? _reconnectTimer;
   Timer? _moversDebounce;
   Timer? _tickFlushTimer;
@@ -53,10 +65,9 @@ class LiveMarketService {
   Timer? _clockSyncTimer;
   Timer? _deviceReportTimer;
 
-  // ── Tick-batch state ──────────────────────────────────────────────────────
-  // Symbols that received a tick since the last 16 ms flush. A Set ensures
-  // rapid-fire ticks for the same symbol within one frame are deduplicated.
-  final Set<String> _pendingSymbols = {};
+  // ── Tick-batch state ─────────────────────────────────────────────────────
+  // Previously used for 16ms batching. Now unused — ticks are emitted immediately.
+  final Set<String> _pendingSymbols = {}; // kept for diagnostics reset in clearTickProcessingState
 
   // ── Batch diagnostics (raw counters, reset every second) ─────────────────
   int _diagMessagesReceived = 0; // WS tick messages received
@@ -90,6 +101,10 @@ class LiveMarketService {
   // Same map tracks feed-health: if a symbol that was recently active goes
   // silent for >_feedHealthTimeout we force a re-subscribe to prod the server.
   final Map<String, int>    _lastTickFeedTsBySymbol    = {};
+  // Symbols with replay in progress (first replay tick received → 'replay_complete').
+  // Cleared on every WS reconnect. Used to log [LIVE_DURING_REPLAY] and to
+  // prevent stale replay ticks from rolling back a live price already applied.
+  final Set<String> _activeReplaySymbols = {};
 
   // ── Device-registry: sequence gap tracking ──────────────────────────────────
   // Unique stable device ID — generated once per session (or reused from memory).
@@ -139,7 +154,39 @@ class LiveMarketService {
     'messagesReceivedPerSecond': _diagMessagesPerSec,
     'batchesSentPerSecond':      _diagBatchesPerSec,
     'symbolsPerBatch':           _diagSymbolsPerBatch,
+    'activeWebSocketListeners':  _wsSub == null ? 0 : 1,
+    'activeTimers':              _activeTimerCount,
+    'subscribedSymbols':         _subscriptions.length,
+    // Tick filter stats (accumulated since last 30s report window)
+    'acceptedTicks':             _acceptedTicks,
+    'staleRejectedTicks':        _staleRejectedTicks,
+    'backgroundRejectedTicks':   _backgroundRejectedTicks,
+    'sequenceRejectedTicks':     _sequenceRejectedTicks,
+    'timestampRejectedTicks':    _timestampRejectedTicks,
+    'clockOffsetMs':             _clockOffsetMs,
+    'resumeGateActive':          _appResumeTimestamp != null,
   };
+
+  int get _activeTimerCount => [
+    _reconnectTimer,
+    _moversDebounce,
+    _tickFlushTimer,
+    _heartbeatTimer,
+    _feedHealthTimer,
+    _snapshotRefreshTimer,
+    _traceUploadTimer,
+    _clockSyncTimer,
+    _deviceReportTimer,
+    _diagTimer,
+    _resumeGateTimer,
+    _filterStatsTimer,
+  ].where((timer) => timer?.isActive ?? false).length;
+
+  Set<String> get subscribedSymbolsForDiagnostics =>
+      Set.unmodifiable(_subscriptions);
+
+  /// Current F&O tokens in the persisted subscription — for diagnostics only.
+  List<String> get fnoTokensForDiagnostics => List.unmodifiable(_fnoTokens);
 
   Stream<List<Stock>> get stockUpdates => _stockController.stream;
   Stream<Map<String, List<Stock>>> get moversUpdates => _moversController.stream;
@@ -152,12 +199,9 @@ class LiveMarketService {
     _started = true;
     _deviceId = _generateDeviceId();
     SubscriptionManager.instance.attach(this);
-    // Ensure every traced symbol is also subscribed to the WS feed.
-    // Without this, symbols in _traceSymbols but not in _subscriptions
-    // never receive ticks and produce zero trace data.
-    for (final sym in _traceSymbols) {
-      _subscriptions.add(sym);
-    }
+    // _traceSymbols are NOT injected into _subscriptions here — SubscriptionManager
+    // is the sole owner of that set. Trace symbols receive ticks only when
+    // SubscriptionManager independently subscribes them (e.g., user watchlist includes NIFTY).
     await _bootstrapSnapshot();
     _connectWs();
     // Measure clock offset immediately, then re-measure every 5 minutes.
@@ -193,6 +237,29 @@ class LiveMarketService {
       _diagMessagesReceived = 0;
       _diagBatchesSent      = 0;
       _diagSymbolsTotal     = 0;
+    });
+    // Tick filter stats: log cumulative counters every 30 s then reset.
+    _filterStatsTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!_started || _disposed) return;
+      final total = _acceptedTicks + _staleRejectedTicks +
+          _backgroundRejectedTicks + _sequenceRejectedTicks +
+          _timestampRejectedTicks;
+      debugPrint(
+        '[TICK_FILTER_STATS] '
+        'accepted=$_acceptedTicks '
+        'staleRejected=$_staleRejectedTicks '
+        'backgroundRejected=$_backgroundRejectedTicks '
+        'sequenceRejected=$_sequenceRejectedTicks '
+        'timestampRejected=$_timestampRejectedTicks '
+        'total=$total '
+        'clockOffset=${_clockOffsetMs.toStringAsFixed(1)}ms '
+        'resumeGateActive=${_appResumeTimestamp != null}',
+      );
+      _acceptedTicks           = 0;
+      _staleRejectedTicks      = 0;
+      _backgroundRejectedTicks = 0;
+      _sequenceRejectedTicks   = 0;
+      _timestampRejectedTicks  = 0;
     });
   }
 
@@ -336,12 +403,26 @@ class LiveMarketService {
   }
 
   void setSubscribedSymbols(Iterable<String> symbols) {
+    final newSet = symbols
+        .map((s) => s.trim().toUpperCase())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    // [WS_UNSUBSCRIBE] — symbols being dropped from the active WS subscription.
+    final removed = _subscriptions.difference(newSet);
+    if (removed.isNotEmpty) {
+      final buf = StringBuffer('[WS_UNSUBSCRIBE]\n');
+      buf.writeln('count=${removed.length}');
+      buf.writeln('symbols=[');
+      for (final s in removed.toList()..sort()) buf.writeln('  $s,');
+      buf.writeln(']');
+      debugPrint(buf.toString());
+    }
+
     _subscriptions
       ..clear()
-      ..addAll(
-        symbols.map((s) => s.trim().toUpperCase()).where((s) => s.isNotEmpty),
-      );
-    _sendSubscribe();
+      ..addAll(newSet);
+    _sendSubscribe(source: 'manual');
   }
 
   void stop() {
@@ -355,6 +436,10 @@ class LiveMarketService {
     _pendingSymbols.clear();
     _diagTimer?.cancel();
     _diagTimer = null;
+    _filterStatsTimer?.cancel();
+    _filterStatsTimer = null;
+    _resumeGateTimer?.cancel();
+    _resumeGateTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     _feedHealthTimer?.cancel();
@@ -401,11 +486,27 @@ class LiveMarketService {
 
   void setAppResumeTimestamp(int ts) {
     _appResumeTimestamp = ts;
-    debugPrint('[LiveMarketService] setAppResumeTimestamp($ts)');
+    debugPrint('[RESUME_GATE] resumeTs=$ts clockOffset=${_clockOffsetMs.toStringAsFixed(1)}ms');
+    // Auto-clear the gate after _resumeGateDurationMs so a persistent clock skew
+    // between backend and client cannot block live ticks indefinitely.
+    // The closure captures [ts] so a subsequent resume cannot clear a newer gate.
+    _resumeGateTimer?.cancel();
+    _resumeGateTimer = Timer(
+      Duration(milliseconds: _resumeGateDurationMs),
+      () {
+        if (_appResumeTimestamp == ts) {
+          _appResumeTimestamp = null;
+          debugPrint('[RESUME_GATE_CLEARED] gateTs=$ts expiredAfter=${_resumeGateDurationMs}ms');
+        }
+      },
+    );
   }
 
   void disconnectWsOnly() {
-    debugPrint('[LiveMarketService] disconnectWsOnly()');
+    debugPrint(
+      '[WS_DISCONNECTED] reason=app_background '
+      'subscriptions=${_subscriptions.length}',
+    );
     _wsSub?.cancel();
     _wsSub = null;
     try { _channel?.sink.close(); } catch (_) {}
@@ -419,6 +520,7 @@ class LiveMarketService {
     _lastEmittedLtpBySymbol.clear();
     _lastTickTsBySymbol.clear();
     _lastTickFeedTsBySymbol.clear();
+    _activeReplaySymbols.clear();
     _seqGaps.clear();
     _seqLtpMap.clear();
     _totalReceived.clear();
@@ -435,7 +537,10 @@ class LiveMarketService {
   }
 
   void reconnectWsOnly() {
-    debugPrint('[LiveMarketService] reconnectWsOnly()');
+    debugPrint(
+      '[WS_RECONNECTED] reason=app_resume '
+      'subscriptions=${_subscriptions.length}',
+    );
     if (!_started || _disposed) return;
     _reconnectAttempt = 0;
     _reconnectTimer?.cancel();
@@ -504,6 +609,8 @@ class LiveMarketService {
     _lastTickTsBySymbol.clear();
 
     final wsUrl = _toWsUrl(_api.baseUrl);
+    debugPrint('[WS_CREATED] source=LiveMarketService generation=$_wsGeneration '
+        'url=$wsUrl managedSubscriptions=${_subscriptions.length}');
     try {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _wsSub = _channel!.stream.listen(
@@ -518,14 +625,20 @@ class LiveMarketService {
         },
         cancelOnError: true,
       );
-      _sendSubscribe();
+      _sendSubscribe(source: generation > 1 ? 'reconnect' : 'connect');
       _sendFnoSubscribe(); // re-subscribe F&O option tokens after every reconnect
+      // Re-subscribe chart candle streams that were active before disconnect.
+      _activeCandleSubscriptions.forEach(_sendCandleSubscribe);
       _sendUserRegister();
       _startHeartbeat();
       _startFeedHealthWatchdog();
       _startSnapshotRefresh();
       _setError(false, '');
       _reconnectAttempt = 0;
+      debugPrint(
+        '[${generation > 1 ? "WS_RECONNECTED" : "WS_CONNECTED"}] '
+        'generation=$generation subscriptions=${_subscriptions.length}',
+      );
       _emitConnState(WsConnectionStatus.connected);
     } catch (e) {
       _onWsError('Could not connect to the live market feed. Retrying…');
@@ -548,6 +661,7 @@ class LiveMarketService {
         return;
       }
       channel.sink.add(jsonEncode({'type': 'ping'}));
+      debugPrint('[HEARTBEAT_SENT] gen=$gen ts=${DateTime.now().millisecondsSinceEpoch}');
     });
   }
 
@@ -573,7 +687,20 @@ class LiveMarketService {
         }
       }
       if (staleSymbols.isNotEmpty && _subscriptions.isNotEmpty) {
-        _sendSubscribe(); // re-subscribe all — cheapest server-side refresh
+        // Log per-symbol so we can correlate with tick traces.
+        for (final sym in staleSymbols) {
+          final lastAge = now - (_lastTickFeedTsBySymbol[sym] ?? 0);
+          debugPrint(
+            '[WATCHDOG_FIRE] symbol=$sym '
+            'lastTickAgeMs=$lastAge '
+            'lastSeq=${_lastSeqBySymbol[sym] ?? 0} '
+            'connectionGeneration=$_wsGeneration',
+          );
+        }
+        // Request a fresh HTTP snapshot — do NOT call _sendSubscribe or
+        // reconnectWsOnly. Either would include a lastSeq map that triggers
+        // server-side replay, creating a watchdog → replay → watchdog loop.
+        fetchFreshSnapshot();
       }
     });
   }
@@ -599,6 +726,7 @@ class LiveMarketService {
   void _onWsMessage(dynamic message) {
     if (_isBackground) {
       // Ignore ticks received while app was in background
+      _backgroundRejectedTicks++;
       return;
     }
     // Capture receive timestamp before any processing — this is stage "client_rx".
@@ -608,14 +736,57 @@ class LiveMarketService {
       final type = m['type']?.toString();
       if (type == 'pong') {
         _lastPongTime = DateTime.now();
+        debugPrint('[HEARTBEAT_RECEIVED] ts=${_lastPongTime!.millisecondsSinceEpoch}');
         return;
       }
       if (type == 'snapshot') {
+        // Use the snapshot envelope timestamp as the freshness reference.
+        // The backend sets ts=Date.now() at the moment the snapshot is serialised,
+        // which is comparable to the broadcastEntryTs stored in _lastTickTsBySymbol.
+        final snapshotTs = (m['ts'] as num?)?.toInt() ?? 0;
         final rows =
             (m['data'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        int accepted = 0;
+        int skipped  = 0;
         for (final row in rows) {
           final stock = _mapToStock(row);
-          if (stock != null) _latestMap[stock.symbol] = stock;
+          if (stock == null) continue;
+          final sym = stock.symbol;
+          // Guard: reject snapshot rows that are older than (or same-age as) the
+          // last live tick we accepted for this symbol. Without this, the 30-second
+          // periodic snapshot refresh silently overwrites a newer live-tick price,
+          // producing a price rollback that persists until the next real tick.
+          // Only apply when snapshotTs is non-zero AND we already have a tick for
+          // this symbol — on the first snapshot after reconnect _lastTickTsBySymbol
+          // is empty, so all rows are accepted regardless.
+          if (snapshotTs > 0) {
+            final lastTs = _lastTickTsBySymbol[sym] ?? 0;
+            if (lastTs > 0 && snapshotTs <= lastTs) {
+              skipped++;
+              continue;
+            }
+            // Record snapshot timestamp so future ticks with ts<=snapshotTs are
+            // also rejected (prevents replay ticks sent between snapshot request
+            // and snapshot response from being double-applied).
+            _lastTickTsBySymbol[sym] = snapshotTs;
+          }
+          // Phase 2: log when a stale snapshot price overwrites _latestMap.
+          // stale=true means liveDataHub has not received a fresh Angel One tick
+          // for > 5 s — the price being applied may be wrong.
+          if (stock.isStale) {
+            debugPrint(
+              '[TICK_STALE_ACCEPTED] symbol=$sym snapshotTs=$snapshotTs '
+              'ltp=${stock.currentPrice} source=snapshot gen=$_wsGeneration',
+            );
+          }
+          _latestMap[sym] = stock;
+          accepted++;
+        }
+        if (skipped > 0) {
+          debugPrint(
+            '[SNAPSHOT_STALE] snapshotTs=$snapshotTs '
+            'accepted=$accepted skipped=$skipped — stale rows not applied',
+          );
         }
         _emitStocks();
         _emitMovers();
@@ -624,57 +795,237 @@ class LiveMarketService {
       }
       if (type == 'tick') {
         final symbol = (m['symbol'] as String? ?? '').toUpperCase();
-        // Reject ticks if they were generated before the app was resumed.
+        // Resume gate: reject ticks broadcast before the app was resumed.
+        // IMPORTANT: correct for server-client clock skew before comparing.
+        // _clockOffsetMs > 0 means client is ahead of server by that many ms.
+        // Adjusting ts by +_clockOffsetMs maps the backend timestamp into
+        // the client's clock domain before comparing against _appResumeTimestamp.
         final ts = (m['ts'] as num?)?.toInt() ?? 0;
-        if (_appResumeTimestamp != null && ts > 0 && ts < _appResumeTimestamp!) {
-          debugPrint('[LiveMarketService] Rejecting background/stale tick for $symbol (ts=$ts < resume=$_appResumeTimestamp)');
-          return;
+        // Replay ticks are explicitly requested gap-fills (server responded to our
+        // lastSeq map on reconnect). They are NOT accidental WS-buffer residuals.
+        // They bypass the resume gate and both timestamp guards because:
+        //   • Their outer ts is the ORIGINAL broadcast time (intentionally old).
+        //   • Their exchangeTs is historical and will always precede live ticks.
+        // Live-tick freshness cursors (_lastTickTsBySymbol, _monoExchangeTs) are
+        // updated ONLY by live ticks to prevent replay from contaminating them.
+        final bool _isReplayedTick = m['replayed'] == true;
+        if (!_isReplayedTick && _appResumeTimestamp != null && ts > 0) {
+          final adjustedTs = ts + _clockOffsetMs.round();
+          final isStale = adjustedTs < _appResumeTimestamp!;
+          if (isStale) {
+            _staleRejectedTicks++;
+            return;
+          }
         }
-        // Sequence-number dedup: reject retransmitted or reordered messages.
-        // replayed ticks (from gap-fill) have seq > lastSeq so they pass through.
+        // ── GUARD 1: sequence dedup (validation only — no state mutation yet) ──────
+        // Seq advancement is deliberately deferred to AFTER all timestamp guards.
+        // Advancing seq before a timestamp rejection was the root cause of the
+        // replay-stream corruption bug (seqAdvancedBeforeRejection=true in logs).
         final seq = (m['seq'] as num?)?.toInt() ?? 0;
+        // _seqAdvancedForThisTick is set true only once all guards pass and seq
+        // state is committed.  In any rejection path it stays false — the
+        // [TICK_SEQ_ROLLBACK_GUARD] diagnostic fires if that invariant breaks.
+        bool _seqAdvancedForThisTick = false;
         if (symbol.isNotEmpty && seq > 0) {
           final lastSeq = _lastSeqBySymbol[symbol] ?? 0;
-          if (seq <= lastSeq) return;
-          // Sequence gap detection: record if we skipped one or more seq numbers.
-          if (lastSeq > 0 && seq > lastSeq + 1) {
+          if (seq <= lastSeq) {
+            // Server-restart detection: if seq resets to near 1 while we hold a
+            // large lastSeq, the backend restarted and its symbolTickSeq map was
+            // zeroed. Reset our tracking so new ticks are accepted instead of
+            // being silently dropped until the next app-level reconnect.
+            // This removal is safe even if the tick is later rejected by a
+            // timestamp guard — future ticks will start fresh from a clean slate.
+            if (seq <= 5 && lastSeq > 50) {
+              debugPrint(
+                '[SEQ_RESET_DETECTED] symbol=$symbol lastSeq=$lastSeq newSeq=$seq '
+                '— backend restart assumed, resetting sequence tracking',
+              );
+              _lastSeqBySymbol.remove(symbol);
+              // fall through — continue to timestamp guards
+            } else {
+              // Temporary diagnostic: replay ticks should only be rejected here
+              // (seq dedup). If this fires post-fix, the server is replaying an
+              // already-processed seq — normal and expected on double-reconnect.
+              if (_isReplayedTick) {
+                debugPrint(
+                  '[REPLAY_REJECTED] symbol=$symbol seq=$seq '
+                  'reason=seq_dedup lastSeq=$lastSeq gen=$_wsGeneration',
+                );
+              }
+              _sequenceRejectedTicks++;
+              return;
+            }
+          }
+          // Gap detection is recorded only after all guards pass (see below).
+        }
+
+        // ── GUARD 2: broadcast-timestamp dedup (live ticks only) ──────────────────
+        // Rejects stale live ticks from a buffered WS pipeline after a reconnect.
+        // Replay ticks bypass entirely: ts is their original broadcast time, which
+        // is always older than the live ticks received post-reconnect.
+        // _lastTickTsBySymbol is updated ONLY here (live path) so replay cannot
+        // corrupt the freshness cursor used to filter future live ticks.
+        if (!_isReplayedTick && ts > 0 && symbol.isNotEmpty) {
+          final lastTs = _lastTickTsBySymbol[symbol] ?? 0;
+          if (ts < lastTs) {
+            _timestampRejectedTicks++;
+            final _rejRow = m['data'] as Map<String, dynamic>?;
+            final _rejLtp = (_rejRow?['ltp'] as num?)?.toDouble() ?? 0.0;
+            final _rejEts = (_rejRow?['exchangeTs'] as num?)?.toInt() ?? 0;
+            // Regression guard: seq must NOT have been advanced before this rejection.
+            if (_seqAdvancedForThisTick) {
+              debugPrint(
+                '[TICK_SEQ_ROLLBACK_GUARD] symbol=$symbol seq=$seq '
+                'guard=broadcastTs — seq was advanced before rejection (bug!)',
+              );
+              assert(false, 'TICK_SEQ_ROLLBACK_GUARD: seq advanced before ts rejection');
+            }
+            debugPrint(
+              '[TICK_TS_REJECTED] symbol=$symbol seq=$seq '
+              'tickTs=$ts lastTs=$lastTs diff=${lastTs - ts}ms '
+              'ltp=$_rejLtp isReplayed=false '
+              'seqAdvancedBeforeRejection=$_seqAdvancedForThisTick '
+              'gen=$_wsGeneration',
+            );
+            CrudeoilTickTracer.instance.checkCorruption(
+              symbol: symbol,
+              ltp: _rejLtp,
+              exchangeTs: _rejEts,
+              seq: seq,
+              clientReceiveTs: clientReceiveTs,
+              accepted: false,
+              isReplayed: false,
+              seqAdvancedBeforeRejection: _seqAdvancedForThisTick,
+            );
+            if (symbol == 'CRUDEOIL') {
+              CrudeoilTickTracer.instance.record(TickRecord(
+                tickId:                    CrudeoilTickTracer.instance.nextId,
+                symbol:                    symbol,
+                ltp:                       _rejLtp,
+                seq:                       seq,
+                exchangeTs:                _rejEts,
+                brokerTs:                  ts,
+                backendReceiveTs:
+                    (_rejRow?['backendReceiveTs'] as num?)?.toInt() ?? 0,
+                hubEntryTs:
+                    (_rejRow?['hubEntryTs'] as num?)?.toInt() ?? 0,
+                hubExitTs:
+                    (_rejRow?['hubExitTs'] as num?)?.toInt() ?? 0,
+                broadcastTs:               ts,
+                clientReceiveTs:           clientReceiveTs,
+                storeEntryTs:              0,
+                storeExitTs:               0,
+                paintTs:                   0,
+                connectionId:              'gen_$_wsGeneration',
+                source:                    'live',
+                wasRejected:               true,
+                rejectionReason:           'ts',
+                isReplayed:                false,
+                seqAdvancedBeforeRejection: _seqAdvancedForThisTick,
+              ));
+            }
+            return; // strictly older — drop
+          }
+          _lastTickTsBySymbol[symbol] = ts;
+        }
+
+        // ── GUARD 3: monotonic exchangeTs guard (live ticks only) ─────────────────
+        // Rejects live ticks whose Angel One exchange timestamp went backward.
+        // Replay ticks bypass entirely: their exchangeTs is historical and will
+        // always precede live ticks accepted after reconnect.
+        // _monoExchangeTs is updated ONLY by checkMonotonicExchangeTs on the live
+        // path so replay cannot corrupt the monotonic baseline.
+        if (!_isReplayedTick) {
+          final _p5Row = m['data'] as Map<String, dynamic>?;
+          final _p5Ets = (_p5Row?['exchangeTs'] as num?)?.toInt() ?? 0;
+          if (symbol.isNotEmpty && _p5Ets > 0) {
+            final _monoOk =
+                CrudeoilTickTracer.instance.checkMonotonicExchangeTs(symbol, _p5Ets);
+            if (!_monoOk) {
+              _timestampRejectedTicks++;
+              final _rejLtp2 = (_p5Row?['ltp'] as num?)?.toDouble() ?? 0.0;
+              // Regression guard: seq must NOT have been advanced before this rejection.
+              if (_seqAdvancedForThisTick) {
+                debugPrint(
+                  '[TICK_SEQ_ROLLBACK_GUARD] symbol=$symbol seq=$seq '
+                  'guard=exchangeTs_mono — seq was advanced before rejection (bug!)',
+                );
+                assert(false, 'TICK_SEQ_ROLLBACK_GUARD: seq advanced before exchangeTs rejection');
+              }
+              if (symbol == 'CRUDEOIL') {
+                CrudeoilTickTracer.instance.record(TickRecord(
+                  tickId:                    CrudeoilTickTracer.instance.nextId,
+                  symbol:                    symbol,
+                  ltp:                       _rejLtp2,
+                  seq:                       seq,
+                  exchangeTs:                _p5Ets,
+                  brokerTs:                  ts,
+                  backendReceiveTs:
+                      (_p5Row?['backendReceiveTs'] as num?)?.toInt() ?? 0,
+                  hubEntryTs:
+                      (_p5Row?['hubEntryTs'] as num?)?.toInt() ?? 0,
+                  hubExitTs:
+                      (_p5Row?['hubExitTs'] as num?)?.toInt() ?? 0,
+                  broadcastTs:               ts,
+                  clientReceiveTs:           clientReceiveTs,
+                  storeEntryTs:              0,
+                  storeExitTs:               0,
+                  paintTs:                   0,
+                  connectionId:              'gen_$_wsGeneration',
+                  source:                    'live',
+                  wasRejected:               true,
+                  rejectionReason:           'exchangeTs_mono',
+                  isReplayed:                false,
+                  seqAdvancedBeforeRejection: _seqAdvancedForThisTick,
+                ));
+              }
+              return; // exchangeTs regression — drop
+            }
+          }
+        }
+
+        // ── ALL GUARDS PASSED — commit sequence state ─────────────────────────────
+        // Sequence advancement and gap recording happen here, AFTER every validation
+        // guard, so that a rejected tick never inflates _lastSeqBySymbol or the
+        // SubscriptionManager's replay cursor.
+        if (symbol.isNotEmpty && seq > 0) {
+          final lastSeqNow = _lastSeqBySymbol[symbol] ?? 0;
+          // Gap detection: record skipped seq numbers now that this tick is accepted.
+          if (lastSeqNow > 0 && seq > lastSeqNow + 1) {
             final gaps = _seqGaps.putIfAbsent(symbol, () => []);
             if (gaps.length >= _maxSeqGapsPerSymbol) gaps.removeAt(0);
             gaps.add({
-              'expected': lastSeq + 1,
+              'expected': lastSeqNow + 1,
               'received': seq,
               'at':       DateTime.now().millisecondsSinceEpoch,
             });
-            _totalDropped[symbol] = (_totalDropped[symbol] ?? 0) + (seq - lastSeq - 1);
+            _totalDropped[symbol] = (_totalDropped[symbol] ?? 0) + (seq - lastSeqNow - 1);
           }
           _totalReceived[symbol] = (_totalReceived[symbol] ?? 0) + 1;
           _lastSeqBySymbol[symbol] = seq;
-          // Track seq in SubscriptionManager for next reconnect's lastSeq map
+          // Track seq in SubscriptionManager for next reconnect's lastSeq map.
+          // This is now safe: the tick is fully accepted before the cursor advances.
           SubscriptionManager.instance.onTickSeq(symbol, seq);
-        }
-        // Record seq→ltp for cross-device LTP comparison at the backend.
-        if (symbol.isNotEmpty && seq > 0) {
-          final row2 = m['data'] as Map<String, dynamic>?;
-          final ltpForSeq = (row2?['ltp'] as num?)?.toDouble();
-          if (ltpForSeq != null && ltpForSeq > 0) {
+          _seqAdvancedForThisTick = true;
+          // Record seq→ltp for cross-device LTP comparison at the backend.
+          final _seqRow = m['data'] as Map<String, dynamic>?;
+          final _ltpForSeq = (_seqRow?['ltp'] as num?)?.toDouble();
+          if (_ltpForSeq != null && _ltpForSeq > 0) {
             final seqMap = _seqLtpMap.putIfAbsent(symbol, () => {});
-            seqMap[seq] = ltpForSeq;
-            // Keep only the most recent _maxSeqLtpEntries entries
+            seqMap[seq] = _ltpForSeq;
             if (seqMap.length > _maxSeqLtpEntries) {
               final oldest = seqMap.keys.reduce(math.min);
               seqMap.remove(oldest);
             }
           }
         }
-
-        // Timestamp dedup: second guard for out-of-order ticks on reconnect
-        // bursts where seq numbers reset (server restart) but stale ticks
-        // arrive from a buffered WS pipeline.
-        final tickTs = (m['ts'] as num?)?.toInt() ?? 0;
-        if (tickTs > 0 && symbol.isNotEmpty) {
-          final lastTs = _lastTickTsBySymbol[symbol] ?? 0;
-          if (tickTs < lastTs) return; // strictly older — drop
-          _lastTickTsBySymbol[symbol] = tickTs;
+        // Track replay activity for [LIVE_DURING_REPLAY] and stale-price guard.
+        if (_isReplayedTick) {
+          _activeReplaySymbols.add(symbol);
+        } else if (_activeReplaySymbols.contains(symbol)) {
+          debugPrint(
+            '[LIVE_DURING_REPLAY] symbol=$symbol liveSeq=$seq gen=$_wsGeneration',
+          );
         }
         final row = m['data'] as Map<String, dynamic>?;
         if (row == null) return;
@@ -682,10 +1033,19 @@ class LiveMarketService {
         _recordTraceRx(symbol, m, row, clientReceiveTs);
         Stock? stock = _mapToStock(row);
         if (stock == null) return;
+        // Guard: if this replay tick's original broadcast time is older than the
+        // most-recent live tick already applied for this symbol, skip the price
+        // update entirely. The seq cursor was advanced above so the gap is recorded.
+        // This prevents a replay burst from rolling back a live price in the UI.
+        if (_isReplayedTick && ts > 0 && ts < (_lastTickTsBySymbol[symbol] ?? 0)) {
+          return;
+        }
         _lastEmittedLtpBySymbol[stock.symbol] = stock.currentPrice;
         // Update feed-health tracking so the watchdog knows this symbol is live.
-        _lastTickFeedTsBySymbol[stock.symbol] =
-            ts > 0 ? ts : DateTime.now().millisecondsSinceEpoch;
+        // Replay ticks carry their original broadcast ts (20-30s old). Using that
+        // old ts would make the watchdog see the symbol as still-stale and fire
+        // again 35s later, creating a replay loop. Always use wall-clock now.
+        _lastTickFeedTsBySymbol[stock.symbol] = DateTime.now().millisecondsSinceEpoch;
         // Preserve existing depth/OHLC if this tick didn't include depth data
         // (Angel One sends depth only on full-mode ticks, not every heartbeat).
         final existing = _latestMap[stock.symbol];
@@ -717,9 +1077,62 @@ class LiveMarketService {
             depth: existing!.depth,
           );
         }
+        final _storeEntryTs = DateTime.now().millisecondsSinceEpoch;
         _latestMap[stock.symbol] = stock;
+        final _storeExitTs = DateTime.now().millisecondsSinceEpoch;
         _recordTraceRender(stock.symbol, stock.currentPrice);
-        _scheduleTick(stock.symbol);
+        _acceptedTicks++;
+        // Temporary diagnostic: confirm replay ticks reach the apply stage.
+        if (_isReplayedTick) {
+          debugPrint(
+            '[REPLAY_ACCEPTED] symbol=$symbol seq=$seq '
+            'ltp=${stock.currentPrice} gen=$_wsGeneration',
+          );
+        }
+        _emitTickImmediate(stock);
+        final _paintTs = DateTime.now().millisecondsSinceEpoch;
+        // Phase 1: record accepted tick in the CRUDEOIL tracer.
+        if (stock.symbol == 'CRUDEOIL') {
+          final _accRow    = m['data'] as Map<String, dynamic>?;
+          final _accEts    = (_accRow?['exchangeTs'] as num?)?.toInt() ?? 0;
+          final _accBrTs   = (m['ts'] as num?)?.toInt() ?? 0;
+          final _accBrRts  = (_accRow?['backendReceiveTs'] as num?)?.toInt() ?? 0;
+          final _accHubIn  = (_accRow?['hubEntryTs'] as num?)?.toInt() ?? 0;
+          final _accHubOut = (_accRow?['hubExitTs'] as num?)?.toInt() ?? 0;
+          final _isReplayed = m['replayed'] == true;
+          CrudeoilTickTracer.instance.checkCorruption(
+            symbol:                    stock.symbol,
+            ltp:                       stock.currentPrice,
+            exchangeTs:                _accEts,
+            seq:                       seq,
+            clientReceiveTs:           clientReceiveTs,
+            accepted:                  true,
+            isReplayed:                _isReplayed,
+            seqAdvancedBeforeRejection: false,
+          );
+          CrudeoilTickTracer.instance.record(TickRecord(
+            tickId:                    CrudeoilTickTracer.instance.nextId,
+            symbol:                    stock.symbol,
+            ltp:                       stock.currentPrice,
+            seq:                       seq,
+            exchangeTs:                _accEts,
+            brokerTs:                  _accBrTs,
+            backendReceiveTs:          _accBrRts,
+            hubEntryTs:                _accHubIn,
+            hubExitTs:                 _accHubOut,
+            broadcastTs:               _accBrTs,
+            clientReceiveTs:           clientReceiveTs,
+            storeEntryTs:              _storeEntryTs,
+            storeExitTs:               _storeExitTs,
+            paintTs:                   _paintTs,
+            connectionId:              'gen_$_wsGeneration',
+            source:                    _isReplayed ? 'replay' : 'live',
+            wasRejected:               false,
+            rejectionReason:           '',
+            isReplayed:                _isReplayed,
+            seqAdvancedBeforeRejection: false,
+          ));
+        }
         _scheduleMovers();
         _setError(false, '');
         return;
@@ -740,6 +1153,15 @@ class LiveMarketService {
         }
         return;
       }
+      if (type == 'replay_complete') {
+        final sym = m['symbol']?.toString();
+        if (sym != null && sym.isNotEmpty) {
+          _activeReplaySymbols.remove(sym.toUpperCase());
+        } else {
+          _activeReplaySymbols.clear();
+        }
+        return;
+      }
     } catch (e) {
       _onWsError(
         'Received unexpected data from the market feed. Reconnecting…',
@@ -748,6 +1170,10 @@ class LiveMarketService {
   }
 
   void _onWsError(String message) {
+    debugPrint(
+      '[WS_DISCONNECTED] reason="$message" generation=$_wsGeneration '
+      'subscriptions=${_subscriptions.length}',
+    );
     _setError(true, message);
     if (!_started || _disposed) return;
     _reconnectTimer?.cancel();
@@ -755,44 +1181,28 @@ class LiveMarketService {
     _emitConnState(WsConnectionStatus.reconnectingAttempt(_reconnectAttempt));
     final delaySeconds =
         _reconnectDelays[(_reconnectAttempt - 1).clamp(0, _reconnectDelays.length - 1)];
-    _reconnectTimer = Timer(Duration(seconds: delaySeconds), _connectWs);
+    final jitterMs = math.Random().nextInt(1000); // 0–999 ms jitter to prevent thundering herd
+    _reconnectTimer = Timer(
+      Duration(milliseconds: delaySeconds * 1000 + jitterMs),
+      _connectWs,
+    );
   }
 
   void _emitConnState(WsConnectionStatus s) {
     if (!_connStateController.isClosed) _connStateController.add(s);
   }
 
-  // Mark [symbol] as changed and arm the 16 ms batch timer.
-  // The null-guard ensures at most one timer is live at any moment; rapid-fire
-  // ticks for the same symbol within one frame are deduplicated by the Set.
-  void _scheduleTick(String symbol) {
-    _pendingSymbols.add(symbol);
+  // Emit [stock] immediately to subscribers — no batching, no timer.
+  // Each tick is pushed to the stream as soon as it arrives from the WebSocket.
+  void _emitTickImmediate(Stock stock) {
+    if (_stockController.isClosed) return;
     _diagMessagesReceived++;
-    _tickFlushTimer ??= Timer(const Duration(milliseconds: 16), _flushBatch);
-  }
-
-  // Emit only the stocks that changed since the last flush.
-  // Called by _tickFlushTimer — fires at most once per 16 ms frame.
-  void _flushBatch() {
-    _tickFlushTimer = null;
-    if (_pendingSymbols.isEmpty || _stockController.isClosed) {
-      _pendingSymbols.clear();
-      return;
-    }
-    final changed = <Stock>[];
-    for (final symbol in _pendingSymbols) {
-      final s = _latestMap[symbol];
-      if (s != null) changed.add(s);
-    }
-    _pendingSymbols.clear();
-    if (changed.isEmpty) return;
     _diagBatchesSent++;
-    _diagSymbolsTotal += changed.length;
-    _stockController.add(changed);
+    _diagSymbolsTotal++;
+    _stockController.add([stock]);
   }
 
   // Full-snapshot emit — used by bootstrap and WS snapshot messages.
-  // NOT called on individual ticks; those go through _scheduleTick/_flushBatch.
   void _emitStocks() {
     if (!_stockController.isClosed) {
       _stockController.add(_latestMap.values.toList(growable: false));
@@ -818,15 +1228,24 @@ class LiveMarketService {
 
   // ── Dedicated candle subscriptions (chart screens) ───────────────────────────
 
+  // Persisted candle subscriptions — re-sent automatically after every reconnect.
+  final Map<String, List<String>> _activeCandleSubscriptions = {};
+
   /// Tell the backend to send 500 ms-resolution candle updates for [symbol]
   /// and the given [intervals] (e.g. `['5m']`). Call from the chart screen's
   /// `initState` after connecting; call [unsubscribeCandleStream] on dispose.
   void subscribeCandleStream(String symbol, List<String> intervals) {
+    final sym = symbol.toUpperCase();
+    _activeCandleSubscriptions[sym] = List.unmodifiable(intervals);
+    _sendCandleSubscribe(sym, intervals);
+  }
+
+  void _sendCandleSubscribe(String symbol, List<String> intervals) {
     final channel = _channel;
     if (channel == null) return;
     channel.sink.add(jsonEncode({
       'type':      'subscribe_candles',
-      'symbol':    symbol.toUpperCase(),
+      'symbol':    symbol,
       'intervals': intervals,
     }));
   }
@@ -834,11 +1253,13 @@ class LiveMarketService {
   /// Release the dedicated chart subscription for [symbol].
   /// Call when the chart screen closes to free backend resources.
   void unsubscribeCandleStream(String symbol) {
+    final sym = symbol.toUpperCase();
+    _activeCandleSubscriptions.remove(sym);
     final channel = _channel;
     if (channel == null) return;
     channel.sink.add(jsonEncode({
       'type':   'unsubscribe_candles',
-      'symbol': symbol.toUpperCase(),
+      'symbol': sym,
     }));
   }
 
@@ -863,6 +1284,18 @@ class LiveMarketService {
   void _sendFnoSubscribe() {
     final channel = _channel;
     if (channel == null || _fnoTokens.isEmpty) return;
+
+    // [WS_SUBSCRIBE_FNO] — F&O token subscription payload sent to backend.
+    final buf = StringBuffer('[WS_SUBSCRIBE_FNO]\n');
+    buf.writeln('count=${_fnoTokens.length}');
+    buf.writeln('exchange=$_fnoExchange');
+    buf.writeln('tokens=[');
+    for (final t in _fnoTokens) buf.writeln('  $t,');
+    buf.writeln(']');
+    debugPrint(buf.toString());
+
+    debugPrint('[SUB_SOURCE] class=LiveMarketService method=_sendFnoSubscribe '
+        'generation=$_wsGeneration tokenCount=${_fnoTokens.length} exchange=$_fnoExchange');
     channel.sink.add(jsonEncode({
       'type':     'subscribe_fno',
       'tokens':   _fnoTokens,
@@ -870,17 +1303,41 @@ class LiveMarketService {
     }));
   }
 
-  void _sendSubscribe() {
+  void _sendSubscribe({String source = 'connect'}) {
     final channel = _channel;
     if (channel == null) return;
-    if (_subscriptions.isEmpty) return;
-    // Include lastSeq map so the server can replay ticks missed during disconnect
-    final lastSeq = SubscriptionManager.instance.lastSeqMap;
+
+    final sortedSymbols = _subscriptions.toList(growable: false)..sort();
+
+    // [WS_SUBSCRIBE] — exact payload being sent to the backend WebSocket.
+    final buf = StringBuffer('[WS_SUBSCRIBE]\n');
+    buf.writeln('count=${sortedSymbols.length}');
+    buf.writeln('source=$source  generation=$_wsGeneration');
+    buf.writeln('symbols=[');
+    for (final s in sortedSymbols) {
+      final tag = _traceSymbols.contains(s) ? '  ← trace/forced' : '';
+      buf.writeln('  $s,$tag');
+    }
+    buf.writeln(']');
+    debugPrint(buf.toString());
+
+    // lastSeq is ONLY sent on genuine WS reconnects (source == 'reconnect').
+    // All other subscribe calls (manual symbol change, tab switch, initial connect,
+    // watchdog) happen while the WebSocket is still alive — there is no gap to fill.
+    // Including lastSeq in those cases makes the server treat every subscription
+    // update as a reconnect and triggers a full replay burst for all 140 symbols.
+    final lastSeq = source == 'reconnect'
+        ? SubscriptionManager.instance.lastSeqMap
+        : const <String, int>{};
     final payload = jsonEncode({
       'type':    'subscribe',
-      'symbols': _subscriptions.toList(growable: false),
+      'symbols': sortedSymbols,
       if (lastSeq.isNotEmpty) 'lastSeq': lastSeq,
     });
+    debugPrint('[SUB_SOURCE] class=LiveMarketService method=_sendSubscribe '
+        'source=$source generation=$_wsGeneration '
+        'count=${sortedSymbols.length} '
+        'first20=${sortedSymbols.take(20).toList()}');
     channel.sink.add(payload);
   }
 
@@ -922,9 +1379,11 @@ class LiveMarketService {
     // token is needed for MCX/NFO historical data and quote lookups
     final token = (d['token'] as String?) ?? '';
 
-    // expiry is sent as ISO-8601 string for futures contracts, null for equities
+    // expiry is sent as ISO-8601 string for futures contracts, null for equities.
+    // Backend may use 'expiry', 'expiryDate', or 'contractExpiry' depending on
+    // the data source (Angel One symbol file vs. market-routes enrichment).
     DateTime? expiry;
-    final expiryRaw = d['expiry'];
+    final expiryRaw = d['expiry'] ?? d['expiryDate'] ?? d['contractExpiry'];
     if (expiryRaw is String && expiryRaw.isNotEmpty) {
       expiry = DateTime.tryParse(expiryRaw);
     }
@@ -1055,6 +1514,29 @@ class LiveMarketService {
     if (list.isEmpty) {
       debugPrint('[Trace] first tick received for $symbol ltp=${data['ltp']}');
     }
+
+    // ── Real-time latency breakdown (visible in adb logcat / flutter logs) ──
+    if (kDebugMode) {
+      final broadcastTs      = (m['ts']                    as num?)?.toInt() ?? 0;
+      final backendReceiveTs = (data['backendReceiveTs']   as num?)?.toInt() ?? 0;
+      final serverTs         = (data['serverTs']           as num?)?.toInt() ?? 0;
+      final exchangeTs       = (data['exchangeTs']         as num?)?.toInt() ?? 0;
+      final ltp              = data['ltp'];
+
+      final wsLag      = broadcastTs > 0 ? clientReceiveTs - broadcastTs       : -1;
+      final backendLag = (backendReceiveTs > 0 && serverTs > 0)
+                           ? backendReceiveTs - serverTs                        : -1;
+      final exchLag    = (serverTs > 0 && exchangeTs > 0)
+                           ? serverTs - exchangeTs                              : -1;
+
+      debugPrint(
+        '[LatencyTrace] RX  $symbol '
+        'ltp=$ltp  '
+        'WS→Client=${wsLag}ms  '
+        'Backend→Broadcast=${backendLag < 0 ? "?" : "${backendLag}ms"}  '
+        'Exchange→Backend=${exchLag < 0 ? "?" : "${exchLag}ms"}',
+      );
+    }
     _traceRxCounts[symbol] = (_traceRxCounts[symbol] ?? 0) + 1;
     final cutoff = clientReceiveTs - _traceWindowMs;
     while (list.isNotEmpty && (list.first['clientReceiveTs'] as int) < cutoff) {
@@ -1093,6 +1575,20 @@ class LiveMarketService {
           ..['storeEntryTs']  = storeEntryTs
           ..['ltpNotifierTs'] = ltpNotifierTs
           ..['storeExitTs']   = storeExitTs;
+
+        // ── Store processing latency (debug) ───────────────────────────────
+        if (kDebugMode) {
+          final rxTs         = (list[i]['clientReceiveTs'] as int?) ?? 0;
+          final storeMs      = storeExitTs - storeEntryTs;
+          final notifierMs   = ltpNotifierTs - storeEntryTs;
+          final clientStoreMs = rxTs > 0 ? storeExitTs - rxTs : -1;
+          debugPrint(
+            '[LatencyTrace] STORE $symbol '
+            'Store_total=${storeMs}ms  '
+            'to_notifier=${notifierMs}ms  '
+            'Client→StoreExit=${clientStoreMs < 0 ? "?" : "${clientStoreMs}ms"}',
+          );
+        }
         break;
       }
     }
@@ -1117,6 +1613,23 @@ class LiveMarketService {
   void recordRenderCompletion(String symbol, double ltp, int renderTs, int storeExitTs) {
     if (!_traceSymbols.contains(symbol)) return;
     final list = _traceRender.putIfAbsent(symbol, () => []);
+
+    // ── End-to-end render latency (debug) ──────────────────────────────────
+    if (kDebugMode) {
+      final rxList = _traceRx[symbol];
+      int rxTs = 0;
+      if (rxList != null) {
+        for (int j = rxList.length - 1; j >= 0; j--) {
+          if (rxList[j]['ltp'] == ltp) {
+            rxTs = (rxList[j]['clientReceiveTs'] as int?) ?? 0;
+            break;
+          }
+        }
+      }
+      final storeExitToRender = renderTs - storeExitTs;
+      final clientToRender    = rxTs > 0 ? renderTs - rxTs : -1;
+    }
+
     for (int i = list.length - 1; i >= 0; i--) {
       if (list[i]['ltp'] == ltp && list[i]['renderTs'] == null) {
         list[i] = Map<String, dynamic>.from(list[i])
@@ -1258,17 +1771,14 @@ class LiveMarketService {
     } catch (_) {}
   }
 
-  /// Configure which symbols are actively traced.
-  /// Also adds them to the WS subscription set so ticks actually arrive.
+  /// Configure which symbols are actively traced for latency measurement.
+  /// Trace symbols are NOT injected into _subscriptions — SubscriptionManager
+  /// is the sole authority over that set.  Ticks arrive only when the symbol
+  /// is independently subscribed by the current screen (e.g. NIFTY on watchlist).
   void setTraceSymbols(Set<String> symbols) {
     _traceSymbols
       ..clear()
       ..addAll(symbols.map((s) => s.toUpperCase()));
-    // Bridge: every traced symbol must also be subscribed so ticks arrive.
-    for (final sym in _traceSymbols) {
-      _subscriptions.add(sym);
-    }
-    _sendSubscribe();
   }
 
   Set<String> get traceSymbols => Set.unmodifiable(_traceSymbols);

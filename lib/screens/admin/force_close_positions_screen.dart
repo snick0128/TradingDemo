@@ -181,8 +181,9 @@ class ForceClosePositionsScreen extends StatelessWidget {
                                     context,
                                     admin,
                                     userId,
-                                    pos.entryOrderId,
+                                    '${pos.symbol.toUpperCase()}__${pos.product.toUpperCase()}',
                                     pos.symbol,
+                                    pos.exchange,
                                   ),
                                   icon: const Icon(
                                     LucideIcons.x,
@@ -214,6 +215,7 @@ class ForceClosePositionsScreen extends StatelessWidget {
     String userId,
     String positionId,
     String stock,
+    String exchange,
   ) {
     AppDialog.destructive(
       context,
@@ -222,7 +224,7 @@ class ForceClosePositionsScreen extends StatelessWidget {
           'Close $stock position for this user? This action is logged and cannot be undone.',
       confirmLabel: 'Force Close',
       onConfirm: () {
-        admin.forceClosePosition(userId, positionId);
+        admin.forceClosePosition(userId, positionId, exchange: exchange);
         AppToast.warning(context, '$stock position force-closed.');
       },
     );

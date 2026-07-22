@@ -7,7 +7,10 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
 import '../services/persistence_service.dart';
+import '../services/subscription_manager.dart';
+import '../state/tab_notifier.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/backend_error_widget.dart';
@@ -36,6 +39,10 @@ Color priceChangeColor(double changePercentage) {
 class MarketWatchScreen extends StatefulWidget {
   const MarketWatchScreen({super.key});
 
+  /// Set to true by main_shell when the Markets tab is selected; false otherwise.
+  /// Market Watch subscribes/unsubscribes its symbols based on this flag.
+  static final ValueNotifier<bool> isActiveNotifier = ValueNotifier(false);
+
   @override
   State<MarketWatchScreen> createState() => _MarketWatchScreenState();
 }
@@ -49,10 +56,21 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   bool _compactView = false;
   WatchlistSort _sort = WatchlistSort.symbol;
 
+  bool _isActiveTab = false;
+  TradingStore? _store;
+
+  // Structural snapshot used to gate unnecessary rebuilds from store events
+  // that don't affect the watchlist display (e.g. balance updates, P&L ticks).
+  bool _lastBackendError = false;
+  int _lastKnownStocksLength = -1;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 1, vsync: this);
+    _isActiveTab = activeTabNotifier.value == 1;
+    MarketWatchScreen.isActiveNotifier.addListener(_onVisibilityChanged);
+    activeTabNotifier.addListener(_onTabVisibilityChanged);
   }
 
   @override
@@ -63,6 +81,34 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
       _initialized = true;
       _initWatchlists();
     }
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.removeListener(_onStoreChanged);
+      _store = store;
+      store.addListener(_onStoreChanged);
+    }
+  }
+
+  void _onStoreChanged() {
+    if (!_isActiveTab) return;
+    final store = _store;
+    if (store == null) return;
+    // Only rebuild on structural changes that affect what the watchlist displays.
+    // Price ticks never call notifyListeners() — this guard eliminates rebuilds
+    // from balance/equity events that don't change the watchlist content.
+    final nowError = store.backendError;
+    final nowLen   = store.knownStocks.length;
+    if (nowError == _lastBackendError && nowLen == _lastKnownStocksLength) return;
+    _lastBackendError       = nowError;
+    _lastKnownStocksLength  = nowLen;
+    setState(() {});
+  }
+
+  void _onTabVisibilityChanged() {
+    final active = activeTabNotifier.value == 1;
+    if (active == _isActiveTab) return;
+    _isActiveTab = active;
+    if (active) setState(() {});
   }
 
   void _initWatchlists() {
@@ -110,26 +156,51 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   void _rebuildTabController() {
     final old = _tabController;
-    _tabController = TabController(length: _watchlists.length, vsync: this);
+    _tabController = TabController(length: _watchlists.length, vsync: this)
+      ..addListener(_onTabChanged);
     old.dispose();
   }
 
   @override
   void dispose() {
+    activeTabNotifier.removeListener(_onTabVisibilityChanged);
+    _store?.removeListener(_onStoreChanged);
+    MarketWatchScreen.isActiveNotifier.removeListener(_onVisibilityChanged);
+    SubscriptionManager.instance.unsubscribeScreen('market_watch');
     _tabController.dispose();
     super.dispose();
   }
 
+  // ─── Subscription management ─────────────────────────────────────────────────
+
+  void _onVisibilityChanged() {
+    if (MarketWatchScreen.isActiveNotifier.value) {
+      _subscribeCurrentTab();
+    } else {
+      SubscriptionManager.instance.unsubscribeScreen('market_watch');
+    }
+  }
+
+  void _onTabChanged() {
+    if (_tabController.indexIsChanging) return;
+    if (MarketWatchScreen.isActiveNotifier.value) _subscribeCurrentTab();
+  }
+
+  void _subscribeCurrentTab() {
+    if (!_initialized || _watchlists.isEmpty) return;
+    final idx = _tabController.index.clamp(0, _watchlists.length - 1);
+    final symbols = _watchlists[idx].symbols.toSet();
+    SubscriptionManager.instance.subscribeForScreen('market_watch', symbols);
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  List<Stock> _stocksForWatchlist(int index, List<Stock> allStocks) {
+  List<Stock> _stocksForWatchlist(int index, TradingStore store) {
     final wl = _watchlists[index];
-    final stocks = wl.symbols.map((sym) {
-      for (final s in allStocks) {
-        if (s.symbol == sym) return s;
-      }
-      return null;
-    }).whereType<Stock>().toList();
+    final stocks = wl.symbols
+        .map((sym) => store.stockBySymbolOrNull(sym))
+        .whereType<Stock>()
+        .toList();
 
     switch (_sort) {
       case WatchlistSort.symbol:
@@ -238,8 +309,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final allStocks = store.watchlist.toList();
+    final store = _store ?? TradingScope.read(context);
 
     // ── Error state ───────────────────────────────────────────────────────────
     if (store.backendError) {
@@ -253,7 +323,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     }
 
     // ── Loading state ─────────────────────────────────────────────────────────
-    if (allStocks.isEmpty) {
+    if (store.knownStocks.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('Market Watch')),
         body: const BackendLoadingWidget(),
@@ -303,7 +373,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           IconButton(
             tooltip: 'Add stock to watchlist',
             icon: const Icon(LucideIcons.plus, size: 22),
-            onPressed: () => _showAddStockSheet(context, allStocks),
+            onPressed: () => _showAddStockSheet(context, store.knownStocks.toList()),
           ),
           const SizedBox(width: 4),
         ],
@@ -311,7 +381,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
       body: TabBarView(
         controller: _tabController,
         children: List.generate(_watchlists.length, (i) {
-          final stocks = _stocksForWatchlist(i, allStocks);
+          final stocks = _stocksForWatchlist(i, store);
           return _WatchlistTab(
             key: ValueKey(_watchlists[i].id),
             stocks: stocks,
@@ -347,12 +417,17 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           );
         }),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddWatchlistDialog(),
-        backgroundColor: const Color(0xFF1565C0),
-        elevation: 2,
-        tooltip: 'Create new watchlist',
-        child: const Icon(Icons.playlist_add, color: Colors.white, size: 26),
+      floatingActionButton: Padding(
+        padding: EdgeInsets.only(
+          bottom: TradingBottomNavBar.bottomInset(context) + 16,
+        ),
+        child: FloatingActionButton(
+          onPressed: () => _showAddWatchlistDialog(),
+          backgroundColor: const Color(0xFF1565C0),
+          elevation: 2,
+          tooltip: 'Create new watchlist',
+          child: const Icon(Icons.playlist_add, color: Colors.white, size: 26),
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
@@ -759,6 +834,7 @@ class _StockRow extends StatelessWidget {
   });
 
   void _showContextMenu(BuildContext context) {
+    final store = TradingScope.read(context);
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
@@ -790,11 +866,14 @@ class _StockRow extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    '₹${stock.currentPrice.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF757575),
+                  ValueListenableBuilder<double>(
+                    valueListenable: store.ltpNotifier(stock.symbol),
+                    builder: (_, liveLtp, __) => Text(
+                      '₹${(liveLtp > 0 ? liveLtp : stock.currentPrice).toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF757575),
+                      ),
                     ),
                   ),
                 ],
@@ -947,7 +1026,7 @@ class _StockRow extends StatelessWidget {
                 children: [
                   LivePriceText(
                     symbol: stock.symbol,
-                    store: TradingScope.of(context),
+                    store: TradingScope.read(context),
                     style: GoogleFonts.inter(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
@@ -992,30 +1071,25 @@ class _ExpirySubtitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final expiry = stock.expiry!;
-    final days = stock.daysToExpiry!;
-    final months = const [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
+    final expiry = stock.expiry;       // DateTime? — safe nullable access
+    final days   = stock.daysToExpiry; // int?       — safe nullable access
+
+    // Hide subtitle entirely when expiry is unavailable (commodity roll-over, etc.)
+    if (expiry == null) return const SizedBox.shrink();
+
+    final int safeDays = days ?? 0;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     final dateStr =
         '${expiry.day.toString().padLeft(2, '0')} ${months[expiry.month - 1]} ${expiry.year}';
 
     // Colour: red ≤7 days, amber ≤30 days, grey otherwise
     final Color color;
-    if (days <= 7) {
+    if (safeDays <= 7) {
       color = const Color(0xFFD32F2F);
-    } else if (days <= 30) {
+    } else if (safeDays <= 30) {
       color = const Color(0xFFE65100);
     } else {
       color = const Color(0xFF757575);
@@ -1030,13 +1104,13 @@ class _ExpirySubtitle extends StatelessWidget {
           style: TextStyle(
             fontSize: 11,
             color: color,
-            fontWeight: days <= 30 ? FontWeight.w600 : FontWeight.normal,
+            fontWeight: safeDays <= 30 ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
-        if (days <= 30) ...[
+        if (safeDays <= 30) ...[
           const SizedBox(width: 4),
           Text(
-            '· $days d left',
+            '· $safeDays d left',
             style: TextStyle(fontSize: 10, color: color.withOpacity(0.75)),
           ),
         ],

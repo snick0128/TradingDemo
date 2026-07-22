@@ -22,7 +22,8 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   bool _saving = false;
 
   // RMS fields
-  final _rmsThresholdCtrl = TextEditingController();
+  final _rmsThresholdCtrl  = TextEditingController();
+  final _slippageCtrl      = TextEditingController();
   bool _enableAutoSquareOff = true;
   bool _enableRealtimeRms   = true;
 
@@ -42,6 +43,7 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   @override
   void dispose() {
     _rmsThresholdCtrl.dispose();
+    _slippageCtrl.dispose();
     _whatsappCtrl.dispose();
     _phoneCtrl.dispose();
     _emailCtrl.dispose();
@@ -61,6 +63,7 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
       final supp = SupportConfig.fromMap(results[1]);
 
       _rmsThresholdCtrl.text = rms.rmsLossThresholdPercent.toStringAsFixed(0);
+      _slippageCtrl.text     = rms.slippagePercent.toStringAsFixed(2);
       _enableAutoSquareOff   = rms.enableAutoSquareOff;
       _enableRealtimeRms     = rms.enableRealtimeRms;
 
@@ -79,10 +82,12 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   Future<void> _saveRms() async {
     setState(() => _saving = true);
     try {
+      final slippage = double.tryParse(_slippageCtrl.text) ?? 0.90;
       await _api.updateRmsSettings({
         'rmsLossThresholdPercent': double.tryParse(_rmsThresholdCtrl.text) ?? 100,
         'enableAutoSquareOff':     _enableAutoSquareOff,
         'enableRealtimeRms':       _enableRealtimeRms,
+        'slippagePercent':         slippage.clamp(0.0, 10.0),
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -166,6 +171,16 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                     decoration: const InputDecoration(
                       labelText: 'RMS Loss Threshold (%)',
                       hintText: '100 = full margin exhausted triggers auto-exit',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _slippageCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Execution Slippage (%)',
+                      hintText: '0.90 = BUY fills 0.9% above LTP, SELL 0.9% below',
+                      helperText: 'Applied to MARKET orders only. Range: 0–10%. Default: 0.90%',
                     ),
                   ),
                   const SizedBox(height: 8),

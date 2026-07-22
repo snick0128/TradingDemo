@@ -118,13 +118,10 @@ class _Metrics {
   int get totalUsers => store.totalUsers;
   int get activeSessions => store.activeSessions;
   int get todayTradeCount => _todayOrders.length;
-  // Open positions = FIFO-derived from the trade ledger (TradeStatus.open).
-  // Do NOT count PENDING orders as open positions — they are unexecuted orders,
-  // not holdings. This was causing the admin count to diverge from the user app.
-  int get openPositions => store.masterOrderBook
-      .where((o) =>
-          o.status == OrderStatus.executed || o.status == OrderStatus.approved)
-      .length; // ledger.open count is too expensive here; use executed orders as proxy
+  // Open positions = FIFO-matched count (only unmatched buy legs remain open).
+  // Using raw executed order count was wrong — it counted both open AND closed
+  // trades, inflating the KPI for every completed trade.
+  int get openPositions => store.openPositionCount;
   int get closedTrades => _executed.length;
   int get pendingOrders =>
       orders.where((o) => o.status == OrderStatus.pending).length;

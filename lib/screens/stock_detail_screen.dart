@@ -55,7 +55,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
   int _loadGeneration = 0;
-  int _buildCount = 0;
+  int _screenBuildCount = 0;
+  int _headerBuildCount = 0;
+  int _chartBuildCount = 0;
+  int _priceBuildCount = 0;
   Timer? _refreshTimer;
   Timer? _tickDebounce;
   TradingStore? _store;
@@ -70,6 +73,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   int _chartKey = 0;
   bool _isAtLive = true;
   double _currentZoomFactor = 0.5; // fraction of candles visible
+
+  // Nearest F&O expiry for index instruments (NIFTY, BANKNIFTY, etc.).
+  // Fetched once on open; null if not an index or fetch failed.
+  String? _indexNearestExpiry;
 
   @override
   void initState() {
@@ -166,6 +173,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // deliberately not awaited together.
     unawaited(_fetchLiveQuoteIfNeeded());
     unawaited(_loadSeries());
+    unawaited(_fetchIndexExpiryIfNeeded());
     _logStage('ws_attach_requested_ms', _openElapsedMs());
   }
 
@@ -301,6 +309,36 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     }
   }
 
+  /// Fetch nearest expiry date for index instruments (NIFTY 50, BANKNIFTY, etc.).
+  /// Only runs if the instrument is a market index; silently skips otherwise.
+  Future<void> _fetchIndexExpiryIfNeeded() async {
+    if (!mounted) return;
+    final store = _store!;
+    final stock = store.stockBySymbol(widget.symbol);
+    final isIndex = stock.instrumentType == InstrumentType.marketIndex ||
+        const {'NIFTY 50', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'INDIA VIX'}
+            .contains(widget.symbol.toUpperCase());
+    if (!isIndex) return;
+
+    final exchange = widget.symbol.toUpperCase() == 'SENSEX' ? 'BFO' : 'NFO';
+    try {
+      final expiries = await _api
+          .getFnoExpiryDates(
+            widget.symbol.toUpperCase(),
+            exchange: exchange,
+            typeFilter: 'ALL',
+          )
+          .timeout(const Duration(seconds: 5));
+      if (!mounted || expiries.isEmpty) return;
+      // Take the nearest upcoming expiry (first entry from backend — already sorted).
+      final nearest = expiries.first;
+      setState(() => _indexNearestExpiry = nearest);
+      debugPrint('[StockDetail] Index expiry: ${widget.symbol} → $nearest (exchange=$exchange)');
+    } catch (e) {
+      debugPrint('[StockDetail] Could not fetch expiry for ${widget.symbol}: $e');
+    }
+  }
+
   @override
   void dispose() {
     _refreshTimer?.cancel();
@@ -313,16 +351,27 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   void _onLtpChanged() {
-    if (!mounted || _selectedRange > 1) return;
+    if (!mounted) return;
     final price = _ltpNotifier!.value;
     if (price <= 0 || price == _lastRealtimePrice) return;
     final stock = _store?.stockBySymbol(widget.symbol);
     if (stock != null) _quoteCache[_cacheSymbol] = stock;
-    _pendingRealtimePrice = price;
     if (!_firstTickLogged) {
       _firstTickLogged = true;
       _logStage('first_tick_latency_ms', _openElapsedMs());
     }
+
+    // On 1M / 1Y / 5Y / Max tabs the candles are too coarse to merge intraday
+    // ticks. LivePriceText and the change chip VLB both subscribe to ltpNotifier
+    // directly, so NO setState() is needed here — a full screen rebuild on every
+    // tick would be wasted work.
+    if (_selectedRange > 1) {
+      _lastRealtimePrice = price;
+      return;
+    }
+
+    // On 1D / 1W tabs: merge tick into live candle and update chart.
+    _pendingRealtimePrice = price;
     _tickDebounce ??= Timer(Duration.zero, () {
       _tickDebounce = null;
       final pending = _pendingRealtimePrice;
@@ -342,8 +391,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         intervalMinutes: _intervalMinutesForRange(_selectedRange),
       );
       _chartCache[_seriesCacheKey] = series;
-      // writeSeries is intentionally omitted from the tick path — it runs
-      // in _loadSeries (30s refresh timer) to avoid blocking localStorage writes.
 
       debugPrint('[Chart] ${isNewCandle ? "🕯 New candle" : "📈 Updated"} '
           'total=${series.data.length} latest=${series.data.last.time.toIso8601String()}');
@@ -435,7 +482,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         _fadeCtrl.forward();
         sw.stop();
         _logStage('chart_fetch_ms', sw.elapsedMilliseconds);
-        // Auto-refresh intraday and weekly charts every 30s
+        // Auto-refresh intraday and weekly charts every 30s.
+        // Guard is required: _loadSeries() is async and may reach this point
+        // after dispose() has already run and cancelled the previous timer.
+        if (!mounted) return;
         if (_selectedRange <= 1) {
           _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
             if (mounted) _loadSeries();
@@ -586,10 +636,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   @override
   Widget build(BuildContext context) {
-    _buildCount += 1;
+    _screenBuildCount += 1;
     assert(() {
       debugPrint(
-        '[StockDetailPerf] ${widget.symbol} rebuild_count=$_buildCount',
+        '[StockDetailPerf] ${widget.symbol} screen_build=$_screenBuildCount',
       );
       return true;
     }());
@@ -807,11 +857,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   Widget _buildStockHeader(BuildContext context, Stock stock) {
-    final isPos = stock.changePercentage >= 0;
-    final changeColor = isPos
-        ? const Color(0xFF00C853)
-        : const Color(0xFFD50000);
-    final arrow = isPos ? '+' : '';
+    assert(() {
+      _headerBuildCount++;
+      debugPrint('[StockDetailPerf] ${widget.symbol} header_build=$_headerBuildCount');
+      return true;
+    }());
     final exColor = _exchangeBadgeColor(stock.exchange);
     final chips = _derivativeChips(context, stock);
 
@@ -891,6 +941,12 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                           if (stock.isFutures) ...[
                             const SizedBox(height: 3),
                             _ExpiryBadge(stock: stock),
+                          ] else if (_indexNearestExpiry != null) ...[
+                            const SizedBox(height: 3),
+                            _IndexExpiryBadge(
+                              expiryIso: _indexNearestExpiry!,
+                              exchange: stock.exchange,
+                            ),
                           ],
                           const SizedBox(height: 2),
                           Text(
@@ -924,23 +980,43 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: changeColor.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '$arrow${(stock.currentPrice * stock.changePercentage / 100).toStringAsFixed(2)} ($arrow${stock.changePercentage.abs().toStringAsFixed(2)}%)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: changeColor,
-                      ),
-                    ),
+                  // Change chip updates on every tick via its own VLB so the
+                  // full screen does NOT need to rebuild for price movement.
+                  ValueListenableBuilder<double>(
+                    valueListenable: _store!.ltpNotifier(widget.symbol),
+                    builder: (_, ltp, __) {
+                      assert(() {
+                        _priceBuildCount++;
+                        debugPrint('[StockDetailPerf] ${widget.symbol} price_build=$_priceBuildCount');
+                        return true;
+                      }());
+                      final effectiveLtp = ltp > 0 ? ltp : stock.currentPrice;
+                      final pct = stock.changePercentage;
+                      final amt = effectiveLtp * pct / 100;
+                      final isChipPos = pct >= 0;
+                      final chipArrow = isChipPos ? '+' : '';
+                      final chipColor = isChipPos
+                          ? const Color(0xFF00C853)
+                          : const Color(0xFFD50000);
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: chipColor.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '$chipArrow${amt.toStringAsFixed(2)} ($chipArrow${pct.abs().toStringAsFixed(2)}%)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: chipColor,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -963,6 +1039,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     Color chartColor,
     bool use1DLine,
   ) {
+    assert(() {
+      _chartBuildCount++;
+      debugPrint('[StockDetailPerf] ${widget.symbol} chart_build=$_chartBuildCount');
+      return true;
+    }());
     final fadeOpacity = _loadingSeries && _prevSeries == null
         ? const AlwaysStoppedAnimation(0.4)
         : _fadeAnim;
@@ -2029,16 +2110,29 @@ class _ExpiryBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final expiry = stock.expiry!;
-    final days = stock.daysToExpiry!;
+    final expiry = stock.expiry;      // DateTime?  — safe nullable access
+    final days   = stock.daysToExpiry; // int?       — safe nullable access
 
-    // Colour: red if ≤7 days, amber if ≤30 days, grey otherwise
+    debugPrint(
+      '[EXPIRY_BADGE] symbol=${stock.symbol} '
+      'instrumentType=${stock.instrumentType} '
+      'expiry=$expiry',
+    );
+
+    // Equity, unknown types, and commodity contracts that haven't resolved
+    // their active contract yet all arrive here with expiry == null.
+    // Hide the badge entirely rather than crashing.
+    if (expiry == null) return const SizedBox.shrink();
+
+    // Colour: red if ≤7 days, amber if ≤30 days, grey otherwise.
+    // days can still be negative (expired) — treat that as urgent red.
+    final int safeDays = days ?? 0;
     final Color bg;
     final Color fg;
-    if (days <= 7) {
+    if (safeDays <= 7) {
       bg = const Color(0xFFFFEBEE);
       fg = const Color(0xFFD32F2F);
-    } else if (days <= 30) {
+    } else if (safeDays <= 30) {
       bg = const Color(0xFFFFF8E1);
       fg = const Color(0xFFE65100);
     } else {
@@ -2048,18 +2142,8 @@ class _ExpiryBadge extends StatelessWidget {
 
     final day = expiry.day.toString().padLeft(2, '0');
     final month = const [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ][expiry.month - 1];
     final label = 'Exp $day $month ${expiry.year}';
 
@@ -2083,13 +2167,85 @@ class _ExpiryBadge extends StatelessWidget {
               color: fg,
             ),
           ),
-          if (days <= 30) ...[
+          if (safeDays <= 30) ...[
             const SizedBox(width: 4),
             Text(
-              '($days d)',
+              '($safeDays d)',
               style: TextStyle(fontSize: 9, color: fg.withOpacity(0.8)),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Nearest expiry badge for index instruments ───────────────────────────────
+// Shows the nearest F&O contract expiry for underlying indices (NIFTY, BANKNIFTY
+// etc.) where the stock itself has no expiry field but its derivatives do.
+
+class _IndexExpiryBadge extends StatelessWidget {
+  final String expiryIso; // ISO date string from backend, e.g. '2026-06-26'
+  final String exchange;
+
+  const _IndexExpiryBadge({required this.expiryIso, required this.exchange});
+
+  @override
+  Widget build(BuildContext context) {
+    DateTime? expiry;
+    try {
+      expiry = DateTime.parse(expiryIso);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+
+    final days = expiry.difference(DateTime.now()).inDays;
+
+    final Color bg;
+    final Color fg;
+    if (days <= 7) {
+      bg = const Color(0xFFFFEBEE);
+      fg = const Color(0xFFD32F2F);
+    } else if (days <= 30) {
+      bg = const Color(0xFFFFF8E1);
+      fg = const Color(0xFFE65100);
+    } else {
+      bg = const Color(0xFFE8F5E9);
+      fg = const Color(0xFF2E7D32);
+    }
+
+    final day = expiry.day.toString().padLeft(2, '0');
+    final month = const [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ][expiry.month - 1];
+    final label = 'Exp $day $month ${expiry.year}';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: fg.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.event_outlined, size: 10, color: fg),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: fg,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '($days d)',
+            style: TextStyle(fontSize: 9, color: fg.withOpacity(0.8)),
+          ),
         ],
       ),
     );

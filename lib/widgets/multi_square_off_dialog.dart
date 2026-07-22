@@ -4,6 +4,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../app/app_scope.dart';
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
+import '../models/market_settings.dart';
 import '../models/trading_models.dart';
 import '../theme.dart';
 
@@ -30,6 +31,7 @@ class MultiSquareOffDialog {
     required List<Holding> selectedHoldings,
     required double Function(String symbol, double storedPrice) resolvedLtp,
     required VoidCallback onCompleted,
+    MarketSettings marketSettings = MarketSettings.defaults,
   }) {
     return showGeneralDialog<void>(
       context: context,
@@ -53,6 +55,7 @@ class MultiSquareOffDialog {
         selectedHoldings: selectedHoldings,
         resolvedLtp: resolvedLtp,
         onCompleted: onCompleted,
+        marketSettings: marketSettings,
       ),
     );
   }
@@ -82,12 +85,14 @@ class _MultiSquareOffWidget extends StatefulWidget {
   final List<Holding> selectedHoldings;
   final double Function(String, double) resolvedLtp;
   final VoidCallback onCompleted;
+  final MarketSettings marketSettings;
 
   const _MultiSquareOffWidget({
     required this.selectedPositions,
     required this.selectedHoldings,
     required this.resolvedLtp,
     required this.onCompleted,
+    required this.marketSettings,
   });
 
   @override
@@ -132,6 +137,22 @@ class _MultiSquareOffWidgetState extends State<_MultiSquareOffWidget> {
     for (final p in widget.selectedPositions) {
       if (!mounted) break;
       setState(() => _currentSymbol = p.symbol);
+
+      // Market hours guard — skip and record failure if market is closed.
+      final marketReason = widget.marketSettings.checkAction(
+        p.exchange,
+        isBuy: p.side == OrderType.sell,
+      );
+      if (marketReason != null) {
+        _results.add(_SquareOffResult(
+          symbol: p.symbol,
+          qty: p.quantity,
+          success: false,
+          error: 'Market is closed. Square off not allowed during non-market hours.',
+        ));
+        if (mounted) setState(() => _completedCount++);
+        continue;
+      }
 
       final exitType = p.side == OrderType.buy ? 'SELL' : 'BUY';
       final productStr = switch (p.product) {
@@ -187,6 +208,22 @@ class _MultiSquareOffWidgetState extends State<_MultiSquareOffWidget> {
     for (final h in widget.selectedHoldings) {
       if (!mounted) break;
       setState(() => _currentSymbol = h.symbol);
+
+      // Market hours guard — holdings are always equity (NSE CNC SELL).
+      final holdingMarketReason = widget.marketSettings.checkAction(
+        'NSE',
+        isBuy: false,
+      );
+      if (holdingMarketReason != null) {
+        _results.add(_SquareOffResult(
+          symbol: h.symbol,
+          qty: h.quantity,
+          success: false,
+          error: 'Market is closed. Square off not allowed during non-market hours.',
+        ));
+        if (mounted) setState(() => _completedCount++);
+        continue;
+      }
 
       try {
         // Exchange defaults to 'NSE'; backend MCX-symbol inference corrects it
@@ -320,9 +357,7 @@ class _MultiSquareOffWidgetState extends State<_MultiSquareOffWidget> {
                   children: [
                     ...positions.map((p) {
                       final ltp = widget.resolvedLtp(p.symbol, p.currentPrice);
-                      final pnl = p.side == OrderType.buy
-                          ? (ltp - p.avgPrice) * p.quantity
-                          : (p.avgPrice - ltp) * p.quantity;
+                      final pnl = p.calculatePnL(ltp);
                       return _ConfirmRow(
                         symbol: p.symbol,
                         qty: p.quantity,
@@ -333,7 +368,7 @@ class _MultiSquareOffWidgetState extends State<_MultiSquareOffWidget> {
                     }),
                     ...holdings.map((h) {
                       final ltp = widget.resolvedLtp(h.symbol, h.currentPrice);
-                      final pnl = (ltp - h.avgPrice) * h.quantity;
+                      final pnl = h.calculatePnL(ltp);
                       return _ConfirmRow(
                         symbol: h.symbol,
                         qty: h.quantity,

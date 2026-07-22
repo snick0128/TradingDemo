@@ -68,6 +68,9 @@ class PlatformRmsSettings {
   /// Equity-based auto square-off threshold (₹). Default ₹500.
   /// All positions are closed when equity drops to or below this level.
   final double safeLevelRupees;
+  /// Execution slippage applied to MARKET orders (% of LTP).
+  /// BUY fills at ltp × (1 + slippage%), SELL at ltp × (1 - slippage%).
+  final double slippagePercent;
 
   const PlatformRmsSettings({
     this.intradayShortSellLeverage       = 5.0,
@@ -83,6 +86,7 @@ class PlatformRmsSettings {
     this.blockOvernightEquityShortSell   = true,
     this.enableRealtimeRms               = true,
     this.safeLevelRupees                 = 500.0,
+    this.slippagePercent                 = 0.90,
   });
 
   static const PlatformRmsSettings defaults = PlatformRmsSettings();
@@ -101,6 +105,7 @@ class PlatformRmsSettings {
     blockOvernightEquityShortSell: (m['blockOvernightEquityShortSell'] as bool?) ?? true,
     enableRealtimeRms:             (m['enableRealtimeRms']            as bool?) ?? true,
     safeLevelRupees:               ((m['safeLevel']                   as num?) ?? 500).toDouble(),
+    slippagePercent:               ((m['slippagePercent']             as num?) ?? 0.90).toDouble(),
   );
 
   Map<String, dynamic> toMap() => {
@@ -117,6 +122,7 @@ class PlatformRmsSettings {
     'blockOvernightEquityShortSell': blockOvernightEquityShortSell,
     'enableRealtimeRms':             enableRealtimeRms,
     'safeLevel':                     safeLevelRupees,
+    'slippagePercent':               slippagePercent,
   };
 
   PlatformRmsSettings copyWith({
@@ -133,6 +139,7 @@ class PlatformRmsSettings {
     bool? blockOvernightEquityShortSell,
     bool? enableRealtimeRms,
     double? safeLevelRupees,
+    double? slippagePercent,
   }) => PlatformRmsSettings(
     intradayShortSellLeverage:     intradayShortSellLeverage    ?? this.intradayShortSellLeverage,
     maxShortSellMultiplier:        maxShortSellMultiplier       ?? this.maxShortSellMultiplier,
@@ -147,5 +154,6 @@ class PlatformRmsSettings {
     blockOvernightEquityShortSell: blockOvernightEquityShortSell ?? this.blockOvernightEquityShortSell,
     enableRealtimeRms:             enableRealtimeRms            ?? this.enableRealtimeRms,
     safeLevelRupees:               safeLevelRupees              ?? this.safeLevelRupees,
+    slippagePercent:               slippagePercent              ?? this.slippagePercent,
   );
 }

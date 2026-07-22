@@ -4,7 +4,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
-import '../theme.dart';
 import '../utils/responsive.dart';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -31,16 +30,6 @@ const List<TradingNavItem> kTradingNavItems = [
 // ─── Controller ───────────────────────────────────────────────────────────────
 
 /// Lightweight controller for programmatic tab switches from deep in the tree.
-///
-/// Usage:
-///   1. Hold an instance in the root shell state.
-///   2. Pass it down (or expose via InheritedWidget / Provider).
-///   3. Call [jumpTo] from any descendant to change the active tab.
-///
-/// Example:
-///   final _navCtrl = TradingNavController();
-///   // In a child widget:
-///   TradingNavController.of(context).jumpTo(2);
 class TradingNavController extends ChangeNotifier {
   int _index = 0;
 
@@ -73,36 +62,18 @@ class TradingNavControllerScope extends InheritedNotifier<TradingNavController> 
 
 /// Premium floating pill-shaped bottom navigation bar for Trade Kosh.
 ///
+/// Design system
+/// ─────────────
+/// • White frosted glass container (rgba 255,255,255,0.82) with 20px blur
+/// • 28px corner radius, white 75% border, elevation shadow
+/// • Selected tab uses grey glass pill (#505050 at 10%) with inner highlight
+/// • No blue — icon/label use #333333 (selected) and #9E9E9E (inactive)
+///
 /// Layout contract
 /// ───────────────
 /// • Floats [kBottomMargin] above the SafeArea bottom edge.
 /// • Has [kSideMargin] horizontal margin from each screen edge.
 /// • The pill container is exactly [kHeight] tall.
-///
-/// Animation model
-/// ───────────────
-/// The [LayoutBuilder] divides the pill into 9 equal "units" of width.
-/// The selected item occupies 3 units; each inactive item occupies 1.5 units
-/// (3 + 4 × 1.5 = 9 — always fills the container exactly).
-///
-/// An [AnimatedContainer] on each slot interpolates its allocated width when
-/// [selectedIndex] changes, so the active capsule expands while all others
-/// contract simultaneously in a single smooth motion.  No [TickerProvider],
-/// no [AnimationController], no extra state needed — purely declarative.
-///
-/// Glassmorphism
-/// ─────────────
-/// The pill is a [BackdropFilter] blur (sigmaX/Y = 18) with a semi-transparent
-/// surface background so the screen content scrolls through behind it.
-/// Outside the pill the background is fully transparent — content is visible.
-///
-/// Theme awareness
-/// ───────────────
-/// All colours are read from [Theme.of(context)]:
-///   • Surface  → [ColorScheme.surface] at 72 % opacity (light) / 82 % (dark)
-///   • Active   → [ColorScheme.primary]
-///   • Inactive → [AppColors.navInactive]   (9E9E9E — identical in light/dark)
-///   • Border   → white highlight at 55 % opacity (light) / 10 % (dark)
 class TradingBottomNavBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onTap;
@@ -112,13 +83,16 @@ class TradingBottomNavBar extends StatelessWidget {
   static const double kHeight = 56.0;
 
   /// Gap between pill bottom edge and SafeArea bottom edge.
-  static const double kBottomMargin = 14.0;
+  static const double kBottomMargin = 8.0;
 
   /// Horizontal margin from each screen edge.
   static const double kSideMargin = 18.0;
 
-  /// Total bottom space to reserve in the Scaffold
-  /// (pill height + bottom margin; safe area is handled separately by SafeArea).
+  /// Outer corner radius for the glass container.
+  static const double kRadius = 28.0;
+
+  /// Total bottom space scrollable content must reserve (height + margin).
+  /// Safe-area bottom is NOT included here — [bottomInset] adds it.
   static const double kReservedHeight = kHeight + kBottomMargin;
 
   /// Bottom padding scrollable content must add to avoid being hidden behind
@@ -140,7 +114,7 @@ class TradingBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return SafeArea(
       top: false,
@@ -150,57 +124,67 @@ class TradingBottomNavBar extends StatelessWidget {
           right: kSideMargin,
           bottom: kBottomMargin,
         ),
-        // Glass pill: ClipRRect shapes the blur, BackdropFilter frosts the
-        // content behind it, Container provides the semi-transparent fill.
-        // Outside the pill the widget tree is transparent — no background.
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(kHeight / 2),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              height: kHeight,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface.withOpacity(
-                  theme.brightness == Brightness.light ? 0.72 : 0.82,
-                ),
-                borderRadius: BorderRadius.circular(kHeight / 2),
-                border: Border.all(
-                  color: theme.brightness == Brightness.light
-                      ? Colors.white.withOpacity(0.55)
-                      : Colors.white.withOpacity(0.10),
-                  width: 1.0,
-                ),
+        // Shadow lives outside ClipRRect so it is never clipped.
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(kRadius),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1F000000), // black 12%
+                blurRadius: 30,
+                spreadRadius: 0,
+                offset: Offset(0, 10),
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(kHeight / 2 - 0.5),
-                child: LayoutBuilder(builder: (context, constraints) {
-                  // Slot width model:
-                  //   selected  = 3 units
-                  //   inactive  = 1.5 units each
-                  //   total     = 3 + 4 × 1.5 = 9 units
-                  //
-                  // Because the growing item gains exactly what the shrinking item
-                  // loses, the sum is always constraints.maxWidth — no gaps, no
-                  // overflow, no layout jank during animation.
-                  final unit = constraints.maxWidth / 9.0;
+            ],
+          ),
+          // ClipRRect shapes the BackdropFilter blur to the pill boundary.
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(kRadius),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Container(
+                height: kHeight,
+                decoration: BoxDecoration(
+                  // White frosted glass (light) / Dark glass (dark)
+                  color: isDark
+                      ? const Color(0xFF1C1C1E).withOpacity(0.88)
+                      : Colors.white.withOpacity(0.82),
+                  borderRadius: BorderRadius.circular(kRadius),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.12)
+                        : Colors.white.withOpacity(0.75),
+                    width: 1.5,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(kRadius - 1.5),
+                  child: LayoutBuilder(builder: (context, constraints) {
+                    // Slot width model:
+                    //   selected  = 3 units
+                    //   inactive  = 1.5 units each
+                    //   total     = 3 + 4 × 1.5 = 9 units — always fills exactly
+                    final unit = constraints.maxWidth / 9.0;
 
-                  return Row(
-                    children: List.generate(items.length, (i) {
-                      final isSelected = i == selectedIndex;
-                      return AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeOutCubic,
-                        width: isSelected ? unit * 3.0 : unit * 1.5,
-                        height: kHeight,
-                        child: _NavItemSlot(
-                          item: items[i],
-                          isSelected: isSelected,
-                          onTap: () => onTap(i),
-                        ),
-                      );
-                    }),
-                  );
-                }),
+                    return Row(
+                      children: List.generate(items.length, (i) {
+                        final isSelected = i == selectedIndex;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOutCubic,
+                          width: isSelected ? unit * 3.0 : unit * 1.5,
+                          height: kHeight,
+                          child: _NavItemSlot(
+                            item: items[i],
+                            isSelected: isSelected,
+                            isDark: isDark,
+                            onTap: () => onTap(i),
+                          ),
+                        );
+                      }),
+                    );
+                  }),
+                ),
               ),
             ),
           ),
@@ -212,27 +196,29 @@ class TradingBottomNavBar extends StatelessWidget {
 
 // ─── Item slot ────────────────────────────────────────────────────────────────
 
-/// Renders one navigation item inside its animated width slot.
-///
-/// Stateless — the only input driving appearance is [isSelected].
-/// All animations are purely declarative (no AnimationController).
 class _NavItemSlot extends StatelessWidget {
   final TradingNavItem item;
   final bool isSelected;
+  final bool isDark;
   final VoidCallback onTap;
 
   const _NavItemSlot({
     required this.item,
     required this.isSelected,
+    required this.isDark,
     required this.onTap,
   });
 
+  // ── Colour tokens ──────────────────────────────────────────────────────────
+  static const Color _kSelectedColor = Color(0xFF333333);
+  static const Color _kInactiveColor = Color(0xFF9E9E9E);
+  static const Color _kPillBg        = Color(0x1A505050); // #505050 @ 10%
+
   @override
   Widget build(BuildContext context) {
-    final primary  = Theme.of(context).colorScheme.primary;
-    // navInactive is intentionally hardcoded here — it is the same token
-    // (#9E9E9E) in both the light and dark Trade Kosh themes.
-    const inactive = AppColors.navInactive;
+    final selectedColor = isDark ? const Color(0xFFEEEEEE) : _kSelectedColor;
+    final iconColor  = isSelected ? selectedColor : _kInactiveColor;
+    final labelColor = isSelected ? selectedColor : _kInactiveColor;
 
     return Semantics(
       label: item.label,
@@ -244,7 +230,6 @@ class _NavItemSlot extends StatelessWidget {
         child: SizedBox(
           height: TradingBottomNavBar.kHeight,
           child: Center(
-            // The capsule container: animates padding & background colour.
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,
@@ -253,44 +238,42 @@ class _NavItemSlot extends StatelessWidget {
                 vertical: 8.0,
               ),
               decoration: BoxDecoration(
-                // Light tint of primary (#2962FF at 10% opacity) — matches
-                // the existing chip/badge pattern used in Trade Kosh
-                // (e.g., exchange chip: E3F2FD, selected pill: E8F5E9).
-                color: isSelected
-                    ? primary.withOpacity(0.10)
-                    : Colors.transparent,
+                color: isSelected ? _kPillBg : Colors.transparent,
                 borderRadius: BorderRadius.circular(20.0),
+                boxShadow: isSelected
+                    ? const [
+                        BoxShadow(
+                          color: Color(0x1A000000), // black 10%
+                          blurRadius: 18,
+                          spreadRadius: 0,
+                          offset: Offset(0, 6),
+                        ),
+                      ]
+                    : null,
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // ── Icon ──────────────────────────────────────────────
-                  // AnimatedSwitcher creates a scale+fade "pop" when the
-                  // active state changes, giving tactile feedback.
+                  // ── Icon ────────────────────────────────────────────────
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 220),
                     switchInCurve: Curves.easeOutBack,
                     switchOutCurve: Curves.easeIn,
                     transitionBuilder: (child, animation) => ScaleTransition(
-                      scale: Tween<double>(begin: 0.72, end: 1.0)
-                          .animate(animation),
+                      scale: Tween<double>(begin: 0.72, end: 1.0).animate(animation),
                       child: FadeTransition(opacity: animation, child: child),
                     ),
                     child: Icon(
                       item.icon,
-                      // Unique key per state so AnimatedSwitcher fires on toggle.
                       key: ValueKey('${item.label}_$isSelected'),
                       size: 20.0,
-                      color: isSelected ? primary : inactive,
+                      color: iconColor,
                     ),
                   ),
 
-                  // ── Label (slides + fades in when selected) ───────────
-                  // AnimatedSize collapses the width smoothly; the label
-                  // widget itself is only present when selected so the
-                  // content is never clipped in an odd half-visible state.
+                  // ── Label (slides in when selected) ─────────────────────
                   AnimatedSize(
                     duration: const Duration(milliseconds: 300),
                     curve: Curves.easeOutCubic,
@@ -305,7 +288,7 @@ class _NavItemSlot extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 12.0,
                                 fontWeight: FontWeight.w600,
-                                color: primary,
+                                color: labelColor,
                                 letterSpacing: -0.2,
                                 height: 1.0,
                                 decoration: TextDecoration.none,

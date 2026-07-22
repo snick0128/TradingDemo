@@ -3,7 +3,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../domain/trade_ledger.dart';
-import '../../models/trading_models.dart';
 import '../../state/admin_scope.dart';
 import '../../state/admin_store.dart';
 import '../../theme.dart';
@@ -143,7 +142,10 @@ class _RiskMetrics {
   double get totalExposure =>
       _openPositions.fold(0.0, (s, t) => s + t.entryValue);
   double get riskEstimate => totalExposure * 0.0012;
-  double get totalMarginUsed => totalExposure * 0.2;
+  // Sum the actual marginUsed stored in each open position's source order.
+  // Falls back to 0 for pre-migration orders that lack the field.
+  double get totalMarginUsed =>
+      _openPositions.fold(0.0, (s, t) => s + t.marginUsed);
 
   // Per-user exposure
   Map<String, double> get exposureByUser {

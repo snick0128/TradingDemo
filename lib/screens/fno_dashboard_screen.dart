@@ -31,8 +31,12 @@ class _FnoPosition {
     required this.expiryDate,
   });
 
-  double get pnl =>
-      side == OrderType.buy ? (ltp - avgPrice) * qty : (avgPrice - ltp) * qty;
+  double get pnl => calculateTradingPnL(
+        side: side,
+        ltp: ltp,
+        avgPrice: avgPrice,
+        quantity: qty,
+      );
 
   bool get isExpiringSoon => expiryDate.difference(DateTime.now()).inDays <= 7;
 }

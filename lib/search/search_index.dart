@@ -71,7 +71,10 @@ final _kSeedCatalog = <Instrument>[
   Instrument(symbol: 'HINDUNILVR', displayName: 'HINDUNILVR', name: 'Hindustan Unilever Ltd',       exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['hul', 'hindustan unilever'], popularityRank: 10),
   Instrument(symbol: 'KOTAKBANK',  displayName: 'KOTAKBANK',  name: 'Kotak Mahindra Bank',          exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['kotak bank', 'kotak'],       popularityRank: 11),
   Instrument(symbol: 'BHARTIARTL', displayName: 'BHARTIARTL', name: 'Bharti Airtel Ltd',            exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['airtel', 'bharti airtel'],   popularityRank: 12),
-  Instrument(symbol: 'TATAMOTORS', displayName: 'TATAMOTORS', name: 'Tata Motors Ltd',              exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['tata motors'],               popularityRank: 13),
+  // Tata Motors demerged into TMPV (passenger vehicles) and TMCV (commercial
+  // vehicles, continuing "Tata Motors Limited" entity) in 2024 — TATAMOTORS
+  // no longer exists as a symbol.
+  Instrument(symbol: 'TMCV',       displayName: 'TMCV',       name: 'Tata Motors Ltd',              exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['tata motors'],               popularityRank: 13),
   Instrument(symbol: 'SUNPHARMA',  displayName: 'SUNPHARMA',  name: 'Sun Pharmaceutical',           exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['sun pharma'],                popularityRank: 14),
   Instrument(symbol: 'MARUTI',     displayName: 'MARUTI',     name: 'Maruti Suzuki India Ltd',      exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['maruti suzuki'],             popularityRank: 15),
   Instrument(symbol: 'NTPC',       displayName: 'NTPC',       name: 'NTPC Ltd',                     exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['ntpc'],                      popularityRank: 16),
@@ -84,7 +87,11 @@ final _kSeedCatalog = <Instrument>[
   Instrument(symbol: 'LT',         displayName: 'LT',         name: 'Larsen & Toubro',              exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['larsen toubro', 'l&t'],      popularityRank: 23),
   Instrument(symbol: 'BAJAJFINSV', displayName: 'BAJAJFINSV', name: 'Bajaj Finserv Ltd',            exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['bajaj finserv'],             popularityRank: 24),
   Instrument(symbol: 'ULTRACEMCO', displayName: 'ULTRACEMCO', name: 'UltraTech Cement Ltd',         exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['ultratech cement', 'ultratech'], popularityRank: 25),
-  Instrument(symbol: 'ZOMATO',     displayName: 'ZOMATO',     name: 'Zomato Ltd',                   exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['zomato'],                    popularityRank: 26),
+  // Symbol is the real listed ticker (ETERNAL — Zomato's legal/exchange name
+  // since the 2024 rename) so quote/order resolution stays correct, but the
+  // display name intentionally stays "ZOMATO" since that's the recognized
+  // brand users search for.
+  Instrument(symbol: 'ETERNAL',    displayName: 'ZOMATO',     name: 'Zomato Ltd',                   exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['zomato', 'eternal'],         popularityRank: 26),
   Instrument(symbol: 'HAL',        displayName: 'HAL',        name: 'Hindustan Aeronautics Ltd',    exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['hal', 'hindustan aeronautics'], popularityRank: 27),
   Instrument(symbol: 'BEL',        displayName: 'BEL',        name: 'Bharat Electronics Ltd',       exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['bel', 'bharat electronics'], popularityRank: 28),
   Instrument(symbol: 'TRENT',      displayName: 'TRENT',      name: 'Trent Ltd',                    exchange: 'NSE', segment: InstrumentSegment.eq,   aliases: ['trent'],                     popularityRank: 29),
@@ -99,6 +106,7 @@ final _kSeedCatalog = <Instrument>[
   Instrument(symbol: 'SENSEX',     displayName: 'SENSEX',     name: 'BSE Sensex',                   exchange: 'BSE', segment: InstrumentSegment.idx,  aliases: ['bse sensex', 'sensex30'],     popularityRank: 3),
   Instrument(symbol: 'FINNIFTY',   displayName: 'FINNIFTY',   name: 'Nifty Financial Services',     exchange: 'NSE', segment: InstrumentSegment.idx,  aliases: ['fin nifty', 'finnf'],         popularityRank: 4),
   Instrument(symbol: 'MIDCPNIFTY', displayName: 'MIDCPNIFTY', name: 'Nifty Midcap Select',          exchange: 'NSE', segment: InstrumentSegment.idx,  aliases: ['midcap nifty', 'midcp'],      popularityRank: 5),
+  Instrument(symbol: 'INDIA VIX',  displayName: 'INDIA VIX',  name: 'India Volatility Index',       exchange: 'NSE', segment: InstrumentSegment.idx,  aliases: ['vix', 'india vix', 'volatility index'], popularityRank: 6),
   // MCX Commodities
   Instrument(symbol: 'GOLD',        displayName: 'GOLD',        name: 'Gold MCX Futures',            exchange: 'MCX', segment: InstrumentSegment.comm, aliases: ['gold mcx', 'sona'],           popularityRank: 1),
   Instrument(symbol: 'SILVER',      displayName: 'SILVER',      name: 'Silver MCX Futures',          exchange: 'MCX', segment: InstrumentSegment.comm, aliases: ['silver mcx', 'chandi'],       popularityRank: 2),

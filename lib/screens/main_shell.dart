@@ -15,6 +15,7 @@ import 'orders_screen.dart';
 import 'portfolio_screen.dart';
 import 'profile_screen.dart';
 import '../services/subscription_manager.dart';
+import '../state/tab_notifier.dart';
 
 /// Thin route wrapper so auth screens can navigate here without importing main.dart.
 class MainShellRoute extends StatelessWidget {
@@ -82,6 +83,7 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
+        activeTabNotifier.value = _selectedIndex;
         _updateTabSubscription(_selectedIndex);
       }
     });
@@ -89,13 +91,18 @@ class _MainShellState extends State<MainShell> {
 
   void _onTabSelected(int idx) {
     setState(() => _selectedIndex = idx);
+    activeTabNotifier.value = idx;
     _updateTabSubscription(idx);
   }
 
   void _updateTabSubscription(int idx) {
     final store = TradingScope.read(context);
+    // Notify MarketWatchScreen whether it is the active tab so it can
+    // subscribe/unsubscribe its own symbols without conflicting with other tabs.
+    MarketWatchScreen.isActiveNotifier.value = idx == 1;
+
     if (idx == 0) {
-      // Home — subscribe to dashboard symbols (watchlist + open positions/holdings)
+      // Home — subscribe to dashboard symbols (user watchlist + open positions/holdings)
       final symbols = {
         'NIFTY',
         'BANKNIFTY',
@@ -319,6 +326,12 @@ class PinLockOverlay extends StatefulWidget {
 class _PinLockOverlayState extends State<PinLockOverlay> {
   final TextEditingController _pinController = TextEditingController();
   String _error = '';
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

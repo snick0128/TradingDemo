@@ -65,20 +65,35 @@ class TradingStore extends ChangeNotifier {
   // No mock price subscription — live backend is the only price source.
   StreamSubscription<Map<String, double>>? _priceSubscription;
 
-  // Debounce notifyListeners() so rapid-fire ticks collapse into one
-  // rebuild per animation frame (~16 ms at 60 fps).
-  Timer? _notifyDebounce;
-
   // Track last known LTP per symbol to suppress no-op emissions.
   final Map<String, double> _lastLtpBySymbol = {};
 
   // Per-symbol notifiers for zero-overhead targeted price rebuilds.
-  // Updated immediately on each tick (before the 16ms debounce).
   final Map<String, ValueNotifier<double>> _ltpNotifiers = {};
+
+  // Granular per-metric notifiers — widgets subscribe directly and bypass
+  // notifyListeners() so only the subscribing widget rebuilds, not the tree.
+  final Map<String, ValueNotifier<double>> _changeNotifiers = {};
+  final _runningPnlNotifier      = ValueNotifier<double>(0.0);
+  final _equityNotifier          = ValueNotifier<double>(0.0);
+  final _availableMarginNotifier = ValueNotifier<double>(0.0);
+  final _marginShortfallNotifier = ValueNotifier<double>(0.0);
+  final _topMoversNotifier       = ValueNotifier<List<Stock>>(const []);
+
+  // Targeted structural version counters — increment only when that data
+  // category changes (never on price ticks). Screens subscribe to exactly
+  // one and skip the structural-gate boilerplate entirely.
+  final _positionsVersion = ValueNotifier<int>(0);
+  final _ordersVersion    = ValueNotifier<int>(0);
+  final _accountVersion   = ValueNotifier<int>(0);
 
   // Render tracing: batch addPostFrameCallback so we schedule at most 1 per frame.
   bool _renderTracePending = false;
   final List<({String symbol, double ltp, int storeExitTs})> _pendingRenderTrace = [];
+
+  // Tick-to-frame latency ring buffer — last 512 measurements, reported every 30s.
+  final List<int> _frameLatencies = [];
+  Timer? _latencyReportTimer;
 
   /// Returns a [ValueNotifier<double>] for [symbol] that fires on every tick.
   /// Use with [ValueListenableBuilder] for instant, targeted price rebuilds.
@@ -86,13 +101,37 @@ class TradingStore extends ChangeNotifier {
       _ltpNotifiers.putIfAbsent(
           symbol, () => ValueNotifier(_lastLtpBySymbol[symbol] ?? 0.0));
 
+  /// Per-symbol change-% notifier, seeded from already-cached stock data.
+  ValueNotifier<double> changeNotifier(String symbol) =>
+      _changeNotifiers.putIfAbsent(symbol, () {
+        final existing = _watchlistUniverse[symbol];
+        return ValueNotifier(existing?.changePercentage ?? 0.0);
+      });
+
+  ValueNotifier<double>       get runningPnlNotifier      => _runningPnlNotifier;
+  ValueNotifier<double>       get equityNotifier          => _equityNotifier;
+  ValueNotifier<double>       get availableMarginNotifier => _availableMarginNotifier;
+  ValueNotifier<double>       get marginShortfallNotifier => _marginShortfallNotifier;
+  ValueNotifier<List<Stock>>  get topMoversNotifier       => _topMoversNotifier;
+  ValueNotifier<int>          get positionsVersion        => _positionsVersion;
+  ValueNotifier<int>          get ordersVersion           => _ordersVersion;
+  ValueNotifier<int>          get accountVersion          => _accountVersion;
+
   // ── Live backend wiring ────────────────────────────────────────────────────
   LiveMarketService? _liveMarketService;
   StreamSubscription<List<Stock>>? _liveStockSub;
   StreamSubscription<Map<String, dynamic>>? _wsNotifSub;
+  StreamSubscription<Map<String, List<Stock>>>? _moversSub;
+
+  // Pre-computed top movers from the movers stream (updated every ~5 s, not every tick).
+  List<Stock> _topGainers = [];
+  List<Stock> _topLosers  = [];
   bool _usingLiveBackend = false;
   bool get usingLiveBackend => _usingLiveBackend;
   LiveMarketService? get liveMarketService => _liveMarketService;
+  int get activeTradingStoreListeners =>
+      [_liveStockSub, _wsNotifSub, _moversSub].where((s) => s != null).length;
+  int get activeNotifiers => _ltpNotifiers.length;
 
   /// Call this once after the store is created to switch from mock prices
   /// to live prices from the Node.js backend.
@@ -117,9 +156,14 @@ class TradingStore extends ChangeNotifier {
 
     _liveStockSub = _liveMarketService!.stockUpdates.listen(_onLiveStockUpdate);
     _wsNotifSub   = _liveMarketService!.notificationStream.listen(_onWsNotification);
+    _moversSub    = _liveMarketService!.moversUpdates.listen(_onMoversUpdate);
     unawaited(_liveMarketService!.start());
     _refreshMarketSubscriptions();
     _usingLiveBackend = true;
+    _latencyReportTimer ??= Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _reportLatencyStats(),
+    );
   }
 
   /// Register userId with the live backend WebSocket for real-time notification push.
@@ -175,6 +219,7 @@ class TradingStore extends ChangeNotifier {
     if (!_usingLiveBackend) return;
     _liveStockSub?.cancel();
     _wsNotifSub?.cancel();
+    _moversSub?.cancel();
     _liveMarketService?.dispose();
     _liveMarketService = null;
     _usingLiveBackend = false;
@@ -199,18 +244,11 @@ class TradingStore extends ChangeNotifier {
   // store when Firestore emits. TradingStore is a pure in-memory state holder —
   // it does NOT open its own Firestore listeners.
 
-  /// Called when the live backend emits a fresh batch of stocks.
-  ///
-  /// LTP deduplication: skips the notify if no price actually changed.
-  /// Debounced notify: collapses rapid-fire ticks into one rebuild per ~16 ms.
+  /// Called when the live backend emits a tick for one or more stocks.
+  /// Ticks arrive one-at-a-time (immediate emit — no batch timer).
   void _onLiveStockUpdate(List<Stock> stocks) {
     if (stocks.isEmpty) return;
-
     bool anyPriceChanged = false;
-    // Track whether any new symbol was added to the watchlist this batch.
-    // If so, we refresh the WS subscription list once after the loop so
-    // bootstrap symbols (NIFTY, BANKNIFTY, etc.) are subscribed immediately.
-    bool newSymbolAdded = false;
 
     // Clear error state — backend is responding
     if (_backendError) {
@@ -231,6 +269,12 @@ class TradingStore extends ChangeNotifier {
         if (stock.token.isNotEmpty) {
           _ltpNotifiers[stock.token]?.value = newLtp;
         }
+        // Push change% — guarded so only actual changes fire the notifier.
+        final changeN = _changeNotifiers[stock.symbol];
+        if (changeN != null) {
+          final newChange = stock.changePercentage;
+          if (changeN.value != newChange) changeN.value = newChange;
+        }
       }
       final ltpNotifierTs = DateTime.now().millisecondsSinceEpoch;
       anyPriceChanged = true;
@@ -239,15 +283,14 @@ class TradingStore extends ChangeNotifier {
       final oldPrice = existing?.currentPrice;
 
       // Update watchlist entry — O(1) via index map.
+      // Only symbols the user explicitly added are in _watchlist/_watchlistIndex.
+      // All ticking symbols go into _watchlistUniverse for price lookups.
       final idx = _watchlistIndex[stock.symbol] ?? -1;
       if (idx >= 0) {
         _diagWatchlistIndexHits++;
         _watchlist[idx] = stock;
       } else {
         _diagWatchlistIndexMisses++;
-        _watchlistIndex[stock.symbol] = _watchlist.length;
-        _watchlist.add(stock);
-        newSymbolAdded = true;
       }
       _watchlistUniverse[stock.symbol] = stock;
 
@@ -289,49 +332,90 @@ class TradingStore extends ChangeNotifier {
           storeExitTs:   storeExitTs,
         );
         _pendingRenderTrace.add((symbol: stock.symbol, ltp: newLtp, storeExitTs: storeExitTs));
-        if (!_renderTracePending) {
-          _renderTracePending = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _renderTracePending = false;
-            final renderTs = DateTime.now().millisecondsSinceEpoch;
-            for (final entry in _pendingRenderTrace) {
-              _liveMarketService?.recordRenderCompletion(
-                  entry.symbol, entry.ltp, renderTs, entry.storeExitTs);
-            }
-            _pendingRenderTrace.clear();
-          });
-        }
       }
     }
 
-    // Refresh WS subscriptions once when new symbols arrive (e.g., bootstrap).
-    if (newSymbolAdded) _refreshMarketSubscriptions();
+    // Push granular P&L/margin notifiers after every batch so VLB-subscribed
+    // widgets update without waiting for the full notifyListeners() rebuild.
+    // Compute once to avoid the runningPnL fold() running 4 times per tick.
+    if (anyPriceChanged) {
+      final newPnL = _positions.fold<double>(0.0, (s, p) => s + p.unrealizedPnl);
+      final um = usedMargin; // single fold over positions for margin
+      final newEquity = _balance + um + newPnL;
+      final newAvailableMargin = (newEquity - um).clamp(0.0, double.infinity);
+      final newMarginShortfall = (um - newEquity).clamp(0.0, double.infinity);
+      if (_runningPnlNotifier.value != newPnL) _runningPnlNotifier.value = newPnL;
+      if (_equityNotifier.value != newEquity) _equityNotifier.value = newEquity;
+      if (_availableMarginNotifier.value != newAvailableMargin) _availableMarginNotifier.value = newAvailableMargin;
+      if (_marginShortfallNotifier.value != newMarginShortfall) _marginShortfallNotifier.value = newMarginShortfall;
+    }
 
     if (!anyPriceChanged) return;
 
-    // Debounce: collapse rapid ticks into one notification per ~16 ms frame.
-    // This prevents 60+ rebuilds/second when many symbols tick simultaneously.
-    _notifyDebounce ??= Timer(const Duration(milliseconds: 16), () {
-      _notifyDebounce = null;
-      notifyListeners();
-    });
+    // Schedule post-frame measurement for every tick batch (not just traced symbols).
+    // batchExitTs is captured here, just before notifyListeners() schedules rebuilds,
+    // so frameMs = renderTs - batchExitTs covers the full store-to-paint latency.
+    if (!_renderTracePending) {
+      _renderTracePending = true;
+      final batchExitTs = DateTime.now().millisecondsSinceEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _renderTracePending = false;
+        final renderTs = DateTime.now().millisecondsSinceEpoch;
+        final frameMs = renderTs - batchExitTs;
+        _addFrameLatency(frameMs);
+        if (_pendingRenderTrace.isNotEmpty) {
+          for (final entry in _pendingRenderTrace) {
+            _liveMarketService?.recordRenderCompletion(
+                entry.symbol, entry.ltp, renderTs, entry.storeExitTs);
+          }
+          _pendingRenderTrace.clear();
+        }
+      });
+    }
+
+    // Price ticks flow exclusively through per-symbol ltpNotifier/changeNotifier
+    // VLBs and the granular P&L notifiers above.  Global notifyListeners() is
+    // intentionally absent here — every price-path widget already uses a
+    // targeted ValueListenableBuilder, so a global rebuild is pure overhead.
+  }
+
+  void _addFrameLatency(int ms) {
+    _frameLatencies.add(ms);
+    if (_frameLatencies.length > 512) _frameLatencies.removeAt(0);
+  }
+
+  void _reportLatencyStats() {
+    _frameLatencies.clear();
+  }
+
+  void _onMoversUpdate(Map<String, List<Stock>> data) {
+    _topGainers = data['gainers'] ?? [];
+    _topLosers  = data['losers']  ?? [];
+    _topMoversNotifier.value = topMovers.toList();
+    // topMoversNotifier VLB drives _TopMoversGrid — no global notify needed.
   }
 
   void _refreshMarketSubscriptions() {
-    final dashboardSymbols = {
+    final dashboardSymbols = <String>{
       'NIFTY',
       'BANKNIFTY',
       ..._watchlist.map((s) => s.symbol),
       ..._positions.map((p) => p.symbol),
       ..._holdings.map((h) => h.symbol),
     };
-    SubscriptionManager.instance.replaceScreenSubscriptions('dashboard', dashboardSymbols);
+    if (!setEquals(_lastDashboardSymbols, dashboardSymbols)) {
+      _lastDashboardSymbols = Set.unmodifiable(dashboardSymbols);
+      SubscriptionManager.instance.replaceScreenSubscriptions('dashboard', dashboardSymbols);
+    }
 
-    final portfolioSymbols = {
+    final portfolioSymbols = <String>{
       ..._positions.map((p) => p.symbol),
       ..._holdings.map((h) => h.symbol),
     };
-    SubscriptionManager.instance.replaceScreenSubscriptions('portfolio', portfolioSymbols);
+    if (!setEquals(_lastPortfolioSymbols, portfolioSymbols)) {
+      _lastPortfolioSymbols = Set.unmodifiable(portfolioSymbols);
+      SubscriptionManager.instance.replaceScreenSubscriptions('portfolio', portfolioSymbols);
+    }
   }
 
   void monitorSymbol(String symbol) {
@@ -389,6 +473,11 @@ class TradingStore extends ChangeNotifier {
   // Maintained incrementally on add; fully rebuilt on removal (non-hot-path).
   final Map<String, int> _watchlistIndex = {};
 
+  // Dedup guards: _refreshMarketSubscriptions() skips replaceScreenSubscriptions
+  // if the symbol set hasn't changed since the last call.
+  Set<String>? _lastDashboardSymbols;
+  Set<String>? _lastPortfolioSymbols;
+
   // ── Watchlist index diagnostics (lifetime counters) ───────────────────────
   int _diagWatchlistIndexHits   = 0;
   int _diagWatchlistIndexMisses = 0;
@@ -441,19 +530,38 @@ class TradingStore extends ChangeNotifier {
 
   @override
   void dispose() {
-    _notifyDebounce?.cancel();
+    _latencyReportTimer?.cancel();
     _priceSubscription?.cancel();
     _liveStockSub?.cancel();
     _wsNotifSub?.cancel();
+    _moversSub?.cancel();
     _liveMarketService?.dispose();
     _alertService.dispose();
     _marketDataService.dispose();
     for (final n in _ltpNotifiers.values) n.dispose();
     _ltpNotifiers.clear();
+    for (final n in _changeNotifiers.values) n.dispose();
+    _changeNotifiers.clear();
+    _runningPnlNotifier.dispose();
+    _equityNotifier.dispose();
+    _availableMarginNotifier.dispose();
+    _marginShortfallNotifier.dispose();
+    _topMoversNotifier.dispose();
+    _positionsVersion.dispose();
+    _ordersVersion.dispose();
+    _accountVersion.dispose();
     super.dispose();
   }
 
   UnmodifiableListView<Stock> get watchlist => UnmodifiableListView(_watchlist);
+
+  /// All symbols ever seen from live ticks or snapshots, available for price
+  /// lookups even if not in the user's curated watchlist.
+  Iterable<Stock> get knownStocks => _watchlistUniverse.values;
+
+  /// Top gainers and losers from the last movers update (updated ~every 5 s).
+  /// Gainers first, then losers — up to 10 stocks total.
+  List<Stock> get topMovers => [..._topGainers, ..._topLosers];
 
   Map<String, dynamic> get watchlistDiagnostics => {
     'watchlistSize':        _watchlist.length,
@@ -587,10 +695,8 @@ class TradingStore extends ChangeNotifier {
         _accountEquity.usedMargin == newEquity.usedMargin &&
         _accountEquity.runningPnL == newEquity.runningPnL) return;
     _accountEquity = newEquity;
-    _notifyDebounce ??= Timer(const Duration(milliseconds: 16), () {
-      _notifyDebounce = null;
-      notifyListeners();
-    });
+    _accountVersion.value++;
+    notifyListeners();
   }
 
   Stock? stockBySymbolOrNull(String symbol) {
@@ -906,7 +1012,7 @@ class TradingStore extends ChangeNotifier {
       stopLossPrice: stopLossPrice,
     );
     _orders.insert(0, newOrder);
-
+    _ordersVersion.value++;
     notifyListeners();
 
     return OrderResult(success: true, orderId: orderId);
@@ -932,6 +1038,7 @@ class TradingStore extends ChangeNotifier {
       ),
     );
 
+    _accountVersion.value++;
     notifyListeners();
     return const OrderResult(success: true, orderId: 'Funds added to wallet.');
   }
@@ -963,6 +1070,7 @@ class TradingStore extends ChangeNotifier {
       ),
     );
 
+    _accountVersion.value++;
     notifyListeners();
     return const OrderResult(success: true, orderId: 'Withdrawal successful.');
   }
@@ -1143,6 +1251,7 @@ class TradingStore extends ChangeNotifier {
     );
     if (index < 0) return;
     _positions[index] = _positions[index].copyWith(product: to);
+    _positionsVersion.value++;
     notifyListeners();
   }
 
@@ -1154,6 +1263,7 @@ class TradingStore extends ChangeNotifier {
     final order = _orders[index];
     if (order.status != OrderStatus.pending) return;
     _orders[index] = order.copyWith(status: OrderStatus.cancelled);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1166,6 +1276,7 @@ class TradingStore extends ChangeNotifier {
 
   void createGTTOrder(GTTOrder order) {
     _gttOrders.add(order);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1173,12 +1284,14 @@ class TradingStore extends ChangeNotifier {
     final index = _gttOrders.indexWhere((o) => o.id == id);
     if (index >= 0) {
       _gttOrders[index] = updated;
+      _ordersVersion.value++;
       notifyListeners();
     }
   }
 
   void cancelGTTOrder(String id) {
     _gttOrders.removeWhere((o) => o.id == id);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1191,6 +1304,7 @@ class TradingStore extends ChangeNotifier {
 
   void createBasket(BasketOrder basket) {
     _basketOrders.add(basket);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1223,6 +1337,7 @@ class TradingStore extends ChangeNotifier {
     }
 
     _basketOrders[index] = basket.copyWith(executedAt: DateTime.now());
+    _ordersVersion.value++;
     notifyListeners();
     return OrderResult(success: true, orderId: basketId);
   }
@@ -1234,6 +1349,7 @@ class TradingStore extends ChangeNotifier {
     } else {
       _basketOrders.add(basket);
     }
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1257,13 +1373,38 @@ class TradingStore extends ChangeNotifier {
 
   final List<AppNotification> _notifications = [];
 
+  // Callbacks wired by main.dart to write mark-read state back to Firestore.
+  void Function(String notifId)? _onNotifMarkRead;
+  void Function()? _onNotifMarkAllRead;
+  void Function()? _onNotifClearAll;
+
+  void setNotificationCallbacks({
+    void Function(String notifId)? onMarkRead,
+    void Function()? onMarkAllRead,
+    void Function()? onClearAll,
+  }) {
+    _onNotifMarkRead    = onMarkRead;
+    _onNotifMarkAllRead = onMarkAllRead;
+    _onNotifClearAll    = onClearAll;
+  }
+
   UnmodifiableListView<AppNotification> get notifications =>
       UnmodifiableListView(_notifications);
 
   int get unreadNotificationCount =>
       _notifications.where((n) => !n.isRead).length;
 
+  /// Replace the full notification list (Firestore snapshot source of truth).
+  void replaceNotifications(List<AppNotification> list) {
+    _notifications
+      ..clear()
+      ..addAll(list);
+    notifyListeners();
+  }
+
+  /// Add a single notification (WS real-time delivery). Deduplicates by ID.
   void addNotification(AppNotification notification) {
+    if (_notifications.any((n) => n.id == notification.id)) return;
     _notifications.insert(0, notification);
     notifyListeners();
   }
@@ -1273,6 +1414,7 @@ class TradingStore extends ChangeNotifier {
     if (index >= 0) {
       _notifications[index] = _notifications[index].copyWith(isRead: true);
       notifyListeners();
+      _onNotifMarkRead?.call(id);
     }
   }
 
@@ -1283,11 +1425,13 @@ class TradingStore extends ChangeNotifier {
       }
     }
     notifyListeners();
+    _onNotifMarkAllRead?.call();
   }
 
   void clearNotifications() {
     _notifications.clear();
     notifyListeners();
+    _onNotifClearAll?.call();
   }
 
   void addOrUpdateOrder(Order order) {
@@ -1297,6 +1441,7 @@ class TradingStore extends ChangeNotifier {
     } else {
       _orders.insert(0, order);
     }
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1304,6 +1449,7 @@ class TradingStore extends ChangeNotifier {
     _orders
       ..clear()
       ..addAll(orders);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1341,6 +1487,7 @@ class TradingStore extends ChangeNotifier {
       ..addAll(merged);
     _rebuildPositionIndex();
     _refreshMarketSubscriptions();
+    _positionsVersion.value++;
     notifyListeners();
   }
 
@@ -1355,6 +1502,7 @@ class TradingStore extends ChangeNotifier {
       ..addAll(merged);
     _rebuildHoldingIndex();
     _refreshMarketSubscriptions();
+    _positionsVersion.value++;
     notifyListeners();
   }
 
@@ -1362,6 +1510,7 @@ class TradingStore extends ChangeNotifier {
     _gttOrders
       ..clear()
       ..addAll(gttOrders);
+    _ordersVersion.value++;
     notifyListeners();
   }
 
@@ -1385,6 +1534,7 @@ class TradingStore extends ChangeNotifier {
       _balance = updated.balance;
       _isUserDataLoaded = true; // real balance has arrived
     }
+    _accountVersion.value++;
     notifyListeners();
   }
 
@@ -1393,6 +1543,7 @@ class TradingStore extends ChangeNotifier {
   void setOptimisticBalance(double newBalance) {
     if (_balance == newBalance) return;
     _balance = newBalance;
+    _accountVersion.value++;
     notifyListeners();
   }
 

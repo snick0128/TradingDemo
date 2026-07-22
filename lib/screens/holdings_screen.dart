@@ -10,18 +10,51 @@ import '../theme.dart';
 import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
 
-class HoldingsScreen extends StatelessWidget {
+class HoldingsScreen extends StatefulWidget {
   final bool showAppBar;
 
   const HoldingsScreen({super.key, this.showAppBar = true});
 
   @override
+  State<HoldingsScreen> createState() => _HoldingsScreenState();
+}
+
+class _HoldingsScreenState extends State<HoldingsScreen> {
+  TradingStore? _store;
+  List<Holding> _holdings = const [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.positionsVersion.removeListener(_onHoldingsChanged);
+      _store = store;
+      store.positionsVersion.addListener(_onHoldingsChanged);
+      _holdings = store.holdings;
+    }
+  }
+
+  void _onHoldingsChanged() {
+    if (mounted) setState(() => _holdings = _store!.holdings);
+  }
+
+  @override
+  void dispose() {
+    _store?.positionsVersion.removeListener(_onHoldingsChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Use .of() for structural store state (backendError, knownStocks connectivity)
+    // so the shimmer clears on first data load. Price ticks never call
+    // notifyListeners(), so this doesn't add per-tick rebuilds.
     final store = TradingScope.of(context);
-    final holdings = store.holdings;
+    final holdings = _holdings;
 
     // Shimmer while market data hasn't arrived yet
-    if (store.watchlist.isEmpty && !store.backendError) {
+    if (store.knownStocks.isEmpty && !store.backendError) {
       final shimmerBody = ShimmerWrapper(
         child: Column(
           children: [

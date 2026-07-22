@@ -201,6 +201,10 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
   String get _resolvedExchange {
     final ex = widget.exchange.toUpperCase();
     if (ex == 'MCX' || ex == 'BFO') return ex;
+    // If the underlying is a known MCX commodity, use MCX regardless of
+    // widget.exchange — this fixes the case where stock detail passes 'NFO'
+    // because the CRUDEOIL/GOLD stock had exchange='NSE' (Flutter default).
+    if (_kMcxUnderlyings.contains(_selectedSymbol.toUpperCase())) return 'MCX';
     return 'NFO';
   }
 
@@ -352,20 +356,30 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
       );
       if (!mounted) return;
       if (dates.isNotEmpty) {
+        final today = DateTime.now();
+        final todayMidnight = DateTime(today.year, today.month, today.day);
+
         final realExpiries = dates
             .map((d) {
               try {
-                return DateTime.parse(d);
+                final parsed = DateTime.parse(d);
+                // Normalise to LOCAL midnight so DateTime equality in the
+                // picker (== comparison) is reliable regardless of whether
+                // the backend returned a UTC or local ISO string.
+                return DateTime(parsed.year, parsed.month, parsed.day);
               } catch (_) {
                 return null;
               }
             })
             .whereType<DateTime>()
-            .toList();
+            .where((d) => !d.isBefore(todayMidnight)) // drop already-expired dates
+            .toList()
+          ..sort((a, b) => a.compareTo(b)); // ascending — nearest first
+
         if (realExpiries.isNotEmpty) {
           setState(() {
             _expiries = realExpiries;
-            _selectedExpiry = realExpiries.first;
+            _selectedExpiry = realExpiries.first; // nearest upcoming expiry
           });
         }
       }
@@ -907,6 +921,7 @@ class _OptionsChainScreenState extends State<OptionsChainScreen>
               exchange: _resolvedExchange,
               ltp: ltp,
               token: token,
+              expiry: selectedExpiry,
             );
             final optStock = sc.stockBySymbol(sym);
             OrderFormSheet.show(
@@ -1176,7 +1191,7 @@ class _LiveSymbolChip extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      price >= 1000 ? price.toStringAsFixed(0) : price.toStringAsFixed(2),
+                      price.toStringAsFixed(2),
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
@@ -1486,8 +1501,6 @@ class _StrikeRow extends StatelessWidget {
 }
 
 String _fmtPrice(double p) {
-  if (p >= 10000) return p.toStringAsFixed(0);
-  if (p >= 100) return p.toStringAsFixed(1);
   return p.toStringAsFixed(2);
 }
 

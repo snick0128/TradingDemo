@@ -588,8 +588,9 @@ class _TableRow extends StatelessWidget {
                   style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
             ],
           )),
-          // Exit price + time
-          Expanded(flex: 2, child: entry.exitPrice != null
+          // Exit price + time — only shown after position is exited with a valid fill price
+          Expanded(flex: 2, child: entry.status == TradeStatus.closed &&
+                  entry.exitPrice != null && entry.exitPrice! > 0
               ? Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Text('₹${entry.exitPrice!.toStringAsFixed(2)}',
                       style: GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textPrimary)),
@@ -598,8 +599,9 @@ class _TableRow extends StatelessWidget {
                 ])
               : Text('—', textAlign: TextAlign.right,
                   style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary))),
-          // Gross P&L
-          Expanded(flex: 2, child: entry.status == TradeStatus.closed
+          // Gross P&L — only shown after position is exited with both prices valid
+          Expanded(flex: 2, child: entry.status == TradeStatus.closed &&
+                  entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
               ? Text(_fmtPnl(entry.grossPnl), textAlign: TextAlign.right,
                   style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.w600,
                       color: entry.grossPnl >= 0 ? AppColors.success : AppColors.danger))
@@ -611,8 +613,9 @@ class _TableRow extends StatelessWidget {
             textAlign: TextAlign.right,
             style: GoogleFonts.jetBrainsMono(fontSize: 9, color: AppColors.textSecondary),
           )),
-          // Net P&L
-          Expanded(flex: 2, child: entry.status == TradeStatus.closed
+          // Net P&L — only shown after position is exited with both prices valid
+          Expanded(flex: 2, child: entry.status == TradeStatus.closed &&
+                  entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
               ? Text(_fmtPnl(entry.netPnl), textAlign: TextAlign.right,
                   style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.w800,
                       color: pnlColor))
@@ -638,15 +641,287 @@ class _TableRow extends StatelessWidget {
 
 // ── Expanded drawer ────────────────────────────────────────────────────────────
 
-class _ExpandedDrawer extends StatelessWidget {
+class _ExpandedDrawer extends StatefulWidget {
   final TradeLedgerEntry entry;
   const _ExpandedDrawer({required this.entry});
+
+  @override
+  State<_ExpandedDrawer> createState() => _ExpandedDrawerState();
+}
+
+class _ExpandedDrawerState extends State<_ExpandedDrawer> {
+  bool _loading = false;
+  String? _actionError;
+
+  // ── Edit Trade dialog ────────────────────────────────────────────────────────
+
+  Future<void> _showEditDialog() async {
+    final entry = widget.entry;
+    final entryPriceCtrl  = TextEditingController(text: entry.entryPrice.toStringAsFixed(2));
+    final entryTimeCtrl   = TextEditingController(
+        text: _isUnknownTime(entry.entryTime) ? '' : DateFormat('dd/MM/yyyy HH:mm:ss').format(entry.entryTime));
+    final exitPriceCtrl   = TextEditingController(
+        text: entry.exitPrice != null ? entry.exitPrice!.toStringAsFixed(2) : '');
+    final exitTimeCtrl    = TextEditingController(
+        text: entry.exitTime != null && !_isUnknownTime(entry.exitTime!)
+            ? DateFormat('dd/MM/yyyy HH:mm:ss').format(entry.exitTime!)
+            : '');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(LucideIcons.pencil, size: 16),
+          const SizedBox(width: 8),
+          Text('Edit Trade — ${entry.symbol}',
+              style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700)),
+        ]),
+        content: SizedBox(
+          width: 400,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('ENTRY LEG', style: GoogleFonts.inter(
+                fontSize: 9, fontWeight: FontWeight.w800,
+                color: AppColors.success, letterSpacing: 0.8)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: TextField(
+                controller: entryPriceCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Entry Price (₹)',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  labelStyle: GoogleFonts.inter(fontSize: 12),
+                ),
+                style: GoogleFonts.jetBrainsMono(fontSize: 13),
+              )),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(
+                controller: entryTimeCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Entry Time (dd/MM/yyyy HH:mm:ss)',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  labelStyle: GoogleFonts.inter(fontSize: 11),
+                ),
+                style: GoogleFonts.inter(fontSize: 11),
+              )),
+            ]),
+            if (entry.exitPrice != null) ...[
+              const SizedBox(height: 16),
+              Text('EXIT LEG', style: GoogleFonts.inter(
+                  fontSize: 9, fontWeight: FontWeight.w800,
+                  color: AppColors.danger, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: TextField(
+                  controller: exitPriceCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'Exit Price (₹)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    labelStyle: GoogleFonts.inter(fontSize: 12),
+                  ),
+                  style: GoogleFonts.jetBrainsMono(fontSize: 13),
+                )),
+                const SizedBox(width: 8),
+                Expanded(child: TextField(
+                  controller: exitTimeCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Exit Time (dd/MM/yyyy HH:mm:ss)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    labelStyle: GoogleFonts.inter(fontSize: 11),
+                  ),
+                  style: GoogleFonts.inter(fontSize: 11),
+                )),
+              ]),
+            ],
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(children: [
+                Icon(LucideIcons.alertTriangle, size: 12, color: Colors.amber.shade700),
+                const SizedBox(width: 6),
+                Expanded(child: Text(
+                  'Changes write directly to Firestore. P&L will recalculate immediately.',
+                  style: GoogleFonts.inter(fontSize: 10, color: Colors.amber.shade800),
+                )),
+              ]),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: GoogleFonts.inter(fontSize: 12)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Save Changes',
+                style: GoogleFonts.inter(fontSize: 12, color: Colors.white,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) {
+      entryPriceCtrl.dispose();
+      entryTimeCtrl.dispose();
+      exitPriceCtrl.dispose();
+      exitTimeCtrl.dispose();
+      return;
+    }
+
+    final store = AdminScope.of(context);
+    setState(() { _loading = true; _actionError = null; });
+
+    try {
+      final fmt = DateFormat('dd/MM/yyyy HH:mm:ss');
+
+      // Entry order
+      final newEntryPrice = double.tryParse(entryPriceCtrl.text.trim());
+      DateTime? newEntryTime;
+      try { newEntryTime = fmt.parse(entryTimeCtrl.text.trim()); } catch (_) {}
+      await store.editOrderFields(
+        entry.entryOrderId,
+        fillPrice:  newEntryPrice,
+        executedAt: newEntryTime,
+      );
+
+      // Exit order (only if trade is closed, has a separate exit doc, and user filled exit fields)
+      if (entry.exitOrderId != null &&
+          entry.exitOrderId!.isNotEmpty &&
+          entry.exitOrderId != entry.entryOrderId) {
+        final newExitPrice = double.tryParse(exitPriceCtrl.text.trim());
+        DateTime? newExitTime;
+        try { newExitTime = fmt.parse(exitTimeCtrl.text.trim()); } catch (_) {}
+        if (newExitPrice != null || newExitTime != null) {
+          await store.editOrderFields(
+            entry.exitOrderId!,
+            fillPrice:  newExitPrice,
+            executedAt: newExitTime,
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) setState(() { _actionError = e.toString().replaceAll('Exception: ', ''); });
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+      entryPriceCtrl.dispose();
+      entryTimeCtrl.dispose();
+      exitPriceCtrl.dispose();
+      exitTimeCtrl.dispose();
+    }
+  }
+
+  // ── Actions ──────────────────────────────────────────────────────────────────
+
+  Future<void> _approve() async {
+    final store   = AdminScope.of(context);
+    final orderId = widget.entry.entryOrderId;
+    setState(() { _loading = true; _actionError = null; });
+    try {
+      await store.approveOrder(orderId);
+      // Stream update will rebuild the drawer — no local status flip needed.
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _actionError = e.toString().replaceAll('Exception: ', '');
+        });
+      }
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+    }
+  }
+
+  Future<void> _reject() async {
+    final store             = AdminScope.of(context);
+    final orderId           = widget.entry.entryOrderId;
+    final reasonController  = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reject Order',
+            style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 15)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Order ID: $orderId',
+              style: GoogleFonts.jetBrainsMono(fontSize: 11, color: AppColors.textSecondary)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: reasonController,
+            decoration: InputDecoration(
+              labelText: 'Reason (optional)',
+              hintText: 'e.g. Suspicious activity, duplicate order',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              labelStyle: GoogleFonts.inter(fontSize: 12),
+            ),
+            style: GoogleFonts.inter(fontSize: 12),
+            autofocus: true,
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: GoogleFonts.inter(fontSize: 12)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Confirm Reject',
+                style: GoogleFonts.inter(fontSize: 12, color: Colors.white,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() { _loading = true; _actionError = null; });
+    try {
+      final reason = reasonController.text.trim();
+      await store.rejectOrder(orderId, reason: reason.isEmpty ? null : reason);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _actionError = e.toString().replaceAll('Exception: ', '');
+        });
+      }
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+      reasonController.dispose();
+    }
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   static String _fmtV(double v) {
     final abs = v.abs();
     if (abs >= 100000) return '₹${(abs / 100000).toStringAsFixed(2)}L';
     if (abs >= 1000)   return '₹${(abs / 1000).toStringAsFixed(1)}K';
     return '₹${abs.toStringAsFixed(2)}';
+  }
+
+  static String _fmtPnl(double v) {
+    final s = _fmtV(v);
+    return v >= 0 ? '+$s' : '-$s';
   }
 
   static String _fmtDur(Duration d) {
@@ -667,9 +942,11 @@ class _ExpandedDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final entry  = widget.entry;
     final entry0 = entry.sourceOrders.isNotEmpty ? entry.sourceOrders.first : null;
     final exit0  = entry.sourceOrders.length > 1  ? entry.sourceOrders.last  : null;
-    final dirColor = entry.direction == OrderType.buy ? AppColors.success : AppColors.danger;
+    final dirColor   = entry.direction == OrderType.buy ? AppColors.success : AppColors.danger;
+    final isPending  = entry.status == TradeStatus.pending;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -680,6 +957,7 @@ class _ExpandedDrawer extends StatelessWidget {
         border: Border.all(color: AppColors.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Header ──────────────────────────────────────────────────────────
         Row(children: [
           const Icon(LucideIcons.clipboardList, size: 13, color: AppColors.textSecondary),
           const SizedBox(width: 6),
@@ -690,6 +968,7 @@ class _ExpandedDrawer extends StatelessWidget {
               style: GoogleFonts.inter(fontSize: 10, color: AppColors.textSecondary)),
         ]),
         const SizedBox(height: 12),
+        // ── Legs ────────────────────────────────────────────────────────────
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Entry leg
           Expanded(child: _LegCard(
@@ -732,13 +1011,18 @@ class _ExpandedDrawer extends StatelessWidget {
           // P&L breakdown
           Expanded(child: _LegCard(
             title: 'P&L BREAKDOWN',
-            color: entry.netPnl >= 0 ? AppColors.success : AppColors.danger,
+            color: entry.status == TradeStatus.closed && entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
+                ? (entry.netPnl >= 0 ? AppColors.success : AppColors.danger)
+                : AppColors.textSecondary,
             rows: [
-              ('Entry Value', _fmtV(entry.entryValue)),
-              ('Exit Value',  entry.exitPrice != null ? _fmtV(entry.exitValue) : '—'),
-              ('Gross P&L',   entry.status == TradeStatus.closed ? _fmtV(entry.grossPnl) : '—'),
+              ('Entry Value', entry.entryPrice > 0 ? _fmtV(entry.entryValue) : '—'),
+              ('Exit Value',  entry.status == TradeStatus.closed && entry.exitPrice != null && entry.exitPrice! > 0
+                  ? _fmtV(entry.exitValue) : '—'),
+              ('Gross P&L',   entry.status == TradeStatus.closed && entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
+                  ? _fmtPnl(entry.grossPnl) : '—'),
               ('Brokerage',   entry.brokerage > 0 ? '-₹${entry.brokerage.toStringAsFixed(2)}' : '—'),
-              ('Net P&L',     entry.status == TradeStatus.closed ? _fmtV(entry.netPnl) : '—'),
+              ('Net P&L',     entry.status == TradeStatus.closed && entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
+                  ? _fmtPnl(entry.netPnl) : '—'),
               ('Health',      _healthLabel(entry.health)),
               ('User',        entry.userClientId.isNotEmpty ? entry.userClientId : entry.userId.substring(0, entry.userId.length.clamp(0, 10))),
               if (entry0?.rejectionReason != null)
@@ -746,11 +1030,134 @@ class _ExpandedDrawer extends StatelessWidget {
             ],
           )),
         ]),
+
+        // ── Edit Trade — available for all statuses ──────────────────────────
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _loading
+              ? const SizedBox(height: 28, width: 120, child: LinearProgressIndicator())
+              : _ActionButton(
+                  label: 'Edit Trade',
+                  icon: LucideIcons.pencil,
+                  color: AppColors.primary,
+                  onTap: _showEditDialog,
+                ),
+        ),
+        if (_actionError != null && !isPending) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            const Icon(LucideIcons.alertCircle, size: 11, color: AppColors.danger),
+            const SizedBox(width: 4),
+            Expanded(child: Text(_actionError!,
+                style: GoogleFonts.inter(fontSize: 10, color: AppColors.danger))),
+          ]),
+        ],
+
+        // ── Admin actions — PENDING orders only ──────────────────────────────
+        if (isPending) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(LucideIcons.shieldCheck, size: 12, color: AppColors.textSecondary),
+                const SizedBox(width: 5),
+                Text('Admin Actions', style: GoogleFonts.inter(
+                    fontSize: 10, fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5, color: AppColors.textSecondary)),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(color: Colors.orange.shade200),
+                  ),
+                  child: Text('PENDING', style: GoogleFonts.inter(
+                      fontSize: 9, fontWeight: FontWeight.w700,
+                      color: Colors.orange.shade700)),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: LinearProgressIndicator(),
+                )
+              else
+                Row(children: [
+                  _ActionButton(
+                    label: 'Approve',
+                    icon: LucideIcons.check,
+                    color: AppColors.success,
+                    onTap: _approve,
+                  ),
+                  const SizedBox(width: 8),
+                  _ActionButton(
+                    label: 'Reject',
+                    icon: LucideIcons.x,
+                    color: AppColors.danger,
+                    onTap: _reject,
+                  ),
+                ]),
+              if (_actionError != null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(LucideIcons.alertCircle, size: 11, color: AppColors.danger),
+                  const SizedBox(width: 4),
+                  Expanded(child: Text(_actionError!,
+                      style: GoogleFonts.inter(fontSize: 10, color: AppColors.danger))),
+                ]),
+              ],
+            ]),
+          ),
+        ],
       ]),
     );
   }
 
   static String _short(String s) => s.length > 14 ? '${s.substring(0, 14)}…' : s;
+}
+
+// ── Admin action button ────────────────────────────────────────────────────────
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _ActionButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(5),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 5),
+        Text(label, style: GoogleFonts.inter(
+            fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+      ]),
+    ),
+  );
 }
 
 class _LegCard extends StatelessWidget {
@@ -1010,7 +1417,8 @@ class _MobileCard extends StatelessWidget {
               ])),
               Container(width: 1, height: 36, color: AppColors.border,
                   margin: const EdgeInsets.symmetric(horizontal: 10)),
-              Expanded(child: entry.exitPrice != null
+              Expanded(child: entry.status == TradeStatus.closed &&
+                      entry.exitPrice != null && entry.exitPrice! > 0
                   ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text('Exit', style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
                       Text('₹${entry.exitPrice!.toStringAsFixed(2)}',
@@ -1028,7 +1436,8 @@ class _MobileCard extends StatelessWidget {
                   margin: const EdgeInsets.symmetric(horizontal: 10)),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 Text('Net P&L', style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-                entry.status == TradeStatus.closed
+                entry.status == TradeStatus.closed &&
+                        entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
                     ? Text(_fmtPnl(entry.netPnl), style: GoogleFonts.jetBrainsMono(
                         fontSize: 15, fontWeight: FontWeight.w900, color: pnlColor))
                     : Text('—', style: GoogleFonts.inter(fontSize: 13, color: AppColors.textSecondary)),
@@ -1072,6 +1481,11 @@ class _MobileDetail extends StatelessWidget {
     return '₹${abs.toStringAsFixed(2)}';
   }
 
+  static String _fmtPnl(double v) {
+    final s = _fmtV(v);
+    return v >= 0 ? '+$s' : '-$s';
+  }
+
   @override
   Widget build(BuildContext context) => Container(
     margin: const EdgeInsets.only(bottom: 8),
@@ -1090,11 +1504,14 @@ class _MobileDetail extends StatelessWidget {
         _DRow('Exit Order', entry.exitOrderId!.length > 14 ? '${entry.exitOrderId!.substring(0, 14)}…' : entry.exitOrderId!),
       _DRow('Product',   entry.product),
       _DRow('Variety',   entry.sourceOrders.isNotEmpty ? entry.sourceOrders.first.variety : '—'),
-      _DRow('Entry Value', _fmtV(entry.entryValue)),
-      if (entry.exitPrice != null) _DRow('Exit Value', _fmtV(entry.exitValue)),
-      _DRow('Gross P&L', entry.status == TradeStatus.closed ? _fmtV(entry.grossPnl) : '—'),
+      _DRow('Entry Value', entry.entryPrice > 0 ? _fmtV(entry.entryValue) : '—'),
+      if (entry.status == TradeStatus.closed && entry.exitPrice != null && entry.exitPrice! > 0)
+        _DRow('Exit Value', _fmtV(entry.exitValue)),
+      _DRow('Gross P&L', entry.status == TradeStatus.closed && entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
+          ? _fmtPnl(entry.grossPnl) : '—'),
       _DRow('Brokerage', entry.brokerage > 0 ? '-₹${entry.brokerage.toStringAsFixed(2)}' : '—'),
-      _DRow('Net P&L',   entry.status == TradeStatus.closed ? _fmtV(entry.netPnl) : '—'),
+      _DRow('Net P&L',   entry.status == TradeStatus.closed && entry.entryPrice > 0 && (entry.exitPrice ?? 0) > 0
+          ? _fmtPnl(entry.netPnl) : '—'),
       if (entry.sourceOrders.isNotEmpty && entry.sourceOrders.first.rejectionReason != null)
         _DRow('Reason', entry.sourceOrders.first.rejectionReason!),
     ]),

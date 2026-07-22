@@ -72,9 +72,7 @@ class _PositionDetailContent extends StatelessWidget {
     final p = position;
     final ltp = resolvedLtp;
     final isLong = p.side == OrderType.buy;
-    final pnl = isLong
-        ? (ltp - p.avgPrice) * p.quantity
-        : (p.avgPrice - ltp) * p.quantity;
+    final pnl = p.calculatePnL(ltp);
     final pnlPct =
         p.avgPrice == 0 ? 0.0 : (pnl / (p.avgPrice * p.quantity)) * 100;
     final isProfit = pnl >= 0;
@@ -598,7 +596,7 @@ class _HoldingDetailContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final h = holding;
     final ltp = resolvedLtp;
-    final pnl = (ltp - h.avgPrice) * h.quantity;
+    final pnl = h.calculatePnL(ltp);
     final pnlPct =
         h.avgPrice == 0 ? 0.0 : (pnl / (h.avgPrice * h.quantity)) * 100;
     final isProfit = pnl >= 0;

@@ -21,6 +21,7 @@ Order _buy({
   double? pnl,
   double? charges,
   String symbol = 'TEST',
+  ProductType product = ProductType.mis,
 }) {
   _seq++;
   return Order(
@@ -32,7 +33,7 @@ Order _buy({
     type: OrderType.buy,
     status: OrderStatus.executed,
     dateTime: at,
-    product: ProductType.mis,
+    product: product,
     variety: OrderVariety.market,
     executedAt: at,
     executedPrice: price,
@@ -48,6 +49,7 @@ Order _sell({
   double? pnl,
   double? charges,
   String symbol = 'TEST',
+  ProductType product = ProductType.mis,
 }) {
   _seq++;
   return Order(
@@ -59,7 +61,7 @@ Order _sell({
     type: OrderType.sell,
     status: OrderStatus.executed,
     dateTime: at,
-    product: ProductType.mis,
+    product: product,
     variety: OrderVariety.market,
     executedAt: at,
     executedPrice: price,
@@ -406,5 +408,84 @@ void main() {
     final open = trades.where(_isOpen).toList();
     expect(open.any((t) => t.direction == OrderType.sell), isTrue,
         reason: 'Unmatched SELL shows as open short');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CNC / OVERNIGHT BUCKET ISOLATION
+  //
+  // Root cause: prior to fix, _mapProductType('CNC') defaulted to ProductType.mis,
+  // causing CNC orders to land in the same FIFO bucket as MIS orders and be
+  // matched with the wrong counterpart.
+  //
+  // These tests verify that ProductType.overnight orders are isolated from
+  // ProductType.mis orders in separate FIFO buckets.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test('CNC isolation — CNC buy must not match with MIS sell', () {
+    // CNC BUY at 2500, MIS BUY at 2600, MIS SELL at 2700.
+    // Before fix: all landed in 'TEST::MIS' → CNC BUY matched with SELL at 2500.
+    // After fix: CNC BUY is in 'TEST::OVERNIGHT'; MIS BUY in 'TEST::MIS'.
+    final orders = [
+      _buy( qty: 10, price: 2500.0, at: _t(0), product: ProductType.overnight), // CNC
+      _buy( qty: 10, price: 2600.0, at: _t(1)),                                  // MIS
+      _sell(qty: 10, price: 2700.0, at: _t(2)),                                  // MIS sell
+    ];
+    final trades = buildUserTrades(orders);
+
+    final closed = trades.where(_isClosed).toList();
+    final open   = trades.where(_isOpen).toList();
+
+    // Exactly one closed trade: the MIS pair (2600 buy → 2700 sell)
+    expect(closed.length, 1, reason: 'Only the MIS pair closes');
+    expect(closed[0].entryPrice, closeTo(2600.0, 0.01),
+        reason: 'Entry must be the MIS buy at 2600, not the CNC buy at 2500');
+    expect(closed[0].exitPrice,  closeTo(2700.0, 0.01));
+    expect(closed[0].grossPnl,   closeTo(1000.0, 0.01), reason: '(2700-2600)*10');
+
+    // CNC buy is unmatched → open position
+    expect(open.length, 1, reason: 'CNC buy has no CNC sell → remains open');
+    expect(open[0].entryPrice, closeTo(2500.0, 0.01));
+  });
+
+  test('CNC isolation — CNC buy matches CNC sell, MIS pair stays separate', () {
+    final orders = [
+      _buy( qty: 5, price: 1000.0, at: _t(0)),                                  // MIS
+      _buy( qty: 5, price: 1100.0, at: _t(1), product: ProductType.overnight),  // CNC
+      _sell(qty: 5, price: 1200.0, at: _t(2)),                                  // MIS sell
+      _sell(qty: 5, price: 1300.0, at: _t(3), product: ProductType.overnight),  // CNC sell
+    ];
+    final trades = buildUserTrades(orders);
+
+    final closed = trades.where(_isClosed).toList();
+    expect(closed.length, 2, reason: 'Two independent closed pairs: one MIS, one CNC');
+
+    final byEntry = Map.fromEntries(
+      closed.map((t) => MapEntry(t.entryPrice.round(), t)),
+    );
+    expect(byEntry.containsKey(1000), isTrue, reason: 'MIS pair: entry 1000');
+    expect(byEntry[1000]!.exitPrice, closeTo(1200.0, 0.01));
+
+    expect(byEntry.containsKey(1100), isTrue, reason: 'CNC pair: entry 1100');
+    expect(byEntry[1100]!.exitPrice, closeTo(1300.0, 0.01));
+  });
+
+  test('CNC isolation — mixed NRML and CNC orders stay in separate buckets', () {
+    final orders = [
+      _buy( qty: 10, price: 500.0, at: _t(0), product: ProductType.nrml),
+      _buy( qty: 10, price: 600.0, at: _t(1), product: ProductType.overnight),
+      _sell(qty: 10, price: 700.0, at: _t(2), product: ProductType.nrml),
+      // CNC sell intentionally absent → CNC buy stays open
+    ];
+    final trades = buildUserTrades(orders);
+
+    final closed = trades.where(_isClosed).toList();
+    final open   = trades.where(_isOpen).toList();
+
+    expect(closed.length, 1, reason: 'Only the NRML pair closes');
+    expect(closed[0].entryPrice, closeTo(500.0, 0.01),
+        reason: 'NRML buy at 500 matched with NRML sell at 700');
+
+    expect(open.length, 1, reason: 'CNC buy with no matching CNC sell stays open');
+    expect(open[0].entryPrice, closeTo(600.0, 0.01));
   });
 }

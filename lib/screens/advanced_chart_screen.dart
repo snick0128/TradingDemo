@@ -93,7 +93,10 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final store = TradingScope.of(context);
+    // Use .read() to avoid registering an InheritedWidget dependency here.
+    // addListener below is the sole rebuild trigger — firing only when the
+    // specific symbol price changes rather than on every tick for any symbol.
+    final store = TradingScope.read(context);
     if (_advStore == store) return;
     _advStore?.removeListener(_onAdvLiveTick);
     _advStore = store;
@@ -183,7 +186,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     // Fade out current chart immediately for snappy feel
     _fadeCtrl.reverse();
     try {
-      final store = TradingScope.of(context);
+      final store = TradingScope.read(context);
       final stock = store.stockBySymbol(widget.symbol);
       final interval = _apiInterval(_timeframe);
       final now = DateTime.now().toUtc();
@@ -319,7 +322,9 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
+    // .read() avoids registering an InheritedWidget dependency; the addListener
+    // in didChangeDependencies is the only price-update trigger for this screen.
+    final store = TradingScope.read(context);
     final stock = store.stockBySymbol(widget.symbol);
 
     return Scaffold(

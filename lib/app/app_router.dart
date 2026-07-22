@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../domain/auth/auth_session.dart';
+import '../marketing/marketing_routes.dart';
 import '../presentation/auth/user_login_page.dart';
 import '../presentation/auth/admin_login_page.dart';
 import '../presentation/app/app_orders_page.dart';
@@ -41,9 +42,10 @@ GoRouter createAppRouter(AuthSession authSession) {
       currentPath.startsWith('/admin');
 
   // Set the default landing page based on the host.
-  // Customer app starts at /app/splash which handles auth check then
-  // redirects to /app/login or /app/dashboard via GoRouter redirect logic.
-  String defaultLoc = isAdminHost ? '/admin/login' : '/app/splash';
+  // Customer host root ('/') serves the public marketing site; the in-app
+  // splash/login flow only kicks in once a user follows a /app/* link (e.g.
+  // "Start Free" / "Login" CTAs on the marketing pages).
+  String defaultLoc = isAdminHost ? '/admin/login' : '/';
 
   final String initialLoc = (currentPath == '/' || currentPath.isEmpty)
       ? defaultLoc
@@ -61,11 +63,12 @@ GoRouter createAppRouter(AuthSession authSession) {
       final isUser = authSession.isUser;
 
       // ── Host-based Enforcement ──────────────────────────────────────
-      // If user is on an Admin URL, don't let them access /app/* routes
-      if (isAdminHost && loc.startsWith('/app/')) {
+      // Admin host: only /admin/* routes are served (the public marketing
+      // site and /app/* customer routes are not reachable there).
+      if (isAdminHost && !loc.startsWith('/admin/')) {
         return '/admin/login';
       }
-      // If user is on a Customer URL, don't let them access /admin/* routes
+      // Customer host: don't let them access /admin/* routes
       if (!isAdminHost && loc.startsWith('/admin/')) {
         return '/app/login';
       }
@@ -97,6 +100,9 @@ GoRouter createAppRouter(AuthSession authSession) {
       return null;
     },
     routes: [
+      // ── Public Marketing Site ────────────────────────────────────────
+      ...marketingRoutes,
+
       // ── Customer App ──────────────────────────────────────────────────
       GoRoute(
         path: '/app/splash',

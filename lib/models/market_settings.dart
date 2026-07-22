@@ -104,17 +104,33 @@ class MarketSettings {
     ),
   );
 
-  factory MarketSettings.fromMap(Map<String, dynamic> m) => MarketSettings(
-    stocks: SegmentSettings.fromMap(
-      (m['stocks'] as Map<String, dynamic>?) ?? {},
-    ),
-    mcx: SegmentSettings.fromMap((m['mcx'] as Map<String, dynamic>?) ?? {}),
-    nfo: SegmentSettings.fromMap(
-      (m['nfo'] as Map<String, dynamic>?) ??
-      {'marketOpen': '09:15', 'marketClose': '15:30',
-       'maxLeverage': 200.0, 'marginPercent': 0.5},
-    ),
-  );
+  factory MarketSettings.fromMap(Map<String, dynamic> m) {
+    // Merge Firestore values with segment-specific defaults so that a missing
+    // or partially-filled MCX document doesn't fall back to NSE equity hours.
+    final mcxRaw    = (m['mcx'] as Map<String, dynamic>?) ?? {};
+    final mcxMerged = <String, dynamic>{
+      'enabled':       true,
+      'buyEnabled':    true,
+      'sellEnabled':   true,
+      'marketOpen':    '09:00',   // MCX opens at 09:00 IST
+      'marketClose':   '23:30',   // MCX closes at 23:30 IST (evening session)
+      'maxLeverage':   100.0,
+      'marginPercent': 1.0,
+      ...mcxRaw,                  // admin-saved values override defaults
+    };
+
+    return MarketSettings(
+      stocks: SegmentSettings.fromMap(
+        (m['stocks'] as Map<String, dynamic>?) ?? {},
+      ),
+      mcx: SegmentSettings.fromMap(mcxMerged),
+      nfo: SegmentSettings.fromMap(
+        (m['nfo'] as Map<String, dynamic>?) ??
+        {'marketOpen': '09:15', 'marketClose': '15:30',
+         'maxLeverage': 200.0, 'marginPercent': 0.5},
+      ),
+    );
+  }
 
   Map<String, dynamic> toMap() => {
     'stocks': stocks.toMap(),

@@ -19,6 +19,20 @@ enum OrderStatus {
 
 enum OrderType { buy, sell }
 
+double calculateTradingPnL({
+  required OrderType side,
+  required double ltp,
+  required double avgPrice,
+  required int quantity,
+}) {
+  final price = ltp > 0 ? ltp : avgPrice;
+  return side == OrderType.buy
+      ? (price - avgPrice) * quantity
+      : (avgPrice - price) * quantity;
+}
+
+/// [sl] = Stop Loss — a single user-facing "SL" option that always executes
+/// as Stop Loss Market internally (trigger price only, no limit price).
 enum OrderVariety { market, limit, sl, amo, iceberg }
 
 enum ProductType { mis, nrml, overnight, mtf }
@@ -286,8 +300,19 @@ class Stock {
 
   /// Days until expiry. Null for equities or if expiry is unknown.
   int? get daysToExpiry {
-    if (expiry == null) return null;
-    return expiry!.difference(DateTime.now()).inDays;
+    final e = expiry;
+    if (e == null) return null;
+    return e.difference(DateTime.now()).inDays;
+  }
+
+  /// Non-null, non-empty expiry string trimmed to remove whitespace.
+  /// Returns null when expiry is absent — callers should use this instead of
+  /// accessing expiry directly to avoid accidental null-crashes.
+  String? get safeExpiry {
+    final e = expiry;
+    if (e == null) return null;
+    final iso = e.toIso8601String().trim();
+    return iso.isEmpty ? null : iso;
   }
 }
 
@@ -437,8 +462,17 @@ class PortfolioItem {
   });
 
   double get investedValue => totalQuantity * avgPrice;
-  double get currentValue => totalQuantity * currentPrice;
-  double get pnl => currentValue - investedValue;
+  double get _effectivePrice => currentPrice > 0 ? currentPrice : avgPrice;
+  double get currentValue => totalQuantity * _effectivePrice;
+
+  double calculatePnL(double ltp) => calculateTradingPnL(
+        side: OrderType.buy,
+        ltp: ltp,
+        avgPrice: avgPrice,
+        quantity: totalQuantity,
+      );
+
+  double get pnl => calculatePnL(currentPrice);
   double get pnlPercentage =>
       investedValue == 0 ? 0 : (pnl / investedValue) * 100;
 }
@@ -484,9 +518,15 @@ class Position {
   double get _effectivePrice => currentPrice > 0 ? currentPrice : avgPrice;
 
   double get currentValue  => quantity * _effectivePrice;
-  double get unrealizedPnl => side == OrderType.buy
-      ? currentValue - investedValue
-      : investedValue - currentValue;
+
+  double calculatePnL(double ltp) => calculateTradingPnL(
+        side: side,
+        ltp: ltp,
+        avgPrice: avgPrice,
+        quantity: quantity,
+      );
+
+  double get unrealizedPnl => calculatePnL(currentPrice);
   double get pnlPercentage =>
       investedValue == 0 ? 0 : (unrealizedPnl / investedValue) * 100;
 
@@ -541,8 +581,17 @@ class Holding {
   });
 
   double get investedValue => quantity * avgPrice;
-  double get currentValue => quantity * currentPrice;
-  double get pnl => currentValue - investedValue;
+  double get _effectivePrice => currentPrice > 0 ? currentPrice : avgPrice;
+  double get currentValue => quantity * _effectivePrice;
+
+  double calculatePnL(double ltp) => calculateTradingPnL(
+        side: OrderType.buy,
+        ltp: ltp,
+        avgPrice: avgPrice,
+        quantity: quantity,
+      );
+
+  double get pnl => calculatePnL(currentPrice);
   double get pnlPercentage =>
       investedValue == 0 ? 0 : (pnl / investedValue) * 100;
   double get totalReturn => pnl + (dividendReceived ?? 0);

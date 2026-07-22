@@ -21,8 +21,10 @@ class _BroadcastNotificationsScreenState
   final _messageController = TextEditingController();
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
 
-  String _type    = 'Info';
-  bool   _sending = false;
+  String _type     = 'Info';
+  String _audience = 'all'; // 'all' | 'user'
+  User?  _selectedUser;
+  bool   _sending  = false;
   String? _lastError;
 
   @override
@@ -44,30 +46,51 @@ class _BroadcastNotificationsScreenState
       return;
     }
 
+    if (_audience == 'user' && _selectedUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Select a user first.'),
+        backgroundColor: AppColors.danger,
+      ));
+      return;
+    }
+
     setState(() { _sending = true; _lastError = null; });
 
-    // ── 1. Write to in-app AdminStore (local notification history) ───────────
     final admin = AdminScope.of(context);
-    admin.broadcastNotification(
-      title: title,
-      message: message,
-      type: _mapType(_type),
-    );
 
-    // ── 2. Send in-app notification to all users via backend ──────────────────
     try {
-      await _api.broadcastNotification(
-        title: title,
+      String confirmation;
+      if (_audience == 'user') {
+        final target = _selectedUser!;
+        await _api.sendNotificationToUserId(
+          userId: target.id,
+          title: title,
+          message: message,
+          data: {'type': _type.toLowerCase()},
+        );
+        confirmation = 'Notification sent to ${target.name}.';
+      } else {
+        await _api.broadcastNotification(
+          title: title,
+          message: message,
+          data: {'type': _type.toLowerCase()},
+        );
+        confirmation = 'Notification sent to all users.';
+      }
+
+      // Record in the AdminStore history only after successful delivery.
+      admin.broadcastNotification(
+        title: _audience == 'user' ? '[${_selectedUser!.name}] $title' : title,
         message: message,
-        data: {'type': _type.toLowerCase()},
+        type: _mapType(_type),
       );
 
       _titleController.clear();
       _messageController.clear();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Notification sent to all users.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(confirmation),
           backgroundColor: AppColors.success,
         ));
       }
@@ -95,8 +118,8 @@ class _BroadcastNotificationsScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const AdminHeader(
-              title: 'Broadcast Notifications',
-              subtitle: 'Send FCM push notification to all users instantly.',
+              title: 'Notifications',
+              subtitle: 'Send an in-app notification to all users or a specific user.',
             ),
             const SizedBox(height: 20),
 
@@ -105,15 +128,32 @@ class _BroadcastNotificationsScreenState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Compose Push Notification',
+                    'Compose Notification',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    'Sends an in-app notification to every user. Appears in their notification center immediately.',
+                    'Appears in the recipient\'s notification center immediately.',
                     style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
                   ),
                   const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: _audience,
+                    decoration: const InputDecoration(labelText: 'Audience'),
+                    items: const [
+                      DropdownMenuItem(value: 'all',  child: Text('📢  All Users')),
+                      DropdownMenuItem(value: 'user', child: Text('👤  Specific User')),
+                    ],
+                    onChanged: (v) => setState(() {
+                      _audience = v!;
+                      _selectedUser = null;
+                    }),
+                  ),
+                  if (_audience == 'user') ...[
+                    const SizedBox(height: 12),
+                    _buildUserPicker(context),
+                  ],
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     value: _type,
                     decoration: const InputDecoration(labelText: 'Notification Type'),
@@ -177,7 +217,11 @@ class _BroadcastNotificationsScreenState
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
                           : const Icon(LucideIcons.send, size: 16),
-                      label: Text(_sending ? 'Sending…' : 'Send to All Users'),
+                      label: Text(_sending
+                          ? 'Sending…'
+                          : _audience == 'user'
+                              ? 'Send to ${_selectedUser?.name ?? 'Selected User'}'
+                              : 'Send to All Users'),
                     ),
                   ),
                 ],
@@ -215,6 +259,41 @@ class _BroadcastNotificationsScreenState
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildUserPicker(BuildContext context) {
+    final users = AdminScope.of(context).users.where((u) => !u.isAdmin).toList();
+
+    return Autocomplete<User>(
+      displayStringForOption: (u) => '${u.name} (${u.email})',
+      optionsBuilder: (textValue) {
+        final q = textValue.text.trim().toLowerCase();
+        if (q.isEmpty) return users;
+        return users.where((u) =>
+            u.name.toLowerCase().contains(q) ||
+            u.email.toLowerCase().contains(q) ||
+            u.clientId.toLowerCase().contains(q));
+      },
+      onSelected: (u) => setState(() => _selectedUser = u),
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: 'Select User',
+            hintText: 'Search by name, email or client ID',
+            prefixIcon: const Icon(LucideIcons.user, size: 16),
+            suffixIcon: _selectedUser != null
+                ? const Icon(LucideIcons.checkCircle2,
+                    size: 16, color: AppColors.success)
+                : null,
+          ),
+          onChanged: (_) {
+            if (_selectedUser != null) setState(() => _selectedUser = null);
+          },
+        );
+      },
     );
   }
 

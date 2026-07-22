@@ -6,17 +6,55 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 
-class PortfolioOverviewScreen extends StatelessWidget {
+class PortfolioOverviewScreen extends StatefulWidget {
   final bool showAppBar;
 
   const PortfolioOverviewScreen({super.key, this.showAppBar = true});
 
   @override
+  State<PortfolioOverviewScreen> createState() => _PortfolioOverviewScreenState();
+}
+
+class _PortfolioOverviewScreenState extends State<PortfolioOverviewScreen> {
+  TradingStore? _store;
+  List<Holding> _holdings = const [];
+  List<Position> _positions = const [];
+  double _balance = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.positionsVersion.removeListener(_onPositionsChanged);
+      _store = store;
+      store.positionsVersion.addListener(_onPositionsChanged);
+      _holdings  = store.holdings;
+      _positions = store.positions;
+      _balance   = store.balance;
+    }
+  }
+
+  void _onPositionsChanged() {
+    if (!mounted) return;
+    setState(() {
+      _holdings  = _store!.holdings;
+      _positions = _store!.positions;
+      _balance   = _store!.balance;
+    });
+  }
+
+  @override
+  void dispose() {
+    _store?.positionsVersion.removeListener(_onPositionsChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final holdings = store.holdings;
-    final positions = store.positions;
-    final balance = store.balance;
+    final holdings  = _holdings;
+    final positions = _positions;
+    final balance   = _balance;
 
     final body = SingleChildScrollView(
       child: Padding(

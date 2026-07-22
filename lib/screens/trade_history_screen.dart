@@ -5,6 +5,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/trading_bottom_nav_bar.dart';
 
@@ -17,15 +18,13 @@ enum _TradeStatus { open, closed, rejected, pending }
 enum _SortOrder {
   latestFirst,
   highestProfit,
-  highestLoss,
-  longestDuration;
+  highestLoss;
 
   String get label {
     switch (this) {
-      case latestFirst:     return 'Latest First';
-      case highestProfit:   return 'Highest Profit';
-      case highestLoss:     return 'Highest Loss';
-      case longestDuration: return 'Longest Duration';
+      case latestFirst:   return 'Latest First';
+      case highestProfit: return 'Highest Profit';
+      case highestLoss:   return 'Highest Loss';
     }
   }
 }
@@ -124,12 +123,6 @@ class UserTrade {
     final fillTime  = o.executedAt ?? o.dateTime;
     final fillPrice = o.executedPrice ?? o.price;
     final fillQty   = qty ?? o.executedQuantity ?? o.quantity;
-    final notional  = fillPrice * fillQty;
-    final brok      = fillQty == (o.executedQuantity ?? o.quantity)
-        ? (o.chargesApplied ?? 0.0)
-        : (o.chargesApplied != null
-            ? o.chargesApplied! * fillQty / (o.executedQuantity ?? o.quantity)
-            : notional * 0.0003);
     final duration  = _isUnknownTime(fillTime)
         ? Duration.zero
         : DateTime.now().difference(fillTime);
@@ -140,7 +133,7 @@ class UserTrade {
       product: _productLabel(o.product), variety: _varietyLabel(o.variety),
       direction: o.type, quantity: fillQty,
       entryPrice: fillPrice, entryTime: fillTime, entryOrderId: o.id,
-      grossPnl: 0, brokerage: brok, netPnl: -brok, pointsCaptured: 0,
+      grossPnl: 0, brokerage: 0, netPnl: 0, pointsCaptured: 0,
       status: _TradeStatus.open,
       holdingDuration: duration, sourceOrders: [o],
     );
@@ -182,14 +175,11 @@ class UserTrade {
         : (exitChargesSet ? 0.0 : turnover * 0.0003);
     final brok    = entryBrok + exitBrok;
 
-    // Backend stores pnl = GROSS P&L (before charges) on the closing order.
-    // This is the same convention as realised_pnl_screen and orderEngine.
-    // Prorate by match fraction if only part of the exit order is matched.
-    final serverGross = exit.pnl != null && exit.pnl != 0.0
-        ? (fullExitQty > 0 ? exit.pnl! * matchQty / fullExitQty : exit.pnl!)
-        : null;
-    final effectiveGross = serverGross ?? grossPnl;
-    final netPnl = effectiveGross - brok;
+    // P&L is derived solely from fill prices so each FIFO row reflects its own
+    // cost basis. Using the server's exit.pnl (which uses the holding's avgPrice)
+    // would prorate an average P&L across rows, giving wrong per-lot attribution
+    // for multi-lot builds (e.g. BUY 50@100 + BUY 50@120 → one SELL@115).
+    final netPnl = grossPnl - brok;
 
     return UserTrade(
       id: 'closed_${entry.id}_${exit.id}_q$matchQty',
@@ -275,10 +265,12 @@ List<UserTrade> buildUserTrades(List<Order> orders) {
     }
   }
 
-  // 3. Executed — FIFO match by (symbol, product)
+  // 3. Executed — FIFO match by (symbol, product).
+  // Exclude 'approved': an approved-but-unexecuted limit order has no executed_price.
+  // Including it causes phantom CLOSED trades with the limit price shown as exit price,
+  // while the holding still exists and positions show the trade as OPEN.
   final executed = orders.where((o) =>
       o.status == OrderStatus.executed ||
-      o.status == OrderStatus.approved ||
       o.status == OrderStatus.partiallyExecuted).toList();
 
   final groups = <String, List<Order>>{};
@@ -352,13 +344,29 @@ List<UserTrade> buildUserTrades(List<Order> orders) {
 
 // ── Group builder ──────────────────────────────────────────────────────────────
 
+// Format a date as 'yyyy-MM-dd' — unambiguous string key for grouping.
+String _isoDay(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+DateTime _parseIsoDay(String s) {
+  final p = s.split('-');
+  return DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
+}
+
+/// Group [trades] by calendar date, newest group first.
+/// Uses a String key (yyyy-MM-dd) to avoid any DateTime hash/equality edge
+/// cases in Flutter Web. Trades within each group are sorted newest first.
 List<_DateGroup> groupByDate(List<UserTrade> trades) {
-  final map = <DateTime, List<UserTrade>>{};
+  final map = <String, List<UserTrade>>{};
   for (final t in trades) {
-    map.putIfAbsent(t.dateKey, () => []).add(t);
+    map.putIfAbsent(_isoDay(t.dateKey), () => []).add(t);
   }
   final keys = map.keys.toList()..sort((a, b) => b.compareTo(a));
-  return keys.map((d) => _DateGroup(date: d, trades: map[d]!)).toList();
+  return keys.map((k) {
+    final bucket = map[k]!
+      ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+    return _DateGroup(date: _parseIsoDay(k), trades: bucket);
+  }).toList();
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────────
@@ -414,6 +422,34 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
   _SortOrder _sort = _SortOrder.latestFirst;
   String? _expandedId;
 
+  // ── Cached trades — rebuilt only when ordersVersion changes ───────────────────
+  TradingStore? _store;
+  List<UserTrade> _allTrades = const [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.ordersVersion.removeListener(_onOrdersChanged);
+      _store = store;
+      store.ordersVersion.addListener(_onOrdersChanged);
+      _onOrdersChanged();
+    }
+  }
+
+  void _onOrdersChanged() {
+    if (_store == null) return;
+    final trades = buildUserTrades(_store!.orders.toList());
+    if (mounted) setState(() => _allTrades = trades);
+  }
+
+  @override
+  void dispose() {
+    _store?.ordersVersion.removeListener(_onOrdersChanged);
+    super.dispose();
+  }
+
   // ── Filter logic ─────────────────────────────────────────────────────────────
 
   List<UserTrade> _applyFilters(List<UserTrade> all) {
@@ -460,10 +496,6 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
       case _SortOrder.highestLoss:
         copy.sort((a, b) => a.netPnl.compareTo(b.netPnl));
         break;
-      case _SortOrder.longestDuration:
-        copy.sort((a, b) =>
-            b.holdingDuration.inSeconds.compareTo(a.holdingDuration.inSeconds));
-        break;
     }
     return copy;
   }
@@ -472,12 +504,10 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final allTrades = buildUserTrades(store.orders.toList());
-    final filtered  = _applyFilters(allTrades);
+    final filtered  = _applyFilters(_allTrades);
     final sorted    = _applySortOrder(filtered);
     final groups    = groupByDate(sorted);
-    final summary   = _OverallSummary.from(allTrades);
+    final summary   = _OverallSummary.from(_allTrades);
     final isWide    = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
@@ -548,23 +578,21 @@ class _SummaryStrip extends StatelessWidget {
     final isWide   = MediaQuery.of(context).size.width >= 600;
 
     final items = [
-      _SChip(label: 'Trades',    value: '${summary.totalTrades}',
+      _SChip(label: 'Trades',   value: '${summary.totalTrades}',
           color: AppColors.primary),
-      _SChip(label: 'Win Rate',  value: '${(winRate * 100).toStringAsFixed(1)}%',
+      _SChip(label: 'Win Rate', value: '${(winRate * 100).toStringAsFixed(1)}%',
           color: winColor),
-      _SChip(label: 'P&L',       value: _fmtPnl(summary.netPnl),
+      _SChip(label: 'P&L',      value: _fmtPnl(summary.netPnl),
           color: pnlColor),
-      _SChip(label: 'Brokerage', value: '-${_fmtV(summary.brokerage)}',
-          color: AppColors.textSecondary),
-      _SChip(label: 'Wins',      value: '${summary.wins}',
+      _SChip(label: 'Wins',     value: '${summary.wins}',
           color: AppColors.success),
-      _SChip(label: 'Losses',    value: '${summary.losses}',
+      _SChip(label: 'Losses',   value: '${summary.losses}',
           color: AppColors.danger),
     ];
 
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: isWide
           ? Row(children: items.map((c) => Expanded(child: c)).toList())
           : SingleChildScrollView(
@@ -718,38 +746,33 @@ class _FilterBar extends StatelessWidget {
           ),
         ]),
         const SizedBox(height: 8),
-        // Row 2: filter chips
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            // Exchange
-            ...['ALL', 'NSE', 'BSE', 'MCX'].map((ex) => _FChip(
-              label: ex, selected: exchange == ex,
-              color: _exchColor(ex),
-              onTap: () => onExchange(ex),
-            )),
-            const SizedBox(width: 10),
-            const _Divider(),
-            const SizedBox(width: 10),
-            // P&L
-            _FChip(label: 'All P&L', selected: pnlFilter == 'all',
-                color: AppColors.primary, onTap: () => onPnlFilter('all')),
-            _FChip(label: 'Profit', selected: pnlFilter == 'profit',
-                color: AppColors.success, onTap: () => onPnlFilter('profit')),
-            _FChip(label: 'Loss', selected: pnlFilter == 'loss',
-                color: AppColors.danger, onTap: () => onPnlFilter('loss')),
-            const SizedBox(width: 10),
-            const _Divider(),
-            const SizedBox(width: 10),
-            // Status
-            _FChip(label: 'All', selected: statusFilter == 'all',
-                color: AppColors.primary, onTap: () => onStatusFilter('all')),
-            _FChip(label: 'Open', selected: statusFilter == 'open',
-                color: const Color(0xFFFF6D00), onTap: () => onStatusFilter('open')),
-            _FChip(label: 'Closed', selected: statusFilter == 'closed',
-                color: AppColors.textSecondary, onTap: () => onStatusFilter('closed')),
-          ]),
-        ),
+        // Exchange segment — 4 equal-width chips
+        Row(children: ['ALL', 'NSE', 'BSE', 'MCX'].map((ex) => Expanded(child: _FChip(
+          label: ex, selected: exchange == ex,
+          color: _exchColor(ex),
+          onTap: () => onExchange(ex),
+        ))).toList()),
+        const SizedBox(height: 6),
+        // P&L + Status segments — each group takes half width, chips equal within group
+        Row(children: [
+          Expanded(child: Row(children: [
+            Expanded(child: _FChip(label: 'All', selected: pnlFilter == 'all',
+                color: AppColors.primary, onTap: () => onPnlFilter('all'))),
+            Expanded(child: _FChip(label: 'Profit', selected: pnlFilter == 'profit',
+                color: AppColors.success, onTap: () => onPnlFilter('profit'))),
+            Expanded(child: _FChip(label: 'Loss', selected: pnlFilter == 'loss',
+                color: AppColors.danger, onTap: () => onPnlFilter('loss'))),
+          ])),
+          const SizedBox(width: 6),
+          Expanded(child: Row(children: [
+            Expanded(child: _FChip(label: 'All', selected: statusFilter == 'all',
+                color: AppColors.primary, onTap: () => onStatusFilter('all'))),
+            Expanded(child: _FChip(label: 'Open', selected: statusFilter == 'open',
+                color: const Color(0xFFFF6D00), onTap: () => onStatusFilter('open'))),
+            Expanded(child: _FChip(label: 'Closed', selected: statusFilter == 'closed',
+                color: AppColors.textSecondary, onTap: () => onStatusFilter('closed'))),
+          ])),
+        ]),
       ]),
     );
   }
@@ -774,12 +797,13 @@ class _FChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(right: 6),
+    padding: const EdgeInsets.symmetric(horizontal: 2),
     child: GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
           color: selected ? color : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
@@ -793,15 +817,8 @@ class _FChip extends StatelessWidget {
   );
 }
 
-class _Divider extends StatelessWidget {
-  const _Divider();
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 1, height: 18, color: AppColors.border);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// TRADE LIST  (virtualized CustomScrollView with sticky date headers)
+// TRADE LIST  (flat SliverList — header immediately before its section trades)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _TradeList extends StatelessWidget {
@@ -816,36 +833,45 @@ class _TradeList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Flatten groups into a single interleaved list: [header, trade, trade, header, …]
+    // A single SliverList renders them in declaration order, guaranteeing each
+    // date header sits immediately above its trades.
+    // Root cause of the previous "all headers then all trades" bug:
+    // SliverPersistentHeader(pinned:true) stacks every scrolled-past header at
+    // the top of the viewport.  Removing it entirely fixes the ordering.
+    final items = <Object>[];
+    for (final group in groups) {
+      items.add(group);
+      items.addAll(group.trades);
+    }
+
     if (isWide) {
-      // Desktop: show table header once, then sticky date sections
       return Column(children: [
         _DesktopTableHeader(),
         Expanded(
           child: CustomScrollView(
             slivers: [
-              for (final group in groups) ...[
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _DateSectionHeaderDelegate(group: group, isWide: true),
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) {
+                    final item = items[i];
+                    if (item is _DateGroup) {
+                      return _DateHeaderRow(group: item, isWide: true);
+                    }
+                    final trade = item as UserTrade;
+                    return Column(children: [
+                      _DesktopTradeRow(
+                        trade: trade,
+                        isExpanded: expandedId == trade.id,
+                        onTap: () => onExpand(trade.id),
+                      ),
+                      if (expandedId == trade.id)
+                        _TradeDetailDrawer(trade: trade),
+                    ]);
+                  },
+                  childCount: items.length,
                 ),
-                SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (_, i) {
-                      final trade = group.trades[i];
-                      return Column(children: [
-                        _DesktopTradeRow(
-                          trade: trade,
-                          isExpanded: expandedId == trade.id,
-                          onTap: () => onExpand(trade.id),
-                        ),
-                        if (expandedId == trade.id)
-                          _TradeDetailDrawer(trade: trade),
-                      ]);
-                    },
-                    childCount: group.trades.length,
-                  ),
-                ),
-              ],
+              ),
               SliverToBoxAdapter(
                 child: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
               ),
@@ -853,60 +879,50 @@ class _TradeList extends StatelessWidget {
           ),
         ),
       ]);
-    } else {
-      // Mobile: cards with sticky date headers
-      return CustomScrollView(
-        slivers: [
-          for (final group in groups) ...[
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _DateSectionHeaderDelegate(group: group, isWide: false),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (_, i) {
-                    final trade = group.trades[i];
-                    return Column(children: [
-                      _MobileTradeCard(
-                        trade: trade,
-                        isExpanded: expandedId == trade.id,
-                        onTap: () => onExpand(trade.id),
-                      ),
-                      if (expandedId == trade.id)
-                        _TradeDetailDrawer(trade: trade, mobile: true),
-                    ]);
-                  },
-                  childCount: group.trades.length,
-                ),
-              ),
-            ),
-          ],
-          SliverToBoxAdapter(
-            child: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
-          ),
-        ],
-      );
     }
+
+    return CustomScrollView(
+      slivers: [
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) {
+              final item = items[i];
+              if (item is _DateGroup) {
+                return _DateHeaderRow(group: item, isWide: false);
+              }
+              final trade = item as UserTrade;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Column(children: [
+                  _MobileTradeCard(
+                    trade: trade,
+                    isExpanded: expandedId == trade.id,
+                    onTap: () => onExpand(trade.id),
+                  ),
+                  if (expandedId == trade.id)
+                    _TradeDetailDrawer(trade: trade, mobile: true),
+                ]),
+              );
+            },
+            childCount: items.length,
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(height: TradingBottomNavBar.bottomInset(context)),
+        ),
+      ],
+    );
   }
 }
 
-// ── Sticky date section header ─────────────────────────────────────────────────
+// ── Date section header row ────────────────────────────────────────────────────
+// Regular StatelessWidget rendered as a normal list item — no sticky pinning,
+// no stacking.  Height capped at 36 px (was 48 px) for density.
 
-class _DateSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
+class _DateHeaderRow extends StatelessWidget {
   final _DateGroup group;
   final bool isWide;
-  const _DateSectionHeaderDelegate({required this.group, required this.isWide});
-
-  static double get _h => 48.0;
-
-  @override double get maxExtent => _h;
-  @override double get minExtent => _h;
-
-  @override
-  bool shouldRebuild(_DateSectionHeaderDelegate old) =>
-      old.group.date != group.date || old.group.trades.length != group.trades.length;
+  const _DateHeaderRow({required this.group, required this.isWide});
 
   static String _fmtPnl(double v) {
     final a = v.abs();
@@ -917,7 +933,7 @@ class _DateSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+  Widget build(BuildContext context) {
     final today     = DateTime.now();
     final yesterday = today.subtract(const Duration(days: 1));
     final isToday   = group.date.day == today.day &&
@@ -934,28 +950,28 @@ class _DateSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
                     : AppColors.textSecondary;
 
     return Container(
-      height: _h,
-      decoration: BoxDecoration(
-        color: overlapsContent
-            ? AppColors.surfaceAlt.withOpacity(0.97)
-            : AppColors.surfaceAlt,
+      height: 36,
+      decoration: const BoxDecoration(
+        color: Color(0xFFEDF1FA),
         border: Border(
-          bottom: BorderSide(color: AppColors.border.withOpacity(0.5)),
-          top:    BorderSide(color: AppColors.border.withOpacity(0.3)),
+          top:    BorderSide(color: Color(0xFFD0D9F0)),
+          bottom: BorderSide(color: Color(0xFFD0D9F0)),
         ),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Row(children: [
-        // Date
+        // Left accent bar
+        Container(width: 3, color: AppColors.primary),
+        const SizedBox(width: 10),
+        // Date label
         Text(dateLabel, style: GoogleFonts.inter(
-            fontSize: 12, fontWeight: FontWeight.w800,
-            color: AppColors.textPrimary)),
+            fontSize: 12, fontWeight: FontWeight.w900,
+            color: AppColors.primary, letterSpacing: -0.2)),
         const SizedBox(width: 12),
-        // Stats row
-        _DayStat('${group.totalTrades}', 'Trades', AppColors.primary),
+        // Stats
+        _DayStat('${group.totalTrades}', 'trades', AppColors.textSecondary),
         const SizedBox(width: 10),
         _DayStat('${group.winCount}', 'W', AppColors.success),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         _DayStat('${group.lossCount}', 'L', AppColors.danger),
         const Spacer(),
         if (isWide) ...[
@@ -964,12 +980,13 @@ class _DateSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
           _DayPnl('Brok', -group.brokerage),
           const SizedBox(width: 14),
         ],
-        // Net P&L — always visible
+        // Net P&L
         Text(_fmtPnl(group.netPnl), style: GoogleFonts.jetBrainsMono(
-            fontSize: 13, fontWeight: FontWeight.w800, color: pnlColor)),
+            fontSize: 13, fontWeight: FontWeight.w900, color: pnlColor)),
         const SizedBox(width: 4),
-        Text('Net', style: GoogleFonts.inter(
+        Text('net', style: GoogleFonts.inter(
             fontSize: 9, color: AppColors.textSecondary)),
+        const SizedBox(width: 12),
       ]),
     );
   }
@@ -1037,7 +1054,6 @@ class _DesktopTableHeader extends StatelessWidget {
       _TH('Points',   2, right: true),
       _TH('Gross P&L',2, right: true),
       _TH('Net P&L',  2, right: true),
-      _TH('Duration', 2),
       _TH('Status',   2),
       SizedBox(width: 32),
     ]),
@@ -1082,14 +1098,6 @@ class _DesktopTradeRow extends StatelessWidget {
       case _TradeStatus.rejected: return AppColors.danger;
       case _TradeStatus.pending:  return AppColors.primary;
     }
-  }
-
-  static String _fmtDur(Duration d) {
-    if (d.inSeconds == 0)  return '< 1s';
-    if (d.inDays > 0)      return '${d.inDays}d ${d.inHours.remainder(24)}h';
-    if (d.inHours > 0)     return '${d.inHours}h ${d.inMinutes.remainder(60)}m';
-    if (d.inMinutes > 0)   return '${d.inMinutes}m ${d.inSeconds.remainder(60)}s';
-    return '${d.inSeconds}s';
   }
 
   @override
@@ -1180,9 +1188,6 @@ class _DesktopTradeRow extends StatelessWidget {
                   style: GoogleFonts.jetBrainsMono(fontSize: 12, fontWeight: FontWeight.w800,
                       color: pnlColor))
               : _StatusPill(status: trade.status)),
-          // Duration
-          Expanded(flex: 2, child: Text(_fmtDur(trade.holdingDuration),
-              style: GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textSecondary))),
           // Status
           Expanded(flex: 2, child: _StatusPill(status: trade.status)),
           // Expand chevron
@@ -1213,129 +1218,115 @@ class _MobileTradeCard extends StatelessWidget {
     return v > 0 ? '+$s' : v < 0 ? '-$s' : s;
   }
 
-  static String _fmtDur(Duration d) {
-    if (d.inSeconds == 0)  return '< 1s';
-    if (d.inDays > 0)      return '${d.inDays}d ${d.inHours.remainder(24)}h';
-    if (d.inHours > 0)     return '${d.inHours}h ${d.inMinutes.remainder(60)}m';
-    if (d.inMinutes > 0)   return '${d.inMinutes}m';
-    return '${d.inSeconds}s';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isLong   = trade.direction == OrderType.buy;
-    final dirColor = isLong ? AppColors.success : AppColors.danger;
-    final pnlColor = trade.netPnl > 0 ? AppColors.success
-                   : trade.netPnl < 0 ? AppColors.danger
-                   : AppColors.textSecondary;
+    final isLong    = trade.direction == OrderType.buy;
+    final dirColor  = isLong ? AppColors.success : AppColors.danger;
+    final pnlColor  = trade.netPnl > 0 ? AppColors.success
+                    : trade.netPnl < 0 ? AppColors.danger
+                    : AppColors.textSecondary;
+    final isClosed  = trade.status == _TradeStatus.closed;
     final borderColor = trade.status == _TradeStatus.open
         ? const Color(0xFFFF6D00)
         : trade.netPnl > 0 ? AppColors.success.withOpacity(0.3)
         : trade.netPnl < 0 ? AppColors.danger.withOpacity(0.3)
         : AppColors.border;
+    final entryLabel = isLong ? 'Buy' : 'Sell';
+    final exitLabel  = isLong ? 'Sell' : 'Buy';
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
+        margin: const EdgeInsets.only(bottom: 6),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: borderColor),
           boxShadow: [BoxShadow(
               color: Colors.black.withOpacity(0.03),
-              blurRadius: 6, offset: const Offset(0, 2))],
+              blurRadius: 4, offset: const Offset(0, 1))],
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(children: [
-            // Row 1: symbol + direction + status
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Row 1: direction badge · symbol · exchange·product · status
             Row(children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: dirColor.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(5),
+                  color: dirColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text(isLong ? 'LONG' : 'SHORT',
+                child: Text(isLong ? 'BUY' : 'SELL',
                     style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: dirColor)),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(child: Text(trade.symbol, style: GoogleFonts.inter(
-                  fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textPrimary))),
+                  fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+                  overflow: TextOverflow.ellipsis)),
               Text('${trade.exchange} · ${trade.product}', style: GoogleFonts.inter(
                   fontSize: 9, color: AppColors.textSecondary)),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               _StatusPill(status: trade.status),
             ]),
-            const SizedBox(height: 10),
-            // Row 2: entry | points | exit
-            Row(children: [
-              // Entry
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Entry', style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-                Text('₹${trade.entryPrice.toStringAsFixed(2)}',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 12, fontWeight: FontWeight.w700,
-                        color: dirColor)),
-                Text(_fmtTimestampCompact(trade.entryTime),
-                    style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-              ])),
-              // Points
-              if (trade.status == _TradeStatus.closed)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: (trade.pointsCaptured >= 0 ? AppColors.success : AppColors.danger)
-                        .withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(children: [
-                    Text('${trade.pointsCaptured >= 0 ? '+' : ''}${trade.pointsCaptured.toStringAsFixed(2)}',
-                        style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.w700,
-                            color: trade.pointsCaptured >= 0 ? AppColors.success : AppColors.danger)),
-                    Text('pts', style: GoogleFonts.inter(fontSize: 8, color: AppColors.textSecondary)),
-                  ]),
-                ),
-              // Exit
-              Expanded(child: trade.exitPrice != null
-                  ? Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                      Text('Exit', style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-                      Text('₹${trade.exitPrice!.toStringAsFixed(2)}',
-                          style: GoogleFonts.jetBrainsMono(fontSize: 12, fontWeight: FontWeight.w700,
-                              color: trade.netPnl >= 0 ? AppColors.success : AppColors.danger)),
-                      Text(_fmtTimestampCompact(trade.exitTime!),
-                          style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-                    ])
-                  : Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                      Text('Exit', style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
-                      Text('OPEN', style: GoogleFonts.inter(fontSize: 12,
-                          fontWeight: FontWeight.w700, color: const Color(0xFFFF6D00))),
-                    ])),
-            ]),
-            const SizedBox(height: 8),
-            // Row 3: qty + duration + net P&L
-            Row(children: [
-              Text('${trade.quantity} qty',
-                  style: GoogleFonts.inter(fontSize: 10, color: AppColors.textSecondary)),
-              const SizedBox(width: 10),
-              const Icon(LucideIcons.clock, size: 10, color: AppColors.textSecondary),
-              const SizedBox(width: 3),
-              Text(_fmtDur(trade.holdingDuration),
-                  style: GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textSecondary)),
-              const Spacer(),
-              if (trade.status == _TradeStatus.closed) ...[
+            const SizedBox(height: 6),
+            if (isClosed) ...[
+              // Row 2: Buy ₹X → Sell ₹X  |  Net P&L (visual priority)
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Text('$entryLabel ₹${trade.entryPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                        fontWeight: FontWeight.w600, color: dirColor)),
+                const SizedBox(width: 5),
+                const Icon(LucideIcons.arrowRight, size: 10, color: AppColors.textSecondary),
+                const SizedBox(width: 5),
+                Text('$exitLabel ₹${trade.exitPrice!.toStringAsFixed(2)}',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: trade.netPnl >= 0 ? AppColors.success : AppColors.danger)),
+                const Spacer(),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Text(_fmtPnl(trade.netPnl), style: GoogleFonts.jetBrainsMono(
-                      fontSize: 14, fontWeight: FontWeight.w900, color: pnlColor)),
+                      fontSize: 15, fontWeight: FontWeight.w900, color: pnlColor)),
                   Text('Net P&L', style: GoogleFonts.inter(
                       fontSize: 8, color: AppColors.textSecondary)),
                 ]),
-              ],
-              const SizedBox(width: 8),
-              Icon(isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
-                  size: 14, color: AppColors.textSecondary),
-            ]),
-          ]),
+              ]),
+              const SizedBox(height: 5),
+              // Row 3: qty · points · chevron
+              Row(children: [
+                Text('Qty ${trade.quantity}', style: GoogleFonts.inter(
+                    fontSize: 10, color: AppColors.textSecondary)),
+                if (trade.pointsCaptured != 0) ...[
+                  const SizedBox(width: 7),
+                  Text(
+                    '${trade.pointsCaptured >= 0 ? '+' : ''}${trade.pointsCaptured.toStringAsFixed(2)} pts',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 10,
+                        color: trade.pointsCaptured >= 0 ? AppColors.success : AppColors.danger),
+                  ),
+                ],
+                const Spacer(),
+                Icon(isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    size: 14, color: AppColors.textSecondary),
+              ]),
+            ] else ...[
+              // Row 2: entry price · qty · time · chevron (open/pending/rejected)
+              Row(children: [
+                Text('$entryLabel ₹${trade.entryPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                        fontWeight: FontWeight.w600, color: dirColor)),
+                const SizedBox(width: 8),
+                Text('Qty ${trade.quantity}', style: GoogleFonts.inter(
+                    fontSize: 10, color: AppColors.textSecondary)),
+                const Spacer(),
+                Text(_fmtTimestampCompact(trade.entryTime),
+                    style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
+                const SizedBox(width: 8),
+                Icon(isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    size: 14, color: AppColors.textSecondary),
+              ]),
+            ],
+          ],
         ),
       ),
     );
@@ -1364,17 +1355,6 @@ class _TradeDetailDrawer extends StatelessWidget {
     return v > 0 ? '+$s' : v < 0 ? '-$s' : s;
   }
 
-  static String _fmtDurFull(Duration d) {
-    if (d.inSeconds == 0) return '< 1 second';
-    if (d.inDays > 0)
-      return '${d.inDays}d ${d.inHours.remainder(24)}h ${d.inMinutes.remainder(60)}m';
-    if (d.inHours > 0)
-      return '${d.inHours}h ${d.inMinutes.remainder(60)}m ${d.inSeconds.remainder(60)}s';
-    if (d.inMinutes > 0)
-      return '${d.inMinutes}m ${d.inSeconds.remainder(60)}s';
-    return '${d.inSeconds}s';
-  }
-
   @override
   Widget build(BuildContext context) {
     final isLong   = trade.direction == OrderType.buy;
@@ -1400,7 +1380,6 @@ class _TradeDetailDrawer extends StatelessWidget {
         _DR('Gross P&L',    trade.status == _TradeStatus.closed ? _fmtPnl(trade.grossPnl) : '—',
             valueColor: trade.status == _TradeStatus.closed
                 ? (trade.grossPnl >= 0 ? AppColors.success : AppColors.danger) : null),
-        _DR('Brokerage',    '-${_fmtFull(trade.brokerage)}', valueColor: AppColors.danger),
         _DR('Net P&L',      trade.status == _TradeStatus.closed ? _fmtPnl(trade.netPnl) : '—',
             valueColor: trade.status == _TradeStatus.closed ? pnlColor : null),
       ]),
@@ -1416,9 +1395,6 @@ class _TradeDetailDrawer extends StatelessWidget {
         _DR('Entry Time',   _fmtTimestampFull(trade.entryTime)),
         _DR('Exit Time',    trade.exitTime != null
                 ? _fmtTimestampFull(trade.exitTime!) : '—'),
-        _DR('Duration',     _isUnknownTime(trade.entryTime)
-                ? 'Timestamp unavailable'
-                : _fmtDurFull(trade.holdingDuration)),
         if (trade.sourceOrders.isNotEmpty)
           _DR('Entry ID',   _short(trade.entryOrderId)),
         if (trade.exitOrderId != null)

@@ -11,7 +11,7 @@ class MostActiveScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final stocks = store.watchlist.where((s) => s.volume != null).toList()
+    final stocks = store.knownStocks.where((s) => s.volume != null).toList()
       ..sort((a, b) => (b.volume ?? 0).compareTo(a.volume ?? 0));
     final top20 = stocks.take(20).toList();
 

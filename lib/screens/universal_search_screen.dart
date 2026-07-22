@@ -7,6 +7,7 @@ import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
 import '../search/search_index.dart';
+import '../search/top_50_stocks.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import 'stock_detail_screen.dart';
@@ -163,6 +164,9 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   String? _exchangeFilter; // null = All
   String? _segmentFilter;
 
+  // Top 50 NSE instant cache — filtered in-memory, shown before full index
+  List<Top50Stock> _top50Filtered = kTop50Stocks;
+
   // Instant local results — prefix trie lookup, < 5ms
   List<Instrument> _localResults = [];
 
@@ -275,23 +279,65 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 
   // ── Query handling ──────────────────────────────────────────────────────────
 
+  // Filter the static Top 50 list by query — O(50), always < 1ms.
+  List<Top50Stock> _filterTop50(String q) {
+    if (q.isEmpty) return kTop50Stocks;
+    final upper = q.toUpperCase();
+    final prefixHits  = <Top50Stock>[];
+    final containsHits = <Top50Stock>[];
+    for (final s in kTop50Stocks) {
+      if (s.symbol.startsWith(upper)) {
+        prefixHits.add(s);
+      } else if (s.symbol.contains(upper) || s.companyName.toUpperCase().contains(upper)) {
+        containsHits.add(s);
+      }
+    }
+    return [...prefixHits, ...containsHits];
+  }
+
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     _retryTimer?.cancel();
     final q = value.trim();
 
-    if (q.length < 2) {
+    // Always filter Top 50 instantly — no network, no index lookup.
+    final swTop50 = Stopwatch()..start();
+    final top50 = _filterTop50(q);
+    swTop50.stop();
+
+    if (q.isEmpty) {
       setState(() {
-        _query         = q;
-        _localResults  = [];
-        _remoteResults = [];
-        _remoteLoading = false;
-        _remoteError   = null;
+        _query          = q;
+        _top50Filtered  = top50;
+        _localResults   = [];
+        _remoteResults  = [];
+        _remoteLoading  = false;
+        _remoteError    = null;
+      });
+      return;
+    }
+
+    if (top50.isNotEmpty) {
+      debugPrint('[SEARCH_TOP50_HIT] q="$q" hits=${top50.length} latencyUs=${swTop50.elapsedMicroseconds}');
+    } else {
+      debugPrint('[SEARCH_TOP50_MISS] q="$q" latencyUs=${swTop50.elapsedMicroseconds}');
+    }
+
+    if (q.length < 2) {
+      // Single-char: show only top 50 matches — full index too noisy for 1 char.
+      setState(() {
+        _query          = q;
+        _top50Filtered  = top50;
+        _localResults   = [];
+        _remoteResults  = [];
+        _remoteLoading  = false;
+        _remoteError    = null;
       });
       return;
     }
 
     // ── Step 1: Instant local results (<5ms) ──
+    debugPrint('[SEARCH_FULL_INDEX] q="$q"');
     final local    = SearchIndex.instance.search(q, limit: 20);
     final cacheKey = '${_exchangeFilter ?? 'ALL'}_$q';
     final cached   = _SearchSessionCache.get(cacheKey);
@@ -299,11 +345,12 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     if (cached != null && !cached.isExpired) {
       // ── Cache hit: serve immediately (<1ms perceived) ──────────────────────
       setState(() {
-        _query         = q;
-        _localResults  = local;
-        _remoteResults = cached.results;
-        _remoteLoading = false;
-        _remoteError   = null;
+        _query          = q;
+        _top50Filtered  = top50;
+        _localResults   = local;
+        _remoteResults  = cached.results;
+        _remoteLoading  = false;
+        _remoteError    = null;
       });
 
       // Stale: serve immediately, refresh silently in background.
@@ -320,10 +367,11 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     // ── Cache miss: show skeleton immediately + fire API ────────────────────
     final gen = ++_reqGen;
     setState(() {
-      _query         = q;
-      _localResults  = local;
-      _remoteLoading = true;
-      _remoteError   = null;
+      _query          = q;
+      _top50Filtered  = top50;
+      _localResults   = local;
+      _remoteLoading  = true;
+      _remoteError    = null;
       // Keep previous remote results while loading — avoids the "flash of
       // empty skeleton" when the user extends the query (TAT → TATA).
     });
@@ -736,6 +784,19 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   Widget _buildResultsView(BuildContext context, dynamic store) {
     final local = _filteredLocal;
     final remote = _filteredRemote;
+
+    // Priority 1: Top 50 — apply active exchange/segment filters.
+    // All kTop50Stocks are NSE equities so segment filter hides them for non-EQ.
+    final top50 = _top50Filtered.where((s) =>
+        (_exchangeFilter == null || s.exchange == _exchangeFilter) &&
+        (_segmentFilter  == null || _segmentFilter == 'EQ')).toList();
+
+    // Deduplicate local results against top 50 so a stock doesn't appear twice.
+    final top50Symbols = top50.map((s) => s.symbol.toUpperCase()).toSet();
+    final localDeduped = local
+        .where((i) => !top50Symbols.contains(i.symbol.toUpperCase()))
+        .toList();
+
     final watchlistSyms = (store.watchlist as List<Stock>)
         .map((s) => s.symbol)
         .toSet();
@@ -746,18 +807,18 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
         .map((p) => p.symbol)
         .toSet();
 
-    // Partition local results into sections
-    final fromWatchlist = local
+    // Partition deduped local results into contextual sections.
+    final fromWatchlist = localDeduped
         .where((i) => watchlistSyms.contains(i.symbol))
         .toList();
-    final fromHoldings = local
+    final fromHoldings = localDeduped
         .where(
           (i) =>
               holdingSyms.contains(i.symbol) &&
               !watchlistSyms.contains(i.symbol),
         )
         .toList();
-    final fromPositions = local
+    final fromPositions = localDeduped
         .where(
           (i) =>
               positionSyms.contains(i.symbol) &&
@@ -765,7 +826,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
               !holdingSyms.contains(i.symbol),
         )
         .toList();
-    final others = local
+    final others = localDeduped
         .where(
           (i) =>
               !watchlistSyms.contains(i.symbol) &&
@@ -774,7 +835,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
         )
         .toList();
 
-    final hasAny = local.isNotEmpty || remote.isNotEmpty;
+    final hasAny = top50.isNotEmpty || local.isNotEmpty || remote.isNotEmpty;
 
     if (!hasAny && !_remoteLoading) {
       return _buildNoResults();
@@ -783,12 +844,33 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     // ── Flat item list for ListView.builder ─────────────────────────────────
     // Avoids rendering all items immediately; Flutter builds only visible rows.
     final items = <Widget>[];
-    final isBestMatch = local.isNotEmpty &&
-        local[0].displayName.toUpperCase() == _query.toUpperCase();
+
+    // ── Priority 1: Top 50 ───────────────────────────────────────────────────
+    if (top50.isNotEmpty) {
+      items.add(_SectionHeader(
+        icon: LucideIcons.trendingUp,
+        label: 'Top NSE Stocks',
+        color: const Color(0xFF1565C0),
+      ));
+      for (final s in top50) {
+        items.add(_Top50Tile(
+          stock: s,
+          onTap: () => _navigateToSymbol(context, s.symbol, s.symbol, exchange: s.exchange),
+        ));
+      }
+      if (localDeduped.isNotEmpty || remote.isNotEmpty || _remoteLoading) {
+        items.add(const Divider(height: 1, indent: 16));
+      }
+    }
+
+    // ── Priority 2: Full index (contextual sections) ─────────────────────────
+    // Best Match — only if not already surfaced in top50 section
+    final isBestMatch = localDeduped.isNotEmpty &&
+        localDeduped[0].displayName.toUpperCase() == _query.toUpperCase();
 
     // Best Match
     if (isBestMatch) {
-      final i = local[0];
+      final i = localDeduped[0];
       final tok = _tokenFor(i);
       items.add(_SectionHeader(icon: LucideIcons.star, label: 'Best Match', color: AppColors.primary));
       items.add(_withPrefetch(
@@ -856,7 +938,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
     }
 
     // Other local matches
-    final othersFiltered = others.where((i) => !(isBestMatch && i == local[0])).toList();
+    final othersFiltered = others.where((i) => !(isBestMatch && i == localDeduped[0])).toList();
     if (othersFiltered.isNotEmpty) {
       final hasOtherSections = fromWatchlist.isNotEmpty ||
           fromHoldings.isNotEmpty || fromPositions.isNotEmpty || remote.isNotEmpty;
@@ -1045,8 +1127,25 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
           ),
           const SizedBox(height: 24),
         ],
-        // Trending
+        // Top 50 NSE Stocks — instant, no network
+        const Text(
+          'Top NSE Stocks',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF0D0D0D),
+          ),
+        ),
+        const SizedBox(height: 4),
+        ..._top50Filtered.map(
+          (s) => _Top50Tile(
+            stock: s,
+            onTap: () => _navigateToSymbol(context, s.symbol, s.symbol, exchange: s.exchange),
+          ),
+        ),
+        // Trending from watchlist (if available)
         if (trending.isNotEmpty) ...[
+          const SizedBox(height: 16),
           const Text(
             'Trending',
             style: TextStyle(
@@ -1076,21 +1175,6 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
                   ),
                 );
               },
-            ),
-          ),
-        ] else ...[
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Text(
-                'Search across NSE, BSE, NFO, MCX, CDS\nEquities · F&O · Commodities · Currency · ETFs',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Color(0xFF9E9E9E),
-                  height: 1.6,
-                ),
-              ),
             ),
           ),
         ],
@@ -1360,27 +1444,37 @@ class _RemoteResultTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         trailing: hasPrice
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '₹${result.ltp!.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF0D0D0D),
-                    ),
-                  ),
-                  Text(
-                    '${isPos ? '+' : ''}${result.percentChange!.toStringAsFixed(2)}%',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: isPos ? AppColors.success : AppColors.danger,
-                    ),
-                  ),
-                ],
+            ? ValueListenableBuilder<double>(
+                valueListenable: TradingScope.read(context)
+                    .ltpNotifier(result.tradingSymbol),
+                builder: (_, liveLtp, __) {
+                  final displayLtp =
+                      liveLtp > 0 ? liveLtp : result.ltp!;
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '₹${displayLtp.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF0D0D0D),
+                        ),
+                      ),
+                      Text(
+                        '${isPos ? '+' : ''}${result.percentChange!.toStringAsFixed(2)}%',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: isPos
+                              ? AppColors.success
+                              : AppColors.danger,
+                        ),
+                      ),
+                    ],
+                  );
+                },
               )
             : const Icon(
                 LucideIcons.chevronRight,
@@ -1440,6 +1534,65 @@ class _TrendingTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Top 50 tile ─────────────────────────────────────────────────────────────
+
+class _Top50Tile extends StatelessWidget {
+  final Top50Stock stock;
+  final VoidCallback onTap;
+  const _Top50Tile({required this.stock, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: ListTile(
+        onTap: onTap,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        leading: _SymbolAvatar(symbol: stock.symbol, exchange: stock.exchange),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                stock.symbol,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: Color(0xFF0D0D0D),
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            _Badge(label: stock.exchange, color: AppColors.primary),
+            const SizedBox(width: 4),
+            _Badge(label: 'EQ', color: AppColors.primary),
+          ],
+        ),
+        subtitle: Text(
+          stock.companyName,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: ValueListenableBuilder<double>(
+          valueListenable: TradingScope.read(context).ltpNotifier(stock.symbol),
+          builder: (_, ltp, __) {
+            if (ltp <= 0) {
+              return const Icon(LucideIcons.chevronRight, size: 16, color: Color(0xFFBDBDBD));
+            }
+            return Text(
+              '₹${ltp.toStringAsFixed(2)}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF0D0D0D),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

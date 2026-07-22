@@ -5,7 +5,9 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
 import '../state/security_scope.dart';
+import '../state/tab_notifier.dart';
 import '../state/trading_scope.dart';
+import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/shared_widgets.dart';
@@ -39,10 +41,79 @@ class _ProfileScreenState extends State<ProfileScreen> {
   DateTime _lastLogin = DateTime.now().subtract(
     const Duration(hours: 2, minutes: 18),
   );
+
+  // Snapshotted store values
+  User? _user;
+  double _balance = 0;
+  int _ordersCount = 0;
+  int _portfolioCount = 0;
+
+  bool _isActiveTab = false;
+  TradingStore? _store;
+
+  @override
+  void initState() {
+    super.initState();
+    _isActiveTab = activeTabNotifier.value == 4;
+    activeTabNotifier.addListener(_onTabVisibilityChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = TradingScope.read(context);
+    if (_store != store) {
+      _store?.removeListener(_onStoreChanged);
+      _store = store;
+      store.addListener(_onStoreChanged);
+      _syncFromStore(store);
+    }
+  }
+
+  void _syncFromStore(TradingStore store) {
+    _user = store.currentUser;
+    _balance = store.balance;
+    _ordersCount = store.orders.length;
+    _portfolioCount = store.portfolio.length;
+  }
+
+  void _onStoreChanged() {
+    if (_store == null) return;
+    final store = _store!;
+    // Profile-relevant data doesn't change on price ticks; only rebuild when
+    // the actual values change to avoid spurious rebuilds every tick.
+    final newUser = store.currentUser;
+    final newBalance = store.balance;
+    final newOrdersCount = store.orders.length;
+    final newPortfolioCount = store.portfolio.length;
+    if (newUser == _user && newBalance == _balance &&
+        newOrdersCount == _ordersCount && newPortfolioCount == _portfolioCount) {
+      return;
+    }
+    _user = newUser;
+    _balance = newBalance;
+    _ordersCount = newOrdersCount;
+    _portfolioCount = newPortfolioCount;
+    if (_isActiveTab) setState(() {});
+  }
+
+  void _onTabVisibilityChanged() {
+    final active = activeTabNotifier.value == 4;
+    if (active == _isActiveTab) return;
+    _isActiveTab = active;
+    if (active) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    activeTabNotifier.removeListener(_onTabVisibilityChanged);
+    _store?.removeListener(_onStoreChanged);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
-    final user = store.currentUser;
+    final user = _user ?? TradingScope.read(context).currentUser;
     final security = SecurityScope.of(context);
     final completion = _profileCompletion(user);
 
@@ -71,7 +142,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             _buildHeaderCard(context, user),
             const SizedBox(height: 14),
-            _buildStatsRow(store),
+            _buildStatsRow(),
             const SizedBox(height: 14),
             _buildPreferencesCard(context),
             const SizedBox(height: 14),
@@ -162,11 +233,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildStatsRow(store) {
+  Widget _buildStatsRow() {
     final stats = [
-      ('Balance', '₹${store.balance.toStringAsFixed(0)}'),
-      ('Orders', '${store.orders.length}'),
-      ('Holdings', '${store.portfolio.length}'),
+      ('Balance', '₹${_balance.toStringAsFixed(0)}'),
+      ('Orders', '$_ordersCount'),
+      ('Holdings', '$_portfolioCount'),
     ];
 
     return Row(
@@ -278,7 +349,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildActionsCard(BuildContext context) {
-    final user = TradingScope.of(context).currentUser;
+    final user = _user ?? TradingScope.read(context).currentUser;
 
     return CustomCard(
       padding: EdgeInsets.zero,
@@ -470,7 +541,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _openEditProfile(User user) {
     final nameController = TextEditingController(text: user.name);
     final emailController = TextEditingController(text: user.email);
-    final store = TradingScope.of(context);
+    final store = TradingScope.read(context);
 
     AppBottomSheet.show(
       context,

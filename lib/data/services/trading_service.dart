@@ -101,7 +101,8 @@ class TradingService {
       _firestore.raw
           .collection('orders')
           .where('userId', isEqualTo: uid)
-          .limit(100)
+          .orderBy('createdAt', descending: true)
+          .limit(500)
           .snapshots();
 
   Stream<QuerySnapshot<Map<String, dynamic>>> gttOrdersStreamForUser(
@@ -799,23 +800,59 @@ class TradingService {
   // ── Cancel Order ──────────────────────────────────────────────────────────
 
   Future<void> cancelOrder(String orderId) async {
-    final orderRef = _firestore.raw.doc('orders/$orderId');
-    await _retryFirestore(
-      () => _firestore.raw.runTransaction((tx) async {
-        final snap = await tx.get(orderRef);
-        if (!snap.exists) throw Exception('Order not found.');
-        final data = snap.data() ?? {};
-        final status = (data['status'] as String?)?.toUpperCase() ?? '';
-        if (status != 'PENDING' && status != 'PARTIALLY_EXECUTED') {
-          throw Exception('Only open orders can be cancelled.');
-        }
-        tx.update(orderRef, {
-          'status': 'CANCELLED',
-          'cancelledAt': Timestamp.now(),
-          'updatedAt': Timestamp.now(),
-        });
-      }),
-    );
+    print('[MODIFY_ORDER_CANCEL] cancelOrder entry: orderId=$orderId');
+    final orderRef   = _firestore.raw.doc('orders/$orderId');
+    final pendingRef = _firestore.raw.doc('pendingOrders/$orderId');
+
+    try {
+      await _retryFirestore(
+        () => _firestore.raw.runTransaction((tx) async {
+          print('[MODIFY_ORDER_CANCEL] READ orders/$orderId');
+          final snap = await tx.get(orderRef);
+          if (!snap.exists) throw Exception('Order not found: orders/$orderId does not exist.');
+          final data   = snap.data() ?? {};
+          final status = (data['status'] as String?)?.toUpperCase() ?? '';
+          final userId        = data['userId'] as String?;
+          final reservedNum   = data['reservedMargin'];
+          final reservedMargin = reservedNum is num ? reservedNum.toDouble() : 0.0;
+          print('[MODIFY_ORDER_CANCEL] orders/$orderId: status=$status userId=$userId reservedMargin=$reservedMargin');
+          if (status != 'PENDING' && status != 'PARTIALLY_EXECUTED') {
+            throw Exception('Only open orders can be cancelled. Current status: $status');
+          }
+
+          print('[MODIFY_ORDER_CANCEL] UPDATE orders/$orderId → CANCELLED');
+          tx.update(orderRef, {
+            'status':      'CANCELLED',
+            'cancelledAt': Timestamp.now(),
+            'updatedAt':   Timestamp.now(),
+          });
+
+          // For PENDING limit orders: atomically clean up the engine index and
+          // release the margin reservation so buying power is restored immediately.
+          if (status == 'PENDING') {
+            print('[MODIFY_ORDER_CANCEL] DELETE pendingOrders/$orderId');
+            tx.delete(pendingRef);
+
+            if (userId != null && reservedMargin > 0) {
+              print('[MODIFY_ORDER_CANCEL] UPDATE users/$userId pendingMargin decrement $reservedMargin');
+              final userRef = _firestore.raw.doc('users/$userId');
+              tx.update(userRef, {
+                'pendingMargin': FieldValue.increment(-reservedMargin),
+              });
+            } else {
+              print('[MODIFY_ORDER_CANCEL] Skipping pendingMargin update: userId=$userId reservedMargin=$reservedMargin');
+            }
+          }
+          print('[MODIFY_ORDER_CANCEL] Transaction writes queued — awaiting commit');
+        }),
+      );
+      print('[MODIFY_ORDER_CANCEL] Transaction committed successfully for orderId=$orderId');
+    } catch (e, stack) {
+      print('[MODIFY_ORDER_ERROR] cancelOrder FAILED: type=${e.runtimeType}');
+      print('[MODIFY_ORDER_ERROR] message=$e');
+      print('[MODIFY_ORDER_ERROR] stack=$stack');
+      rethrow;
+    }
   }
 
   // ── GTT Orders ────────────────────────────────────────────────────────────
@@ -1496,6 +1533,133 @@ class TradingService {
     );
   }
 
+  // ── Admin: Approve / Reject Order ─────────────────────────────────────────
+
+  /// Approve a PENDING order.
+  ///
+  /// Writes to `orders/{orderId}` inside a Firestore transaction, then emits
+  /// an `audit_logs` entry.  The `AdminStore._ordersSub` stream picks up the
+  /// change and rebuilds the master order book automatically.
+  ///
+  /// Throws if the order does not exist or is not in PENDING status.
+  Future<void> approveOrder({
+    required String adminId,
+    required String orderId,
+  }) async {
+    String? userId;
+    String? symbol;
+    int? qty;
+    String? previousStatus;
+
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final orderRef = _firestore.raw.doc('orders/$orderId');
+        final snap = await tx.get(orderRef);
+        if (!snap.exists) throw Exception('Order not found: $orderId');
+        final data = snap.data() ?? {};
+        previousStatus = (data['status'] as String?)?.toUpperCase() ?? '';
+        if (previousStatus != 'PENDING') {
+          throw Exception(
+            'Only PENDING orders can be approved. '
+            'Current status: $previousStatus',
+          );
+        }
+        userId = data['userId'] as String?;
+        symbol = data['stock'] as String?;
+        qty    = _int(data['qty']);
+
+        tx.update(orderRef, {
+          'status':     'APPROVED',
+          'approvedBy': adminId,
+          'approvedAt': Timestamp.now(),
+          'updatedAt':  Timestamp.now(),
+        });
+      }),
+    );
+
+    await _logAudit(
+      action:   'APPROVE_ORDER',
+      adminId:  adminId,
+      targetId: orderId,
+      metadata: {
+        'userId':         userId         ?? '',
+        'symbol':         symbol         ?? '',
+        'qty':            qty            ?? 0,
+        'previousStatus': previousStatus ?? '',
+      },
+    );
+  }
+
+  /// Reject a PENDING (or PARTIALLY_EXECUTED) order.
+  ///
+  /// Writes status, rejection metadata, and — if a `reservedMargin` field
+  /// exists — atomically releases that margin back to the user's account.
+  ///
+  /// Throws if the order does not exist or is already in a terminal status.
+  Future<void> rejectOrder({
+    required String adminId,
+    required String orderId,
+    String? reason,
+  }) async {
+    String? userId;
+    String? symbol;
+    int? qty;
+    String? previousStatus;
+    double marginReleased = 0;
+
+    await _retryFirestore(
+      () => _firestore.raw.runTransaction((tx) async {
+        final orderRef = _firestore.raw.doc('orders/$orderId');
+        final snap = await tx.get(orderRef);
+        if (!snap.exists) throw Exception('Order not found: $orderId');
+        final data = snap.data() ?? {};
+        previousStatus = (data['status'] as String?)?.toUpperCase() ?? '';
+        if (previousStatus != 'PENDING' &&
+            previousStatus != 'PARTIALLY_EXECUTED') {
+          throw Exception(
+            'Only PENDING or PARTIALLY_EXECUTED orders can be rejected. '
+            'Current status: $previousStatus',
+          );
+        }
+        userId = data['userId'] as String?;
+        symbol = data['stock'] as String?;
+        qty    = _int(data['qty']);
+
+        tx.update(orderRef, {
+          'status':          'REJECTED',
+          'rejectedBy':      adminId,
+          'rejectedAt':      Timestamp.now(),
+          'rejectionReason': reason ?? 'Rejected by admin',
+          'updatedAt':       Timestamp.now(),
+        });
+
+        // Release reserved margin if the order engine had blocked it.
+        final reserved = _double(data['reservedMargin']);
+        if (reserved > 0 && userId != null) {
+          marginReleased = reserved;
+          tx.update(_firestore.raw.doc('users/$userId'), {
+            'pendingMargin': FieldValue.increment(-reserved),
+            'updatedAt':     Timestamp.now(),
+          });
+        }
+      }),
+    );
+
+    await _logAudit(
+      action:   'REJECT_ORDER',
+      adminId:  adminId,
+      targetId: orderId,
+      metadata: {
+        'userId':          userId         ?? '',
+        'symbol':          symbol         ?? '',
+        'qty':             qty            ?? 0,
+        'reason':          reason         ?? 'Rejected by admin',
+        'previousStatus':  previousStatus ?? '',
+        'marginReleased':  marginReleased,
+      },
+    );
+  }
+
   // ── Admin: Add Balance ─────────────────────────────────────────────────────
 
   Future<void> addBalance({
@@ -1625,6 +1789,10 @@ class TradingService {
       case 'SL_LIMIT':
       case 'SL-LIMIT':
       case 'SLLIMIT':
+      case 'SLM':
+      case 'SL_MARKET':
+      case 'SL-MARKET':
+      case 'SL-M':
         return 'SL';
       case 'AMO':
         return 'AMO';
@@ -1638,14 +1806,22 @@ class TradingService {
   String _normalizeProduct(String raw) {
     switch (raw.trim().toUpperCase()) {
       case 'MIS':
+      case 'INTRADAY':
+      case 'BO':
+      case 'CO':
         return 'MIS';
       case 'NRML':
         return 'NRML';
+      case 'CNC':
+        return 'CNC';
+      case 'DELIVERY':
       case 'OVERNIGHT':
         return 'OVERNIGHT';
       case 'MTF':
         return 'MTF';
       default:
+        assert(false, 'Unknown product type: "$raw" — add a case to _normalizeProduct');
+        print('WARNING: unknown product type "$raw" — defaulting to MIS');
         return 'MIS';
     }
   }

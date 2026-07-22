@@ -4,6 +4,8 @@ import 'dart:collection';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../data/services/firestore_service.dart';
 import '../data/services/trading_service.dart';
 import '../domain/trade_ledger.dart';
@@ -40,6 +42,22 @@ class AdminOrderRecord {
   final String exchange;   // NSE / BSE / MCX
   final String product;    // MIS / NRML / OVERNIGHT
   final String variety;    // MARKET / LIMIT / SL
+  // Actual brokerage charged by the backend (null for pre-migration orders).
+  // When non-null, the admin ledger uses this value instead of the hardcoded
+  // 0.03% rate so that custom fee structures are reflected correctly (H-03).
+  final double? chargesApplied;
+  // Actual margin blocked when this order was placed. Read from the order
+  // document so the risk dashboard can sum real blocked margin rather than
+  // approximating with a hardcoded percentage of notional value.
+  final double marginUsed;
+  // Server-computed gross P&L on the closing order (the exact amount settled
+  // to the user's balance). Zero for opening orders. Used by trade_ledger.dart
+  // as the authoritative P&L source when matching closing orders.
+  final double pnl;
+  // Actually-filled quantity. For fully-executed orders this equals quantity;
+  // for partial fills it is the filled portion. Used for FIFO matching and
+  // brokerage proration so partial fills are attributed correctly.
+  final int filledQty;
 
   const AdminOrderRecord({
     required this.id,
@@ -56,6 +74,10 @@ class AdminOrderRecord {
     this.exchange = 'NSE',
     this.product = 'MIS',
     this.variety = 'MARKET',
+    this.chargesApplied,
+    this.marginUsed = 0.0,
+    this.pnl = 0.0,
+    this.filledQty = 0,
   });
 
   AdminOrderRecord copyWith({
@@ -73,6 +95,10 @@ class AdminOrderRecord {
     String? exchange,
     String? product,
     String? variety,
+    double? chargesApplied,
+    double? marginUsed,
+    double? pnl,
+    int? filledQty,
   }) {
     return AdminOrderRecord(
       id: id ?? this.id,
@@ -89,6 +115,10 @@ class AdminOrderRecord {
       exchange: exchange ?? this.exchange,
       product: product ?? this.product,
       variety: variety ?? this.variety,
+      chargesApplied: chargesApplied ?? this.chargesApplied,
+      marginUsed: marginUsed ?? this.marginUsed,
+      pnl: pnl ?? this.pnl,
+      filledQty: filledQty ?? this.filledQty,
     );
   }
 }
@@ -186,14 +216,15 @@ class AdminStore extends ChangeNotifier {
   // Real platform P&L = brokerage earned − profits paid out to winning users.
   double get platformPnl => _ledger.netAdminPnl;
 
-  double get liveExposure => _masterOrderBook
-      .where(
-        (o) =>
-            o.status == OrderStatus.executed ||
-            o.status == OrderStatus.approved,
-      )
-      .fold(0.0, (sum, o) => sum + (o.quantity * o.price));
+  // liveExposure = sum of entryValue across FIFO-open positions only.
+  // Using raw executed order count (including closed positions) would double-count
+  // both the buy leg and the sell leg of every closed trade.
+  double get liveExposure =>
+      _ledger.open.fold(0.0, (sum, t) => sum + t.entryValue);
   double get operatorRiskLossEstimate => liveExposure * 0.0012;
+
+  // Count of currently open positions derived from FIFO matching.
+  int get openPositionCount => _ledger.open.length;
 
   List<AdminOrderRecord> get highestRiskOrders {
     final sorted = List<AdminOrderRecord>.from(_masterOrderBook);
@@ -350,38 +381,67 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
+  /// Approve a PENDING order.
+  ///
+  /// Writes `status=APPROVED`, `approvedBy`, `approvedAt` to Firestore inside
+  /// a transaction, then writes an `audit_logs` entry via TradingService.
+  /// The `_ordersSub` stream picks up the change and rebuilds masterOrderBook.
+  ///
+  /// No local state mutation — Firestore is the single source of truth.
   Future<void> approveOrder(String orderId) async {
-    // approveOrder is removed — system uses auto-execution model.
-    // Orders are executed atomically at placement time; there is no
-    // pending → approved workflow. This method is a no-op to avoid
-    // breaking callers during migration.
-    final index = _masterOrderBook.indexWhere((o) => o.id == orderId);
-    if (index >= 0) {
-      _masterOrderBook[index] = _masterOrderBook[index].copyWith(
-        status: OrderStatus.approved,
-        rejectionReason: null,
+    if (!_isFirebaseMode) return;
+    try {
+      await _tradingService!.approveOrder(
+        adminId:  _currentAdminId,
+        orderId:  orderId,
       );
-      notifyListeners();
+    } catch (e) {
+      _notifyError('Could not approve order. ${e.toString().replaceAll('Exception: ', '')}');
+      rethrow;
     }
-    _logAction('SYSTEM', 'Approve Order (local only)', orderId);
   }
 
+  /// Reject a PENDING or PARTIALLY_EXECUTED order.
+  ///
+  /// Writes `status=REJECTED`, `rejectedBy`, `rejectedAt`, `rejectionReason`
+  /// to Firestore inside a transaction.  If the order has a `reservedMargin`
+  /// field the margin is released atomically in the same transaction.
+  /// An `audit_logs` entry is emitted after commit.
+  ///
+  /// No local state mutation — Firestore is the single source of truth.
   Future<void> rejectOrder(String orderId, {String? reason}) async {
-    // rejectOrder is removed — system uses auto-execution model.
-    // This method updates local state only for UI consistency.
-    final index = _masterOrderBook.indexWhere((o) => o.id == orderId);
-    if (index >= 0) {
-      _masterOrderBook[index] = _masterOrderBook[index].copyWith(
-        status: OrderStatus.rejected,
-        rejectionReason: reason,
+    if (!_isFirebaseMode) return;
+    try {
+      await _tradingService!.rejectOrder(
+        adminId:  _currentAdminId,
+        orderId:  orderId,
+        reason:   reason,
       );
-      notifyListeners();
+    } catch (e) {
+      _notifyError('Could not reject order. ${e.toString().replaceAll('Exception: ', '')}');
+      rethrow;
     }
-    _logAction(
-      'SYSTEM',
-      'Reject Order (local only)',
-      '$orderId ${reason ?? ''}'.trim(),
-    );
+  }
+
+  /// Edit the fill price and/or execution time of any order doc.
+  /// Firestore stream re-delivers the doc and masterOrderBook rebuilds automatically.
+  Future<void> editOrderFields(
+    String orderId, {
+    double? fillPrice,
+    DateTime? executedAt,
+  }) async {
+    if (!_isFirebaseMode) return;
+    final updates = <String, dynamic>{};
+    if (fillPrice != null)  updates['fillPrice'] = fillPrice;
+    if (executedAt != null) updates['executedAt'] = Timestamp.fromDate(executedAt);
+    if (updates.isEmpty) return;
+    _logAction(_currentAdminId, 'Edit Order Fields', orderId);
+    try {
+      await _firestoreService!.raw.collection('orders').doc(orderId).update(updates);
+    } catch (e) {
+      _notifyError('Could not edit order: ${e.toString().replaceAll('Exception: ', '')}');
+      rethrow;
+    }
   }
 
   void broadcastNotification({
@@ -564,67 +624,38 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
-  // RMS FIX Bug #10: forceClosePosition was a no-op (only logged).
-  // Now writes a force-close marker to Firestore so the backend can process it.
-  void forceClosePosition(String userId, String positionId) {
-    _logAction(
-      _currentAdminId,
-      'Force Close Position',
-      '$userId / $positionId',
-    );
+  void forceClosePosition(String userId, String positionId, {String exchange = 'NSE'}) {
+    _logAction(_currentAdminId, 'Force Close Position', '$userId / $positionId');
     notifyListeners();
 
-    if (_isFirebaseMode) {
-      _fireAndForget(
-        () async {
-          await _firestoreService!.raw
-              .collection('portfolios')
-              .doc(userId)
-              .collection('holdings')
-              .doc(positionId.toUpperCase())
-              .set({
-                'forceClose': true,
-                'forceCloseBy': _currentAdminId,
-                'forceCloseAt': Timestamp.now(),
-              }, SetOptions(merge: true));
-        },
-        onError: (e) =>
-            _notifyError('Could not force close position. Please try again.'),
-      );
-    }
+    _fireAndForget(
+      () async {
+        final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        await api.forceClosePosition(
+          userId:     userId,
+          positionId: positionId,
+          exchange:   exchange,
+          adminId:    _currentAdminId,
+        );
+      },
+      onError: (e) => _notifyError('Force close failed: $e'),
+    );
   }
 
-  // RMS FIX Bug #10: forceCloseAllPositions was a no-op.
-  // Now marks ALL holdings for a user as force-close via Firestore batch write.
   void forceCloseAllPositions(String userId) {
     _logAction(_currentAdminId, 'Force Close All Positions', userId);
     notifyListeners();
 
-    if (_isFirebaseMode) {
-      _fireAndForget(
-        () async {
-          final db = _firestoreService!.raw;
-          final holdingsSnap = await db
-              .collection('portfolios')
-              .doc(userId)
-              .collection('holdings')
-              .get();
-
-          final batch = db.batch();
-          for (final doc in holdingsSnap.docs) {
-            batch.set(doc.reference, {
-              'forceClose': true,
-              'forceCloseBy': _currentAdminId,
-              'forceCloseAt': Timestamp.now(),
-            }, SetOptions(merge: true));
-          }
-          await batch.commit();
-        },
-        onError: (e) => _notifyError(
-          'Could not force close all positions. Please try again.',
-        ),
-      );
-    }
+    _fireAndForget(
+      () async {
+        final api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        await api.forceCloseAllPositions(
+          userId:  userId,
+          adminId: _currentAdminId,
+        );
+      },
+      onError: (e) => _notifyError('Force close all failed: $e'),
+    );
   }
 
   void toggleUserStatus(String userId) {
@@ -886,6 +917,7 @@ class AdminStore extends ChangeNotifier {
       price: ((data['fillPrice'] as num?) ??
               (data['executed_price'] as num?) ??
               (data['avg_executed_price'] as num?) ??
+              (data['limitPrice'] as num?) ??
               (data['price'] as num?) ??
               0)
           .toDouble(),
@@ -897,6 +929,10 @@ class AdminStore extends ChangeNotifier {
       // Try productType first so Node.js orders get the correct value.
       product: ((data['productType'] as String?) ?? (data['product'] as String?) ?? 'MIS').toUpperCase(),
       variety: ((data['variety'] as String?) ?? 'MARKET').toUpperCase(),
+      chargesApplied: (data['chargesApplied'] as num?)?.toDouble(),
+      marginUsed: (data['marginUsed'] as num?)?.toDouble() ?? 0.0,
+      pnl: ((data['pnl'] as num?) ?? 0).toDouble(),
+      filledQty: ((data['filled_qty'] as num?) ?? (data['qty'] as num?) ?? 0).toInt(),
     );
   }
 
@@ -930,7 +966,9 @@ class AdminStore extends ChangeNotifier {
 
   DateTime _asDate(dynamic value) {
     if (value is Timestamp) return value.toDate();
-    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    // Node.js Date.now() → stored as Firestore number → Flutter Web JS interop
+    // returns large integers (> 2^31) as double, not int. Handle both.
+    if (value is num) return DateTime.fromMillisecondsSinceEpoch(value.toInt());
     if (value is DateTime) return value;
     if (value is String) {
       final parsed = DateTime.tryParse(value);
@@ -942,7 +980,7 @@ class AdminStore extends ChangeNotifier {
   DateTime? _asNullableDate(dynamic value) {
     if (value == null) return null;
     if (value is Timestamp) return value.toDate();
-    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    if (value is num) return DateTime.fromMillisecondsSinceEpoch(value.toInt());
     if (value is DateTime) return value;
     if (value is String) return DateTime.tryParse(value);
     return null;

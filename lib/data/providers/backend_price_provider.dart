@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../domain/pricing/price_provider.dart';
@@ -48,6 +49,8 @@ class BackendPriceProvider implements PriceProvider {
     if (_disposed || _connected) return;
     try {
       final wsUrl = _toWsUrl(_api.baseUrl);
+      debugPrint('[WS_CREATED] source=BackendPriceProvider url=$wsUrl '
+          'activeControllers=${_controllers.length}');
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _wsSub = _channel!.stream.listen(
         _onMessage,
@@ -95,14 +98,22 @@ class BackendPriceProvider implements PriceProvider {
     final serverTs =
         (row['serverTs'] as num?)?.toInt() ??
         DateTime.now().millisecondsSinceEpoch;
-    final ageMs = DateTime.now().millisecondsSinceEpoch - serverTs;
     if (symbol == null || ltp == null || ltp <= 0) return;
-    if (stale || ageMs > 5000) return;
-    _cache[symbol] = ltp;
-    _serverTsBySymbol[symbol] = serverTs;
+    // OOO protection: reject ticks older than the last accepted tick.
+    final lastTs = _serverTsBySymbol[symbol] ?? 0;
+    if (serverTs < lastTs) return; // [TICK_OUT_OF_ORDER]
+    if (!stale) {
+      // Fresh tick: update cache and timestamp.
+      _cache[symbol] = ltp;
+      _serverTsBySymbol[symbol] = serverTs;
+    }
+    // Emit cached price on stale ticks so the order form stays populated.
+    // Dropping stale ticks caused a blank LTP during brief feed interruptions.
+    final effectiveLtp = _cache[symbol];
+    if (effectiveLtp == null || effectiveLtp <= 0) return;
     final ctrl = _controllers[symbol];
     if (ctrl != null && !ctrl.isClosed && ctrl.hasListener) {
-      ctrl.add(ltp);
+      ctrl.add(effectiveLtp);
     }
   }
 
@@ -113,6 +124,8 @@ class BackendPriceProvider implements PriceProvider {
         .map((e) => e.key)
         .toList(growable: false);
     if (symbols.isEmpty) return;
+    debugPrint('[SUB_SOURCE] class=BackendPriceProvider method=_sendSubscribe '
+        'count=${symbols.length} first20=${symbols.take(20).toList()}');
     _channel!.sink.add(jsonEncode({'type': 'subscribe', 'symbols': symbols}));
     _channel!.sink.add(jsonEncode({'type': 'snapshot', 'symbols': symbols}));
   }

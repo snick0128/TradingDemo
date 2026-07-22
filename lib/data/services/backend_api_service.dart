@@ -233,8 +233,9 @@ class BackendApiService {
     required String type, // 'BUY' or 'SELL'
     String productType = 'MIS', // 'MIS' | 'CNC' | 'NRML'
     String exchange = 'NSE', // 'NSE' | 'MCX' | 'BSE' etc.
-    String variety = 'MARKET', // 'MARKET' | 'LIMIT'
+    String variety = 'MARKET', // 'MARKET' | 'LIMIT' | 'SL_MARKET' (single user-facing "SL" always maps to SL_MARKET)
     double? limitPrice, // required when variety == 'LIMIT'
+    double? triggerPrice, // required when variety == 'SL_MARKET'
     // For F&O contracts (options/futures) not tracked by the live WebSocket feed,
     // pass the current LTP from the options chain or detail screen so the backend
     // can price the order instead of throwing "Live price unavailable".
@@ -251,6 +252,7 @@ class BackendApiService {
       'exchange': exchange,
       'variety': variety,
       if (limitPrice != null && limitPrice > 0) 'limitPrice': limitPrice,
+      if (triggerPrice != null && triggerPrice > 0) 'triggerPrice': triggerPrice,
       if (lockedLtp != null && lockedLtp > 0) 'lockedLtp': lockedLtp,
       if (clientRequestId != null) 'clientRequestId': clientRequestId,
       if (symbolToken != null && symbolToken.isNotEmpty) 'symbolToken': symbolToken,
@@ -260,6 +262,27 @@ class BackendApiService {
     invalidate('/positions');
     invalidate('/market/stock');
     return result;
+  }
+
+  /// Cancel a queued PENDING limit order and release its margin reservation.
+  Future<Map<String, dynamic>> cancelPendingOrder({
+    required String userId,
+    required String orderId,
+  }) async {
+    final uri = Uri.parse('$baseUrl/orders/pending/$orderId');
+    try {
+      final response = await _client
+          .delete(uri, headers: _headers, body: jsonEncode({'userId': userId}))
+          .timeout(const Duration(seconds: 10));
+      invalidate('/orders');
+      return _parse(response);
+    } on BackendException {
+      rethrow;
+    } on TimeoutException {
+      throw BackendException('The request took too long. Please check your connection and try again.');
+    } catch (e) {
+      throw BackendException('Could not reach the server. Please check your connection and try again.');
+    }
   }
 
   /// Get order history for a user.
@@ -509,6 +532,19 @@ class BackendApiService {
     if (data != null) 'data': data,
   });
 
+  /// Send an in-app notification to one specific user (by user ID).
+  Future<Map<String, dynamic>> sendNotificationToUserId({
+    required String userId,
+    required String title,
+    required String message,
+    Map<String, String>? data,
+  }) => _post('/admin/notifications/send-to-userid', {
+    'userId': userId,
+    'title': title,
+    'message': message,
+    if (data != null) 'data': data,
+  });
+
   /// Send a push notification to a specific FCM token (one device).
   Future<Map<String, dynamic>> sendNotificationToToken({
     required String fcmToken,
@@ -593,6 +629,31 @@ class BackendApiService {
     await _post('/admin/change-password', {
       'uid': uid,
       'newPassword': newPassword,
+    });
+  }
+
+  /// Admin: force-close a single position for a user.
+  /// [positionId] = Firestore holding doc ID, e.g. "RELIANCE__MIS".
+  Future<Map<String, dynamic>> forceClosePosition({
+    required String userId,
+    required String positionId,
+    String exchange = 'NSE',
+    String adminId = 'admin',
+  }) async {
+    return await _post('/admin/users/$userId/force-close', {
+      'positionId': positionId,
+      'exchange':   exchange,
+      'adminId':    adminId,
+    });
+  }
+
+  /// Admin: force-close ALL open positions for a user.
+  Future<Map<String, dynamic>> forceCloseAllPositions({
+    required String userId,
+    String adminId = 'admin',
+  }) async {
+    return await _post('/admin/users/$userId/force-close-all', {
+      'adminId': adminId,
     });
   }
 }

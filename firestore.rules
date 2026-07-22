@@ -146,6 +146,18 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── user_notifications (in-app notification center) ────────────────────
+    // Created by the backend Admin SDK. Users stream their own items,
+    // may mark them read, and may delete them (Clear all).
+    match /user_notifications/{userId}/items/{notifId} {
+      allow read:   if isOwner(userId) || isAdmin();
+      allow update: if isOwner(userId) &&
+                       request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['isRead']);
+      allow delete: if isOwner(userId) || isAdmin();
+      allow create: if false; // backend Admin SDK only
+    }
+
     // ── admin_config ───────────────────────────────────────────────────────
     match /admin_config/{docId} {
       allow read:  if isSignedIn();

@@ -20,7 +20,7 @@ class MarketDepthScreen extends StatefulWidget {
 class _MarketDepthScreenState extends State<MarketDepthScreen> {
   @override
   Widget build(BuildContext context) {
-    final store = TradingScope.of(context);
+    final store = TradingScope.read(context); // read-only: stream drives updates, not InheritedWidget
     final sym = widget.symbol ?? 'NIFTY';
 
     // Seed with any depth already cached on the stock so the screen isn't blank

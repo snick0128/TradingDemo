@@ -106,6 +106,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   bool _submitting = false;
   int _qty = 1;
   final _priceController = TextEditingController();
+  final _triggerController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
 
   final _settingsService = MarketSettingsService();
@@ -121,16 +122,28 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   // Live price tracking
   TradingStore? _store;
+  ValueNotifier<double>? _ltpNotifier; // per-symbol notifier — fires on every tick
   double _livePrice = 0;
+  DateTime? _lastTickAt; // when the most recent valid WS tick arrived
+
+  static const _staleTickThreshold = Duration(seconds: 30);
 
   double get _effectiveLtp =>
       _livePrice > 0 ? _livePrice : widget.stock.currentPrice;
+
+  bool get _isTickStale {
+    if (_livePrice <= 0) return true;
+    final last = _lastTickAt;
+    if (last == null) return true;
+    return DateTime.now().difference(last) > _staleTickThreshold;
+  }
 
   @override
   void initState() {
     super.initState();
     _side = widget.initialSide;
     _priceController.text = widget.stock.currentPrice.toStringAsFixed(2);
+    _triggerController.text = widget.stock.currentPrice.toStringAsFixed(2);
     // Futures & options default to NRML (carry-forward); equities default to MIS
     if (_isFuturesOrOptions) _product = ProductType.nrml;
     // Default qty to lot size so MCX/F&O orders are valid from the start
@@ -152,19 +165,37 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final store = TradingScope.read(context);
     if (_store != store) {
       _store?.removeListener(_onStoreTick);
+      _ltpNotifier?.removeListener(_onLtpTick);
       _store = store;
+      // Global store listener — fires on balance/position/order updates (not ticks).
       store.addListener(_onStoreTick);
+      // Per-symbol ltpNotifier — fires on EVERY price tick without a global rebuild.
+      // This is the only correct way to get live LTP in the order form because
+      // TradingStore intentionally omits notifyListeners() on price ticks.
+      _ltpNotifier = store.ltpNotifier(widget.stock.symbol);
+      _ltpNotifier!.addListener(_onLtpTick);
       SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.stock.symbol});
-      _onStoreTick();
+      _onLtpTick(); // prime with current value
     }
   }
 
+  /// Called on every price tick for this symbol via the per-symbol ltpNotifier.
+  void _onLtpTick() {
+    if (!mounted) return;
+    final ltp = _ltpNotifier?.value ?? 0;
+    if (ltp > 0 && ltp != _livePrice) {
+      setState(() {
+        _livePrice = ltp;
+        _lastTickAt = DateTime.now();
+      });
+    }
+  }
+
+  /// Called when the global store notifies (balance, positions, orders, etc.).
+  /// Does NOT fire on price ticks — use _onLtpTick for that.
   void _onStoreTick() {
     if (!mounted) return;
-    final ltp = _store?.lastValidLtp(widget.stock.symbol) ?? 0;
-    if (ltp > 0 && ltp != _livePrice) {
-      setState(() => _livePrice = ltp);
-    }
+    setState(() {}); // refresh balance / margin display
   }
 
   void _subscribeCategoryLeverage() {
@@ -211,8 +242,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   @override
   void dispose() {
     _store?.removeListener(_onStoreTick);
+    _ltpNotifier?.removeListener(_onLtpTick);
     SubscriptionManager.instance.unsubscribeScreen(_screenId);
     _priceController.dispose();
+    _triggerController.dispose();
     _qtyController.dispose();
     _settingsSub?.cancel();
     _leverageSub?.cancel();
@@ -221,8 +254,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   bool get _isBuy => _side == OrderType.buy;
   bool get _isMarket => _variety == OrderVariety.market;
-  bool get _isPriceEnabled =>
-      _variety == OrderVariety.limit || _variety == OrderVariety.sl;
+  bool get _isSL => _variety == OrderVariety.sl;
+  // Limit-price field applies to LIMIT only; the single SL option is SL-Market
+  // (trigger price only, no separate limit price).
+  bool get _isPriceEnabled => _variety == OrderVariety.limit;
 
   /// Lot size for this instrument.
   /// MCX commodities and NSE F&O instruments both have known lot sizes.
@@ -302,8 +337,23 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   String get _leverageLabel => _fmtLeverage(_leverage);
 
   /// Required margin for this order — same formula as backend.
+  ///
+  /// A BUY that covers an existing SHORT position releases margin instead of
+  /// consuming it, so only the qty beyond the short (a flip to long) needs
+  /// margin — mirrors the backend pre-flight gate in orderEngine.placeOrder.
   double get _requiredMargin {
-    final tradeValue = _qty * _effectivePrice;
+    var marginQty = _qty;
+    if (_isBuy) {
+      final store = TradingScope.read(context);
+      final shortQty = store.positions
+          .where((p) =>
+              p.symbol == widget.stock.symbol &&
+              p.product == _product &&
+              p.side == OrderType.sell)
+          .fold(0, (s, p) => s + p.quantity);
+      marginQty = _qty > shortQty ? _qty - shortQty : 0;
+    }
+    final tradeValue = marginQty * _effectivePrice;
     return tradeValue / _leverage;
   }
 
@@ -364,8 +414,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     // Never treat 0.0 stub as "insufficient funds" — wait for real data first.
     final isUserDataLoaded = store.isUserDataLoaded;
 
-    // Determine if this is a futures/options/MIS instrument that allows short selling.
-    // For such instruments we skip the "insufficient holdings" check on SELL.
+    // Determine if this is an instrument that allows short selling.
+    // F&O, MCX, MIS, and NRML all support naked shorts (NRML subject to the
+    // backend's block_overnight_short_sell flag per category).
+    // CNC/delivery equity does not allow short selling.
     final ex = widget.stock.exchange.toUpperCase();
     final sym = widget.stock.symbol.toUpperCase();
     final isFnoOrMis =
@@ -376,7 +428,8 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         sym.endsWith('FUT') ||
         sym.endsWith('CE') ||
         sym.endsWith('PE') ||
-        _product == ProductType.mis;
+        _product == ProductType.mis ||
+        _product == ProductType.nrml;
 
     // SELL: find available qty from both holdings (CNC) and positions (MIS)
     final holdingQty = store.holdings
@@ -442,16 +495,21 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                   ],
                   _buildSideToggle(),
                   const SizedBox(height: 16),
-                  if (_isBuy) ...[
-                    _buildProductRow(),
-                    const SizedBox(height: 12),
-                  ],
-                  _buildOrderTypeRow(),
+                  _buildProductRow(),
+                  const SizedBox(height: 12),
+                  // SL is only offered when selling out of actual (CNC/delivery)
+                  // holdings — never for intraday short-selling, an open short
+                  // position, or a symbol with zero holdings.
+                  _buildOrderTypeRow(showSl: !_isBuy && holdingQty > 0),
                   const SizedBox(height: 16),
                   _buildQuantityRow(availableQty),
                   const SizedBox(height: 16),
-                  if (!_isMarket) ...[
+                  if (_isPriceEnabled) ...[
                     _buildPriceField(),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_isSL) ...[
+                    _buildTriggerField(),
                     const SizedBox(height: 16),
                   ],
                   _buildCostBreakdown(freeMargin, isShortSell: isShortSell),
@@ -768,9 +826,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final stock = widget.stock;
     final type = stock.instrumentType;
     final daysLeft = stock.daysToExpiry;
-    final expiryStr = stock.expiry != null
-        ? '${stock.expiry!.day.toString().padLeft(2, '0')} '
-              '${_monthAbbr(stock.expiry!.month)} ${stock.expiry!.year}'
+    final e = stock.expiry;
+    final expiryStr = e != null
+        ? '${e.day.toString().padLeft(2, '0')} ${_monthAbbr(e.month)} ${e.year}'
         : null;
 
     // CE/PE badge color
@@ -934,29 +992,12 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                     color: Color(0xFF111111),
                   ),
                 ),
-                Row(
-                  children: [
-                    Text(
-                      'LTP ₹${_effectiveLtp.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF888888),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _isMarket
-                          ? 'Exec ₹${(_isBuy ? _effectiveLtp * 1.0002 : _effectiveLtp * 0.9998).toStringAsFixed(2)}'
-                          : '',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _isBuy
-                            ? const Color(0xFF00A020)
-                            : const Color(0xFFCC2200),
-                      ),
-                    ),
-                  ],
+                Text(
+                  'LTP ₹${_effectiveLtp.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF888888),
+                  ),
                 ),
               ],
             ),
@@ -989,7 +1030,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       children: [
         Expanded(
           child: GestureDetector(
-            onTap: () => setState(() => _side = OrderType.buy),
+            onTap: () => setState(() {
+              _side = OrderType.buy;
+              // Stop-loss orders are only offered when selling out of an
+              // existing holding — switching to BUY drops any SL selection.
+              if (_variety == OrderVariety.sl) {
+                _variety = OrderVariety.market;
+              }
+            }),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               height: 40,
@@ -1045,9 +1093,10 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   }
 
   // ── Product ────────────────────────────────────────────────────────────────
-  // On SELL, product type is irrelevant — you're exiting an existing position.
+  // Shown for both BUY and SELL on equity: SELL needs product selection because
+  // it determines whether this is a new MIS or NRML short, or which position to exit.
   Widget _buildProductRow() {
-    // Hide for F&O (already NRML by default) — show for both equity BUY and SELL
+    // F&O defaults to NRML — no need to show the selector
     if (_isFuturesOrOptions) return const SizedBox.shrink();
 
     final misLev = _getLeverageForProduct(ProductType.mis);
@@ -1142,7 +1191,9 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
 
   // ── Order type ─────────────────────────────────────────────────────────────
 
-  Widget _buildOrderTypeRow() {
+  // SL is only offered when selling out of an existing holding — buys never
+  // need a stop-loss entry, and a sell with nothing held has no SL use case.
+  Widget _buildOrderTypeRow({required bool showSl}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1161,6 +1212,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               _variety == OrderVariety.limit,
               () => setState(() => _variety = OrderVariety.limit),
             ),
+            if (showSl) ...[
+              const SizedBox(width: 6),
+              _chip(
+                'SL',
+                _variety == OrderVariety.sl,
+                () => setState(() => _variety = OrderVariety.sl),
+              ),
+            ],
           ],
         ),
       ],
@@ -1334,6 +1393,54 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               vertical: 10,
             ),
           ),
+        ),
+      ],
+    );
+  }
+
+  // ── Trigger price field (SL / SL-M) ────────────────────────────────────────
+
+  Widget _buildTriggerField() {
+    // BUY SL triggers when price RISES to the trigger; SELL SL when it FALLS.
+    final hint = _isBuy
+        ? 'Triggers when price rises to this level'
+        : 'Triggers when price falls to this level';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label('TRIGGER PRICE'),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _triggerController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            hintText: '0.00',
+            prefixText: '₹ ',
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: _sideColor, width: 1.5),
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          hint,
+          style: const TextStyle(fontSize: 10, color: Color(0xFF888888)),
         ),
       ],
     );
@@ -1560,11 +1667,88 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     } else {
       productType = _product == ProductType.mis ? 'MIS' : 'NRML';
     }
-    // Snapshot variety and limit price before the sheet is dismissed
+    // Snapshot variety, limit price and trigger price before the sheet is dismissed
     final snapshotVariety = _variety;
     final snapshotLimitPriceText = _priceController.text;
+    final snapshotTriggerPriceText = _triggerController.text;
+
+    // ── Pre-flight field validation (sheet still open — errors keep it open) ──
+    final isSLVariety = snapshotVariety == OrderVariety.sl;
+    // SL always behaves as SL-Market — trigger price only, no limit price.
+    final needsLimitPrice = snapshotVariety == OrderVariety.limit;
+    if (needsLimitPrice) {
+      final lp = double.tryParse(snapshotLimitPriceText);
+      if (lp == null || lp <= 0) {
+        AppToast.error(context, 'Please enter a valid limit price.');
+        return;
+      }
+    }
+    if (isSLVariety) {
+      final tp = double.tryParse(snapshotTriggerPriceText);
+      if (tp == null || tp <= 0) {
+        AppToast.error(context, 'Please enter a valid trigger price.');
+        return;
+      }
+    }
     final requestId =
         '${sessionUser.uid}_${DateTime.now().microsecondsSinceEpoch}';
+
+    // ── Fresh price guard ──────────────────────────────────────────────────────
+    // If the WS price is missing or the last tick is older than 30 s, fetch a
+    // fresh REST quote so execution always uses the latest available rate.
+    // This is done BEFORE nav.pop() so the sheet is still mounted and the
+    // refreshed _livePrice is captured by _effectiveLtp below.
+    String priceSource = _livePrice > 0 ? 'websocket' : 'initial';
+    if (_isTickStale) {
+      try {
+        final refreshApi =
+            BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
+        final detail = await refreshApi
+            .getStockDetail(widget.stock.symbol.toUpperCase())
+            .timeout(const Duration(seconds: 2));
+        final freshLtp = (detail['ltp'] as num?)?.toDouble() ?? 0.0;
+        if (freshLtp > 0) {
+          _livePrice = freshLtp;
+          _lastTickAt = DateTime.now();
+          priceSource = 'rest-refresh';
+          debugPrint('[OrderForm] Refreshed stale price: '
+              '${widget.stock.symbol} ₹$freshLtp (source: rest-refresh)');
+        } else {
+          debugPrint('[OrderForm] REST refresh returned 0 for '
+              '${widget.stock.symbol}, using existing ₹${_effectiveLtp.toStringAsFixed(2)} (source: $priceSource)');
+        }
+      } catch (e) {
+        debugPrint('[OrderForm] REST refresh failed: $e — using '
+            '$priceSource price ₹${_effectiveLtp.toStringAsFixed(2)}');
+      }
+    }
+    final executionLtp = _effectiveLtp; // snapshot after potential refresh
+    debugPrint('[OrderForm] Submit ${isBuy ? "BUY" : "SELL"} '
+        '${widget.stock.symbol} qty=$qty ltp=₹${executionLtp.toStringAsFixed(2)} source=$priceSource');
+
+    // ── SL trigger-direction guard ──────────────────────────────────────────
+    // A stop-loss only makes sense on the far side of the current price: a
+    // SELL SL protects a long and must fire when price FALLS to the trigger,
+    // so the trigger must be below the current LTP. A BUY SL covers a short
+    // and must fire when price RISES, so the trigger must be above the LTP.
+    // If the trigger is already past the current price, the backend treats
+    // the condition as already met and fills it at market immediately instead
+    // of queueing it as pending — which looks like the order "vanished".
+    // Catch that here so the user gets a clear message instead of a surprise
+    // instant execution.
+    if (isSLVariety && executionLtp > 0) {
+      final tp = double.tryParse(snapshotTriggerPriceText) ?? 0;
+      final alreadyBreached = isBuy ? tp <= executionLtp : tp >= executionLtp;
+      if (alreadyBreached) {
+        AppToast.error(
+          context,
+          isBuy
+              ? 'Trigger ₹${tp.toStringAsFixed(2)} must be above the current price (₹${executionLtp.toStringAsFixed(2)}) — otherwise it fires immediately at market.'
+              : 'Trigger ₹${tp.toStringAsFixed(2)} must be below the current price (₹${executionLtp.toStringAsFixed(2)}) — otherwise it fires immediately at market.',
+        );
+        return;
+      }
+    }
 
     // Optimistic: deduct margin from balance immediately so the UI feels instant
     final holdingQty = store.holdings
@@ -1618,9 +1802,16 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       Map<String, dynamic> result = {};
       for (int attempt = 0; ; attempt++) {
         try {
-          final isLimit = snapshotVariety == OrderVariety.limit;
-          final limitPriceValue = isLimit
+          final varietyStr = switch (snapshotVariety) {
+            OrderVariety.limit => 'LIMIT',
+            OrderVariety.sl => 'SL_MARKET',
+            _ => 'MARKET',
+          };
+          final limitPriceValue = snapshotVariety == OrderVariety.limit
               ? double.tryParse(snapshotLimitPriceText)
+              : null;
+          final triggerPriceValue = isSLVariety
+              ? double.tryParse(snapshotTriggerPriceText)
               : null;
 
           result = await api.placeOrder(
@@ -1630,11 +1821,12 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             type: isBuy ? 'BUY' : 'SELL',
             productType: productType,
             exchange: exchange,
-            variety: isLimit ? 'LIMIT' : 'MARKET',
+            variety: varietyStr,
             limitPrice: limitPriceValue,
-            // Pass current price so backend can execute F&O contracts that are
-            // not in the live WebSocket feed (options, futures).
-            lockedLtp: _effectiveLtp > 0 ? _effectiveLtp : null,
+            triggerPrice: triggerPriceValue,
+            // Pass the freshest available price so backend can execute F&O
+            // contracts not in the live WebSocket feed (options, futures).
+            lockedLtp: executionLtp > 0 ? executionLtp : null,
             // Token is persisted in Firestore holdings so future position
             // lookups can use token-based indexing (globally unique per contract).
             symbolToken: widget.stock.token.isNotEmpty
@@ -1676,23 +1868,56 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         }
       }
 
-      final newBal = (result['newBalance'] as num?)?.toDouble();
-      if (newBal != null) store.setOptimisticBalance(newBal);
+      final isPending = (result['status'] as String?)?.toUpperCase() == 'PENDING';
 
-      sm.clearSnackBars();
-      final executed = result['executedPrice'] ?? result['price'];
-      sm.showSnackBar(
-        SnackBar(
-          content: Text(
-            '${isBuy ? 'Bought' : 'Sold'} $qty × $symbol'
-            '${executed != null ? ' @ ₹${(executed as num).toStringAsFixed(2)}' : ''}',
-            style: const TextStyle(fontSize: 13),
+      if (isPending) {
+        // Order queued — undo optimistic balance deduction (no margin blocked yet)
+        if (optimisticDebit > 0) store.setOptimisticBalance(store.balance + optimisticDebit);
+        final lp = (result['limitPrice'] as num?)?.toDouble();
+        final tp = (result['triggerPrice'] as num?)?.toDouble();
+        // LIMIT: BUY fills when price falls (≤), SELL when it rises (≥).
+        // SL: inverse — BUY triggers when price rises (≥), SELL when it falls (≤).
+        final String queuedMsg;
+        if (isSLVariety && tp != null) {
+          queuedMsg = 'Stop loss queued — '
+              '${isBuy ? 'will buy' : 'will sell'} $qty × $symbol '
+              'when price ${isBuy ? '≥' : '≤'} ₹${tp.toStringAsFixed(2)}';
+        } else {
+          queuedMsg = 'Limit order queued — '
+              '${isBuy ? 'will buy' : 'will sell'} $qty × $symbol'
+              '${lp != null ? ' when price ${isBuy ? '≤' : '≥'} ₹${lp.toStringAsFixed(2)}' : ''}';
+        }
+        sm.clearSnackBars();
+        sm.showSnackBar(
+          SnackBar(
+            content: Text(
+              queuedMsg,
+              style: const TextStyle(fontSize: 13),
+            ),
+            backgroundColor: const Color(0xFF1565C0),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
           ),
-          backgroundColor: const Color(0xFF00C853),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+        );
+      } else {
+        final newBal = (result['newBalance'] as num?)?.toDouble();
+        if (newBal != null) store.setOptimisticBalance(newBal);
+
+        sm.clearSnackBars();
+        final executed = result['executedPrice'] ?? result['price'];
+        sm.showSnackBar(
+          SnackBar(
+            content: Text(
+              '${isBuy ? 'Bought' : 'Sold'} $qty × $symbol'
+              '${executed != null ? ' @ ₹${(executed as num).toStringAsFixed(2)}' : ''}',
+              style: const TextStyle(fontSize: 13),
+            ),
+            backgroundColor: const Color(0xFF00C853),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     } on BackendException catch (e) {
       // Undo optimistic balance deduction on failure
       if (optimisticDebit > 0) {

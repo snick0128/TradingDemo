@@ -10,7 +10,7 @@ import 'firebase_options.dart';
 import 'app/app_scope.dart';
 import 'config/backend_config.dart';
 import 'models/platform_settings.dart';
-import 'data/providers/backend_price_provider.dart';
+import 'data/providers/trading_store_price_provider.dart';
 import 'data/services/auth_service.dart';
 import 'data/services/backend_api_service.dart';
 import 'data/services/firestore_service.dart';
@@ -66,7 +66,8 @@ class BoxTradingApp extends StatefulWidget {
   State<BoxTradingApp> createState() => _BoxTradingAppState();
 }
 
-class _BoxTradingAppState extends State<BoxTradingApp> {
+class _BoxTradingAppState extends State<BoxTradingApp>
+    with WidgetsBindingObserver {
   // Existing mock stores (power the full trading UI)
   late final TradingStore _tradingStore;
   late final SecurityStore _securityStore;
@@ -77,12 +78,14 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   FirestoreService? _firestoreService;
   AuthService? _authService;
   TradingService? _tradingService;
+  StreamSubscription<dynamic>? _authStateSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _gttSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _positionsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _holdingsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _rmsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _notifSub;
 
   // Separate position lists from each Firestore source so they are merged
   // rather than one stream wiping out the other's results.
@@ -96,6 +99,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     AppUpdateService.instance.start();
     _tradingStore = TradingStore();
     _securityStore = SecurityStore(lockTimeout: const Duration(minutes: 5));
@@ -122,9 +126,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       );
       _tradingService = TradingService(
         firestore: firestore,
-        priceProvider: BackendPriceProvider(
-          api: BackendApiService(baseUrl: BackendConfig.backendBaseUrl),
-        ),
+        // Routes through the existing LiveMarketService WS instead of a second connection.
+        priceProvider: TradingStorePriceProvider(_tradingStore),
       );
       _adminStore = AdminStore(
         tradingService: _tradingService,
@@ -133,20 +136,23 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
 
       // Restore session from Firebase auth state on app start only.
       // Skip if session already has a user (set by loginUser/loginAdmin directly).
-      _authService!.authStateChanges.listen((firebaseUser) async {
+      _authStateSub = _authService!.authStateChanges.listen((firebaseUser) async {
         if (firebaseUser == null) {
           await _ordersSub?.cancel();
           await _gttSub?.cancel();
           await _positionsSub?.cancel();
           await _holdingsSub?.cancel();
           await _userSub?.cancel();
+          await _notifSub?.cancel();
           _ordersSub = null;
           _gttSub = null;
           _positionsSub = null;
           _holdingsSub = null;
           _userSub = null;
+          _notifSub = null;
           _tradingStore.replaceOrders(const <Order>[]);
           _tradingStore.replacePositions(const <Position>[]);
+          _tradingStore.replaceNotifications(const []);
           _authSession.setUser(null);
         } else if (!_authSession.isAuthenticated) {
           // Only fetch from Firestore on cold start (page refresh / app reopen).
@@ -236,10 +242,26 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final svc = _tradingStore.liveMarketService;
+    if (svc == null) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      svc.setIsBackground(true);
+    } else if (state == AppLifecycleState.resumed) {
+      svc.setIsBackground(false);
+      svc.setAppResumeTimestamp(DateTime.now().millisecondsSinceEpoch);
+      svc.reconnectNow();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     AppUpdateService.instance.dispose();
     SubscriptionManager.instance.detach();
     _authSession.removeListener(_syncTradingUserFromAuthSession);
+    _authStateSub?.cancel();
     _ordersSub?.cancel();
     _gttSub?.cancel();
     _positionsSub?.cancel();
@@ -262,14 +284,17 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
       _positionsSub?.cancel();
       _holdingsSub?.cancel();
       _userSub?.cancel();
+      _notifSub?.cancel();
       _ordersSub = null;
       _positionsSub = null;
       _holdingsSub = null;
       _userSub = null;
+      _notifSub = null;
       _positionsFromPositionsColl = [];
       _positionsFromHoldings = [];
       _tradingStore.replaceOrders(const <Order>[]);
       _tradingStore.replacePositions(const <Position>[]);
+      _tradingStore.replaceNotifications(const []);
       return;
     }
 
@@ -281,6 +306,80 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
 
     // Register user with WebSocket for real-time notification push
     _tradingStore.registerLiveUser(userId);
+
+    // ── Notification Firestore listener ─────────────────────────────────────
+    // Persists notifications across refreshes and catches broadcasts received
+    // while the user was offline. WS delivery deduplicates by ID.
+    _notifSub?.cancel();
+    _notifSub = _firestoreService?.raw
+        .collection('user_notifications')
+        .doc(userId)
+        .collection('items')
+        .orderBy('createdAt', descending: true)
+        .limit(50)
+        .snapshots()
+        .listen((snap) {
+          final list = snap.docs.map((doc) {
+            final d = doc.data();
+            final createdAt = d['createdAt'];
+            final ts = createdAt is int
+                ? DateTime.fromMillisecondsSinceEpoch(createdAt)
+                : DateTime.now();
+            return AppNotification(
+              id:               (d['id'] as String?) ?? doc.id,
+              title:            (d['title'] as String?) ?? '',
+              message:          (d['body'] as String?) ?? '',
+              timestamp:        ts,
+              isRead:           (d['isRead'] as bool?) ?? false,
+              relatedAlertType: AlertType.news,
+            );
+          }).toList();
+          _tradingStore.replaceNotifications(list);
+        }, onError: (e) {
+          debugPrint('[Notifications] Firestore listener error: $e');
+        });
+
+    // Callbacks so markRead/markAllRead write back to Firestore
+    _tradingStore.setNotificationCallbacks(
+      onMarkRead: (notifId) {
+        _firestoreService?.raw
+            .collection('user_notifications')
+            .doc(userId)
+            .collection('items')
+            .doc(notifId)
+            .update({'isRead': true})
+            .catchError((_) {});
+      },
+      onMarkAllRead: () async {
+        try {
+          final snap = await _firestoreService?.raw
+              .collection('user_notifications')
+              .doc(userId)
+              .collection('items')
+              .where('isRead', isEqualTo: false)
+              .get();
+          final batch = _firestoreService?.raw.batch();
+          for (final doc in snap?.docs ?? []) {
+            batch?.update(doc.reference, {'isRead': true});
+          }
+          await batch?.commit();
+        } catch (_) {}
+      },
+      onClearAll: () async {
+        try {
+          final snap = await _firestoreService?.raw
+              .collection('user_notifications')
+              .doc(userId)
+              .collection('items')
+              .get();
+          final batch = _firestoreService?.raw.batch();
+          for (final doc in snap?.docs ?? []) {
+            batch?.delete(doc.reference);
+          }
+          await batch?.commit();
+        } catch (_) {}
+      },
+    );
 
     // Load platform settings (leverage config + support config) on user bind
     _loadPlatformSettings();
@@ -342,8 +441,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
               final timestamp = data['createdAt'];
               final dateTime = timestamp is Timestamp
                   ? timestamp.toDate()
-                  : timestamp is int
-                  ? DateTime.fromMillisecondsSinceEpoch(timestamp as int)
+                  : timestamp is num
+                  ? DateTime.fromMillisecondsSinceEpoch(timestamp.toInt())
                   : DateTime.utc(1970);
 
               // product: backend writes 'productType', TradingService writes 'product'
@@ -369,6 +468,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                     ((data['avg_executed_price'] as num?) ??
                             (data['executed_price'] as num?) ??
                             (data['fillPrice'] as num?) ??
+                            (data['limitPrice'] as num?) ??
+                            (data['triggerPrice'] as num?) ??
                             (data['price'] as num?) ??
                             0)
                         .toDouble(),
@@ -377,12 +478,13 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                 dateTime: dateTime,
                 product: _mapProductType(rawProduct),
                 variety: _mapOrderVariety(rawVariety),
+                triggerPrice: (data['triggerPrice'] as num?)?.toDouble(),
                 rejectionReason: data['rejectionReason'] as String?,
                 executedAt: data['executedAt'] is Timestamp
                     ? (data['executedAt'] as Timestamp).toDate()
-                    : data['executedAt'] is int
+                    : data['executedAt'] is num
                     ? DateTime.fromMillisecondsSinceEpoch(
-                        data['executedAt'] as int,
+                        (data['executedAt'] as num).toInt(),
                       )
                     : null,
                 executedPrice:
@@ -404,9 +506,10 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
             _tradingStore.replaceOrders(mapped);
           },
           onError: (e) {
-            // Non-fatal: orders stream error — keep showing cached orders.
-            // Most likely cause: missing composite index (userId + createdAt).
-            // Deploy firestore.indexes.json to fix permanently.
+            // Orders stream failed — most likely cause: composite index
+            // (userId ASC, createdAt DESC) not yet deployed to Firestore.
+            // Run: firebase deploy --only firestore:indexes
+            debugPrint('[TradingStore] ordersStream error: $e');
           },
         );
 
@@ -554,9 +657,13 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                   ? DateTime.fromMillisecondsSinceEpoch(updatedAt)
                   : DateTime.now();
 
-              if ((productType == 'CNC' || productType == 'NRML') &&
-                  !isShort) {
-                // Long NRML/CNC holdings → Holdings tab
+              if (productType == 'CNC' && !isShort) {
+                // Long CNC equity delivery → Holdings tab.
+                // NRML F&O (futures, options) must go to Positions tab so exit
+                // sends productType='NRML' and the backend finds the correct
+                // holding doc (SYMBOL__NRML). Routing NRML to Holdings caused
+                // squareOffHolding() to hardcode CNC, looking up SYMBOL__CNC
+                // (not found) → "Short selling not allowed for CNC" error.
                 newHoldings.add(
                   Holding(
                     symbol: symbol,
@@ -568,7 +675,7 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
                   ),
                 );
               } else {
-                // MIS positions + short NRML/MIS → Positions tab
+                // MIS intraday, NRML F&O (long/short), short positions → Positions tab
                 final posExchange =
                     ((data['exchange'] as String?)?.trim().toUpperCase()) ??
                     'NSE';
@@ -662,14 +769,21 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
   ProductType _mapProductType(String product) {
     switch (product.toUpperCase()) {
       case 'MIS':
+      case 'INTRADAY':
+      case 'BO':
+      case 'CO':
         return ProductType.mis;
       case 'NRML':
         return ProductType.nrml;
+      case 'CNC':
+      case 'DELIVERY':
       case 'OVERNIGHT':
         return ProductType.overnight;
       case 'MTF':
         return ProductType.mtf;
       default:
+        assert(false, 'Unknown productType from Firestore: "$product" — add a case to _mapProductType');
+        debugPrint('WARNING: unknown productType "$product" — defaulting to MIS');
         return ProductType.mis;
     }
   }
@@ -680,6 +794,8 @@ class _BoxTradingAppState extends State<BoxTradingApp> {
         return OrderVariety.limit;
       case 'SL':
       case 'SL_LIMIT':
+      case 'SLM':
+      case 'SL_MARKET':
         return OrderVariety.sl;
       case 'AMO':
         return OrderVariety.amo;

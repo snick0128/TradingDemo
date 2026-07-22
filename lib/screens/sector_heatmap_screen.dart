@@ -11,7 +11,7 @@ class SectorHeatmapScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final stocks = store.watchlist.toList();
+    final stocks = store.knownStocks.toList();
 
     // Group by sector and compute average change%
     final Map<String, List<Stock>> bySector = {};

@@ -85,7 +85,7 @@ class _StockScreenerScreenState extends State<StockScreenerScreen> {
   @override
   Widget build(BuildContext context) {
     final store = TradingScope.of(context);
-    final all = store.watchlist.toList();
+    final all = store.knownStocks.toList();
 
     return Scaffold(
       appBar: AppBar(

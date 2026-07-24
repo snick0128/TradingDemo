@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../app/app_scope.dart';
@@ -15,11 +14,7 @@ import '../widgets/trading_bottom_nav_bar.dart';
 import '../models/trading_models.dart';
 import 'ipo_screen.dart';
 import 'settings_hub_screen.dart';
-import 'settings/about_screen.dart';
-import 'settings/app_permissions_screen.dart';
 import 'settings/help_support_screen.dart';
-import 'settings/linked_accounts_screen.dart';
-import 'settings/security_settings_screen.dart';
 import 'admin/admin_shell.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -30,17 +25,9 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  bool _emailVerified = true;
-  bool _phoneVerified = true;
-  bool _panVerified = false;
-
   bool _biometric = true;
   bool _tradeAlerts = true;
   bool _priceAlerts = true;
-
-  DateTime _lastLogin = DateTime.now().subtract(
-    const Duration(hours: 2, minutes: 18),
-  );
 
   // Snapshotted store values
   User? _user;
@@ -115,7 +102,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final user = _user ?? TradingScope.read(context).currentUser;
     final security = SecurityScope.of(context);
-    final completion = _profileCompletion(user);
 
     return Scaffold(
       appBar: AppBar(
@@ -156,15 +142,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
     );
-  }
-
-  int _profileCompletion(User user) {
-    var completed = 0;
-    if (user.name.trim().isNotEmpty) completed++;
-    if (_emailVerified) completed++;
-    if (_phoneVerified) completed++;
-    if (_panVerified) completed++;
-    return ((completed / 4) * 100).round();
   }
 
   Widget _buildHeaderCard(BuildContext context, User user) {
@@ -270,51 +247,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildVerificationCard(BuildContext context, int completion) {
-    return CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Account Verification',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              Text(
-                '$completion%',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: LinearProgressIndicator(
-              value: completion / 100,
-              minHeight: 8,
-              backgroundColor: AppColors.surfaceAlt,
-              color: completion == 100 ? AppColors.success : AppColors.warning,
-            ),
-          ),
-          const SizedBox(height: 12),
-          _statusRow(
-            'Email',
-            _emailVerified,
-            onTap: () => setState(() => _emailVerified = true),
-          ),
-          _statusRow(
-            'Phone',
-            _phoneVerified,
-            onTap: () => setState(() => _phoneVerified = true),
-          ),
-          _statusRow('PAN / KYC', _panVerified, onTap: _openKycSheet),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPreferencesCard(BuildContext context) {
     return CustomCard(
       child: Column(
@@ -366,32 +298,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const Divider(height: 1, indent: 56),
           _actionTile(
-            icon: LucideIcons.link2,
-            title: 'Linked Accounts',
-            subtitle: 'Banks, demat, and third-party integrations',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const LinkedAccountsScreen()),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
             icon: LucideIcons.headphones,
             title: 'Help & Support',
             subtitle: 'Raise ticket, FAQs, and contact options',
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const HelpSupportScreen()),
-            ),
-          ),
-          const Divider(height: 1, indent: 56),
-          _actionTile(
-            icon: LucideIcons.info,
-            title: 'About',
-            subtitle: 'Version, terms, and product information',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const AboutScreen()),
             ),
           ),
           if (user.isAdmin) ...[
@@ -405,41 +317,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ).push(MaterialPageRoute(builder: (_) => const AdminShell())),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSessionCard(BuildContext context, User user) {
-    return CustomCard(
-      child: Row(
-        children: [
-          const Icon(LucideIcons.clock3, color: AppColors.accent, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Last Login',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  DateFormat(
-                    'dd MMM yyyy, hh:mm a',
-                  ).format(user.lastLoginAt ?? _lastLogin),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() => _lastLogin = DateTime.now());
-              _showMessage('Session refreshed.');
-            },
-            child: const Text('Refresh'),
-          ),
         ],
       ),
     );
@@ -483,38 +360,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         icon: const Icon(LucideIcons.logOut),
         label: const Text('Logout'),
-      ),
-    );
-  }
-
-  Widget _statusRow(
-    String label,
-    bool verified, {
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: verified ? null : onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          children: [
-            Icon(
-              verified ? LucideIcons.badgeCheck : LucideIcons.circleDashed,
-              size: 16,
-              color: verified ? AppColors.success : AppColors.warning,
-            ),
-            const SizedBox(width: 8),
-            Expanded(child: Text(label)),
-            Text(
-              verified ? 'Verified' : 'Complete',
-              style: TextStyle(
-                color: verified ? AppColors.success : AppColors.warning,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -574,30 +419,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               AppToast.success(context, 'Profile updated successfully.');
             },
             child: const Text('Save Changes'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openKycSheet() {
-    AppBottomSheet.show(
-      context,
-      title: 'Complete KYC',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Upload PAN and identity proof to unlock all trading features.',
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () {
-              setState(() => _panVerified = true);
-              Navigator.pop(context);
-              AppToast.success(context, 'KYC marked as completed.');
-            },
-            child: const Text('Submit KYC'),
           ),
         ],
       ),

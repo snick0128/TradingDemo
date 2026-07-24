@@ -24,7 +24,8 @@ const _kWatchlistsKey = 'watchlist.lists_v2';
 
 // ─── Sort options ─────────────────────────────────────────────────────────────
 
-enum WatchlistSort { symbol, price, change, volume }
+// `manual` preserves insertion/drag order — newly added stocks land at the top.
+enum WatchlistSort { manual, symbol, price, change, volume }
 
 // ─── Pure logic helper (also used by property test) ──────────────────────────
 
@@ -54,7 +55,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   bool _initialized = false;
 
   bool _compactView = false;
-  WatchlistSort _sort = WatchlistSort.symbol;
+  WatchlistSort _sort = WatchlistSort.manual;
 
   bool _isActiveTab = false;
   TradingStore? _store;
@@ -203,6 +204,10 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
         .toList();
 
     switch (_sort) {
+      case WatchlistSort.manual:
+        // Preserve wl.symbols order as-is — newly added stocks were prepended
+        // to the front in _showAddStockSheet, so they show up on top here.
+        break;
       case WatchlistSort.symbol:
         stocks.sort((a, b) => a.symbol.compareTo(b.symbol));
         break;
@@ -360,6 +365,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
             icon: const Icon(LucideIcons.arrowUpDown, size: 20),
             onSelected: (v) => setState(() => _sort = v),
             itemBuilder: (_) => const [
+              PopupMenuItem(value: WatchlistSort.manual, child: Text('Manual (recently added first)')),
               PopupMenuItem(value: WatchlistSort.symbol, child: Text('Symbol')),
               PopupMenuItem(value: WatchlistSort.price, child: Text('Price')),
               PopupMenuItem(
@@ -448,8 +454,9 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           setState(() {
             final current = _watchlists[currentTabIndex].symbols;
             if (!current.contains(symbol)) {
+              // Prepend so the newly added stock shows at the top (manual sort).
               _watchlists[currentTabIndex] = _watchlists[currentTabIndex]
-                  .copyWith(symbols: [...current, symbol]);
+                  .copyWith(symbols: [symbol, ...current]);
             }
           });
           _saveWatchlists();

@@ -187,6 +187,10 @@ extension InstrumentTypeX on InstrumentType {
         final upper = symbol.toUpperCase();
         if (upper.endsWith('PE')) return InstrumentType.optionPE;
         return InstrumentType.optionCE;
+      case '':
+        // Angel One's scrip master leaves `instrumenttype` blank for plain
+        // NSE/BSE cash-market equities (and ETFs) — it is not literally "EQ".
+        return InstrumentType.equity;
       default:
         return InstrumentType.unknown;
     }

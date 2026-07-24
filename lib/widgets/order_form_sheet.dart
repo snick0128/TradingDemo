@@ -1093,12 +1093,13 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   }
 
   // ── Product ────────────────────────────────────────────────────────────────
-  // Shown for both BUY and SELL on equity: SELL needs product selection because
-  // it determines whether this is a new MIS or NRML short, or which position to exit.
+  // Shown for both BUY and SELL, equity and F&O alike: SELL needs product
+  // selection because it determines whether this is a new MIS or NRML short
+  // (or which position to exit), and F&O traders need the same Intraday vs
+  // Overnight choice — the backend already fully supports MIS for F&O
+  // (per-lot margin, RMS, and 15:25/23:25 auto square-off), this was purely a
+  // frontend gap where the selector was hidden and NRML silently forced.
   Widget _buildProductRow() {
-    // F&O defaults to NRML — no need to show the selector
-    if (_isFuturesOrOptions) return const SizedBox.shrink();
-
     final misLev = _getLeverageForProduct(ProductType.mis);
     final nrmlLev = _getLeverageForProduct(ProductType.nrml);
 

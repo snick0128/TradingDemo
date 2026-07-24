@@ -799,6 +799,21 @@ class TradingStore extends ChangeNotifier {
       );
     }
     // No notifyListeners — this is a silent registration
+
+    // Feed the REST-resolved price into the SAME per-symbol notifier that
+    // WebSocket ticks update (see _onLiveStockUpdate above). LivePriceText and
+    // every other ltpNotifier(symbol) consumer read only from _ltpNotifiers /
+    // _lastLtpBySymbol, never from stock.currentPrice — without this, a
+    // symbol whose price is known only via REST (no WS tick has arrived yet,
+    // e.g. a newly dynamically-subscribed stock) shows "--" indefinitely.
+    // Guarded to never clobber a fresher live tick with a stale REST value.
+    if (ltp > 0) {
+      final notifier = _ltpNotifiers[symbol];
+      if (notifier == null || notifier.value <= 0) {
+        _lastLtpBySymbol[symbol] = ltp;
+        notifier?.value = ltp;
+      }
+    }
   }
 
   bool isInWatchlist(String symbol) => _watchlistIndex.containsKey(symbol);
@@ -807,8 +822,8 @@ class TradingStore extends ChangeNotifier {
     if (isInWatchlist(symbol)) return;
     final stock = _watchlistUniverse[symbol];
     if (stock == null) return;
-    _watchlistIndex[stock.symbol] = _watchlist.length;
-    _watchlist.add(stock);
+    _watchlist.insert(0, stock);
+    _rebuildWatchlistIndex();
     _refreshMarketSubscriptions();
     notifyListeners();
   }

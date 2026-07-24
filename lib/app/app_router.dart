@@ -97,6 +97,12 @@ GoRouter createAppRouter(AuthSession authSession) {
       if ((isAppLogin || isAppSplash) && isAuthenticated && isUser) return '/app/dashboard';
       if (isAdminLogin && isAuthenticated && isAdmin) return '/admin/dashboard';
 
+      // Redirect authenticated users away from the public landing page
+      if (!isAdminHost && loc == '/' && isAuthenticated) {
+        if (isUser) return '/app/dashboard';
+        if (isAdmin) return '/admin/dashboard';
+      }
+
       return null;
     },
     routes: [

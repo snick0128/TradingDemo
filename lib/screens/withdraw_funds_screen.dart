@@ -5,6 +5,9 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../app/app_scope.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/wallet_fund_widgets.dart';
+
+const _kQuickAmounts = [1000.0, 5000.0, 10000.0, 25000.0];
 
 class WithdrawFundsScreen extends StatefulWidget {
   final bool showAppBar;
@@ -93,51 +96,18 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
   }
 
   Widget _buildSuccessView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color:  AppColors.success.withOpacity(0.1),
-                shape:  BoxShape.circle,
-              ),
-              child: const Icon(LucideIcons.checkCircle,
-                  size: 36, color: AppColors.success),
-            ),
-            const SizedBox(height: 24),
-            const Text('Request Submitted',
-                style: TextStyle(
-                    fontSize:   22,
-                    fontWeight: FontWeight.w700,
-                    color:      AppColors.textPrimary)),
-            const SizedBox(height: 12),
-            const Text(
-              'Your withdrawal request has been submitted and is pending admin approval.\nYou will be notified once it is processed.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 14,
-                  color:    AppColors.textSecondary,
-                  height:   1.6),
-            ),
-            const SizedBox(height: 32),
-            OutlinedButton(
-              onPressed: () => setState(() {
-                _submitted = false;
-                _amountCtrl.clear();
-                _bankCtrl.clear();
-                _upiCtrl.clear();
-                _remarksCtrl.clear();
-              }),
-              child: const Text('Submit Another Request'),
-            ),
-          ],
-        ),
-      ),
+    return WalletRequestSuccessView(
+      title: 'Request Submitted',
+      message:
+          'Your withdrawal request has been submitted and is pending admin approval.\n'
+          'You will be notified once it is processed.',
+      onSubmitAnother: () => setState(() {
+        _submitted = false;
+        _amountCtrl.clear();
+        _bankCtrl.clear();
+        _upiCtrl.clear();
+        _remarksCtrl.clear();
+      }),
     );
   }
 
@@ -145,6 +115,7 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
     final availableBalance = store.balance;
     final usedMargin       = store.usedMargin;
     final freeBalance      = store.freeMargin;
+    final uid              = AppScope.of(context).notifier?.user?.uid ?? '';
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -161,7 +132,7 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
                 const SizedBox(height: 16),
                 const Text('Withdraw Funds',
                     style: TextStyle(
-                        fontSize:   22,
+                        fontSize:   24,
                         fontWeight: FontWeight.w700,
                         color:      AppColors.textPrimary)),
                 const SizedBox(height: 8),
@@ -170,7 +141,13 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
                   style: const TextStyle(
                       fontSize: 13, color: AppColors.textSecondary),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
+
+                WalletPendingRequestBanner(
+                  collection: 'withdrawal_requests',
+                  userId: uid,
+                  label: 'withdrawal',
+                ),
 
                 // Info banner
                 Container(
@@ -218,6 +195,15 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
                     }
                     return null;
                   },
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                WalletQuickAmountChips(
+                  amounts: _kQuickAmounts.where((a) => a <= freeBalance).toList(),
+                  selected: double.tryParse(_amountCtrl.text.trim()),
+                  onSelect: (a) => setState(() {
+                    _amountCtrl.text = a.toStringAsFixed(0);
+                  }),
                 ),
                 const SizedBox(height: 18),
 
@@ -263,17 +249,21 @@ class _WithdrawFundsScreenState extends State<WithdrawFundsScreen> {
 
                 SizedBox(
                   width: double.infinity,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _loading ? null : _submit,
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary),
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
                     child: _loading
                         ? const SizedBox(
                             height: 20,
                             width:  20,
                             child:  CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
-                        : const Text('Submit Withdrawal Request'),
+                        : const Text('Submit Withdrawal Request',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],

@@ -156,6 +156,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   }
 
   String get _screenId => 'order_form_${widget.stock.symbol}';
+  int? _subGen;
 
   @override
   void didChangeDependencies() {
@@ -174,7 +175,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       // TradingStore intentionally omits notifyListeners() on price ticks.
       _ltpNotifier = store.ltpNotifier(widget.stock.symbol);
       _ltpNotifier!.addListener(_onLtpTick);
-      SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.stock.symbol});
+      _subGen = SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.stock.symbol});
       _onLtpTick(); // prime with current value
     }
   }
@@ -243,7 +244,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
   void dispose() {
     _store?.removeListener(_onStoreTick);
     _ltpNotifier?.removeListener(_onLtpTick);
-    SubscriptionManager.instance.unsubscribeScreen(_screenId);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId, _subGen);
     _priceController.dispose();
     _triggerController.dispose();
     _qtyController.dispose();

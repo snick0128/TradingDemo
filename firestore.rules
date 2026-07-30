@@ -187,6 +187,17 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // ── deposit_requests ────────────────────────────────────────────────────
+    match /deposit_requests/{requestId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'PENDING' &&
+                       request.resource.data.amount > 0;
+      allow update, delete: if isAdmin();
+    }
+
     // ── marketSettings ─────────────────────────────────────────────────────
     match /marketSettings/{docId} {
       allow read:  if isSignedIn();

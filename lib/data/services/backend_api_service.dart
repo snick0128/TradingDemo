@@ -597,6 +597,18 @@ class BackendApiService {
     invalidate('/admin/config/support');
   }
 
+  /// Fetch deposit UPI/payment configuration.
+  Future<Map<String, dynamic>> getPaymentConfig() async {
+    final res = await _get('/admin/config/payment', ttl: _longTtl);
+    return res['data'] as Map<String, dynamic>;
+  }
+
+  /// Update deposit UPI/payment config (admin only).
+  Future<void> updatePaymentConfig(Map<String, dynamic> config) async {
+    await _post('/admin/config/payment', config);
+    invalidate('/admin/config/payment');
+  }
+
   // ── In-app Notifications ─────────────────────────────────────────────────────
 
   /// Fetch paginated notifications for a user.

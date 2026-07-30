@@ -11,6 +11,7 @@ import '../models/platform_settings.dart';
 import '../models/trading_models.dart';
 import '../services/alert_service.dart';
 import '../services/market_data_service.dart';
+import '../services/persistence_service.dart';
 import '../services/subscription_manager.dart';
 
 // RMS FIX:
@@ -57,6 +58,7 @@ class TradingStore extends ChangeNotifier {
     // Stub service — no random prices. Live backend fills the watchlist.
     _marketDataService = MarketDataService({});
     _alertService = AlertService(this, _marketDataService);
+    _loadNamedWatchlists();
   }
 
   late final MarketDataService _marketDataService;
@@ -501,9 +503,11 @@ class TradingStore extends ChangeNotifier {
   // ── Platform settings (leverage, RMS, support) ────────────────────────────
   PlatformRmsSettings _rmsSettings = PlatformRmsSettings.defaults;
   SupportConfig _supportConfig = const SupportConfig();
+  PaymentConfig _paymentConfig = const PaymentConfig();
 
   PlatformRmsSettings get rmsSettings => _rmsSettings;
   SupportConfig get supportConfig => _supportConfig;
+  PaymentConfig get paymentConfig => _paymentConfig;
 
   void updateRmsSettings(PlatformRmsSettings settings) {
     _rmsSettings = settings;
@@ -512,6 +516,11 @@ class TradingStore extends ChangeNotifier {
 
   void updateSupportConfig(SupportConfig config) {
     _supportConfig = config;
+    notifyListeners();
+  }
+
+  void updatePaymentConfig(PaymentConfig config) {
+    _paymentConfig = config;
     notifyListeners();
   }
 
@@ -840,6 +849,131 @@ class TradingStore extends ChangeNotifier {
     for (var i = 0; i < _watchlist.length; i++) {
       _watchlistIndex[_watchlist[i].symbol] = i;
     }
+  }
+
+  // ── Named / multi watchlists ───────────────────────────────────────────────
+  // Canonical, persisted store for the user's named watchlists (Market Watch
+  // tabs). This is the single source of truth so any screen (Market Watch,
+  // Stock Detail's save button, Universal Search) sees the same data and
+  // stays in sync without a page reload.
+  static const String _kNamedWatchlistsKey = 'watchlist.lists_v2';
+  List<Watchlist> _namedWatchlists = [];
+
+  UnmodifiableListView<Watchlist> get watchlists =>
+      UnmodifiableListView(_namedWatchlists);
+
+  void _loadNamedWatchlists() {
+    final saved = PersistenceService.instance
+        .getJson<List<dynamic>>(_kNamedWatchlistsKey);
+    if (saved != null && saved.isNotEmpty) {
+      try {
+        _namedWatchlists = saved.map((e) {
+          final m = e as Map<String, dynamic>;
+          return Watchlist(
+            id: m['id'] as String? ?? 'wl-${m.hashCode}',
+            name: m['name'] as String? ?? 'Watchlist',
+            symbols: (m['symbols'] as List<dynamic>? ?? []).cast<String>(),
+            order: (m['order'] as num?)?.toInt() ?? 0,
+          );
+        }).toList();
+        return;
+      } catch (_) {
+        // Corrupted data — fall through to defaults.
+      }
+    }
+    _namedWatchlists = [
+      Watchlist(id: 'wl-1', name: 'My Watchlist', symbols: const [], order: 0),
+    ];
+    _saveNamedWatchlists();
+  }
+
+  void _saveNamedWatchlists() {
+    final maps = _namedWatchlists
+        .map((wl) => {
+              'id': wl.id,
+              'name': wl.name,
+              'symbols': wl.symbols,
+              'order': wl.order,
+            })
+        .toList();
+    PersistenceService.instance.setJson(_kNamedWatchlistsKey, maps);
+  }
+
+  void createWatchlist(String name) {
+    if (_namedWatchlists.length >= Watchlist.maxWatchlists) return;
+    _namedWatchlists.add(Watchlist(
+      id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
+      name: name,
+      symbols: const [],
+      order: _namedWatchlists.length,
+    ));
+    _saveNamedWatchlists();
+    notifyListeners();
+  }
+
+  bool isSymbolInAnyWatchlist(String symbol) =>
+      _namedWatchlists.any((wl) => wl.symbols.contains(symbol));
+
+  List<Watchlist> watchlistsContaining(String symbol) =>
+      _namedWatchlists.where((wl) => wl.symbols.contains(symbol)).toList();
+
+  void addSymbolToWatchlist(String watchlistId, String symbol) {
+    final idx = _namedWatchlists.indexWhere((wl) => wl.id == watchlistId);
+    if (idx == -1) return;
+    final current = _namedWatchlists[idx].symbols;
+    if (current.contains(symbol)) return;
+    _namedWatchlists[idx] =
+        _namedWatchlists[idx].copyWith(symbols: [symbol, ...current]);
+    _saveNamedWatchlists();
+    notifyListeners();
+  }
+
+  void removeSymbolFromWatchlist(String watchlistId, String symbol) {
+    final idx = _namedWatchlists.indexWhere((wl) => wl.id == watchlistId);
+    if (idx == -1) return;
+    _namedWatchlists[idx] = _namedWatchlists[idx].copyWith(
+      symbols:
+          _namedWatchlists[idx].symbols.where((s) => s != symbol).toList(),
+    );
+    _saveNamedWatchlists();
+    notifyListeners();
+  }
+
+  void removeSymbolFromAllWatchlists(String symbol) {
+    var changed = false;
+    for (var i = 0; i < _namedWatchlists.length; i++) {
+      if (_namedWatchlists[i].symbols.contains(symbol)) {
+        _namedWatchlists[i] = _namedWatchlists[i].copyWith(
+          symbols:
+              _namedWatchlists[i].symbols.where((s) => s != symbol).toList(),
+        );
+        changed = true;
+      }
+    }
+    if (changed) {
+      _saveNamedWatchlists();
+      notifyListeners();
+    }
+  }
+
+  void reorderWatchlistSymbol(String watchlistId, int oldIndex, int newIndex) {
+    final idx = _namedWatchlists.indexWhere((wl) => wl.id == watchlistId);
+    if (idx == -1) return;
+    if (newIndex > oldIndex) newIndex--;
+    final symbols = List<String>.from(_namedWatchlists[idx].symbols);
+    final sym = symbols.removeAt(oldIndex);
+    symbols.insert(newIndex, sym);
+    _namedWatchlists[idx] = _namedWatchlists[idx].copyWith(symbols: symbols);
+    _saveNamedWatchlists();
+    notifyListeners();
+  }
+
+  void replaceWatchlistSymbols(String watchlistId, List<String> symbols) {
+    final idx = _namedWatchlists.indexWhere((wl) => wl.id == watchlistId);
+    if (idx == -1) return;
+    _namedWatchlists[idx] = _namedWatchlists[idx].copyWith(symbols: symbols);
+    _saveNamedWatchlists();
+    notifyListeners();
   }
 
   void setFontSizePreset(String preset) {

@@ -72,9 +72,21 @@ class SubscriptionManager with WidgetsBindingObserver {
 
   // ── Centralized Screen Subscription API ──────────────────────────────────────
 
+  // Monotonically increasing per-screenId generation counter. Guards against
+  // a superseded screen instance's deferred dispose() (Flutter delays
+  // dispose() until the pop transition animation finishes, ~300ms) calling
+  // unsubscribeScreen() for a screenId a brand-new instance (e.g. the same
+  // symbol's detail screen, re-pushed by a fast tap→back→tap) has already
+  // re-registered. Optional at the call site — omit it to keep the old
+  // unconditional-unsubscribe behavior for screenIds that are never
+  // re-created under the same key (e.g. fixed singleton screens).
+  final Map<String, int> _screenGeneration = {};
+
   /// Subscribe to symbols for a specific screen and mark the screen as active.
   /// If [screenId] is already in the stack, it is brought to the top.
-  void subscribeForScreen(
+  /// Returns this call's generation — pass it to [unsubscribeScreen] to make
+  /// that unsubscribe a no-op if a newer call already superseded it.
+  int subscribeForScreen(
     String screenId,
     Iterable<String> symbols, {
     List<String>? fnoTokens,
@@ -82,6 +94,9 @@ class SubscriptionManager with WidgetsBindingObserver {
   }) {
     final prevStack  = List.of(_screenStack);
     final prevCount  = activeSymbolCount;
+
+    final generation = (_screenGeneration[screenId] ?? 0) + 1;
+    _screenGeneration[screenId] = generation;
 
     final cleanSymbols = symbols.map((s) => s.trim().toUpperCase()).where((s) => s.isNotEmpty).toSet();
     _screenSymbols[screenId] = cleanSymbols;
@@ -105,10 +120,20 @@ class SubscriptionManager with WidgetsBindingObserver {
     _logNavTrace('subscribeForScreen', screenId, cleanSymbols,
         prevStack: prevStack, newStack: _screenStack, prevCount: prevCount);
     _applySubscriptions();
+    return generation;
   }
 
   /// Unsubscribe a screen completely (e.g. when disposed/closed).
-  void unsubscribeScreen(String screenId) {
+  /// If [generation] is provided and a newer [subscribeForScreen] call for
+  /// this [screenId] has already landed, this is a no-op — the newer
+  /// registration wins instead of being wiped out by a stale dispose().
+  void unsubscribeScreen(String screenId, [int? generation]) {
+    if (generation != null && _screenGeneration[screenId] != generation) {
+      debugPrint('[STALE_UNSUBSCRIBE_IGNORED] screen=$screenId '
+          'staleGen=$generation currentGen=${_screenGeneration[screenId]}');
+      return;
+    }
+
     final prevStack   = List.of(_screenStack);
     final prevCount   = activeSymbolCount;
     final ownedSymbols = Set<String>.of(_screenSymbols[screenId] ?? {});
@@ -117,6 +142,7 @@ class SubscriptionManager with WidgetsBindingObserver {
     _screenFnoTokens.remove(screenId);
     _screenFnoExchange.remove(screenId);
     _screenStack.remove(screenId);
+    _screenGeneration.remove(screenId);
 
     debugPrint('[LEAK_CHECK] screen=$screenId '
         'released=${ownedSymbols.length} '
@@ -195,10 +221,18 @@ class SubscriptionManager with WidgetsBindingObserver {
       return;
     }
 
-    // Only subscribe to the top visible screen — prevents background screens
-    // (like dashboard) from stealing the live feed from visible overlays.
+    // Subscribe to the UNION of every registered screen's symbols — not just
+    // the top of the stack. Restricting to top-only meant any backgrounded
+    // screen (dashboard, market watch) silently stopped receiving live ticks
+    // the instant another screen (stock detail, options chain, order form)
+    // was pushed on top, with no error or indication anywhere. F&O option
+    // tokens stay scoped to the top screen only — that subscription is
+    // deliberately heavyweight and screen-specific.
     final topScreenId  = _screenStack.last;
-    final activeSymbols = _screenSymbols[topScreenId] ?? <String>{};
+    final activeSymbols = <String>{};
+    for (final symbols in _screenSymbols.values) {
+      activeSymbols.addAll(symbols);
+    }
     final activeTokens  = _screenFnoTokens[topScreenId] ?? <String>[];
     final activeExchange = _screenFnoExchange[topScreenId] ?? 'NFO';
 
@@ -542,9 +576,16 @@ class SubscriptionManager with WidgetsBindingObserver {
 
   int get activeCandleSubscriptionCount => _activeCandleSubs.length;
 
-  /// Total number of symbols currently subscribed for the top visible screen.
-  int get activeSymbolCount =>
-      _screenStack.isEmpty ? 0 : (_screenSymbols[_screenStack.last]?.length ?? 0);
+  /// Total number of distinct symbols currently subscribed across ALL
+  /// registered screens (the union _applySubscriptions() actually sends).
+  int get activeSymbolCount {
+    if (_screenStack.isEmpty) return 0;
+    final all = <String>{};
+    for (final symbols in _screenSymbols.values) {
+      all.addAll(symbols);
+    }
+    return all.length;
+  }
 
   // ── Subscription change diagnostics ────────────────────────────────────────
 

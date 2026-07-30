@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -5,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../config/backend_config.dart';
+import '../data/services/backend_api_service.dart';
 import '../models/trading_models.dart';
-import '../services/persistence_service.dart';
+import '../search/search_index.dart';
 import '../services/subscription_manager.dart';
 import '../state/tab_notifier.dart';
 import '../state/trading_scope.dart';
@@ -18,9 +21,6 @@ import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
 import '../widgets/trading_bottom_nav_bar.dart';
 import 'stock_detail_screen.dart';
-
-// SharedPreferences key for persisted watchlist data (v2 = multi-list format).
-const _kWatchlistsKey = 'watchlist.lists_v2';
 
 // ─── Sort options ─────────────────────────────────────────────────────────────
 
@@ -51,7 +51,6 @@ class MarketWatchScreen extends StatefulWidget {
 class _MarketWatchScreenState extends State<MarketWatchScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
-  late List<Watchlist> _watchlists;
   bool _initialized = false;
 
   bool _compactView = false;
@@ -60,10 +59,15 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   bool _isActiveTab = false;
   TradingStore? _store;
 
+  // Named watchlists live in TradingStore — the single source of truth shared
+  // with Stock Detail's save button and any other screen that reads/writes them.
+  List<Watchlist> get _watchlists => _store?.watchlists ?? const [];
+
   // Structural snapshot used to gate unnecessary rebuilds from store events
   // that don't affect the watchlist display (e.g. balance updates, P&L ticks).
   bool _lastBackendError = false;
   int _lastKnownStocksLength = -1;
+  int _lastWatchlistsFingerprint = 0;
 
   @override
   void initState() {
@@ -77,16 +81,19 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Only initialize watchlists once — never rebuild on subsequent dependency changes
-    if (!_initialized) {
-      _initialized = true;
-      _initWatchlists();
-    }
     final store = TradingScope.read(context);
     if (_store != store) {
       _store?.removeListener(_onStoreChanged);
       _store = store;
       store.addListener(_onStoreChanged);
+    }
+    // Only build the tab controller once — never rebuild on subsequent
+    // dependency changes. Later watchlist-count changes are handled by
+    // _onStoreChanged, which rebuilds the controller when needed.
+    if (!_initialized) {
+      _initialized = true;
+      _lastWatchlistsFingerprint = _computeWatchlistsFingerprint(store.watchlists);
+      _rebuildTabController();
     }
   }
 
@@ -97,6 +104,15 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     // Only rebuild on structural changes that affect what the watchlist displays.
     // Price ticks never call notifyListeners() — this guard eliminates rebuilds
     // from balance/equity events that don't change the watchlist content.
+    final nowWlFp = _computeWatchlistsFingerprint(store.watchlists);
+    if (nowWlFp != _lastWatchlistsFingerprint) {
+      _lastWatchlistsFingerprint = nowWlFp;
+      if (store.watchlists.length != _tabController.length) {
+        _rebuildTabController();
+      }
+      setState(() {});
+      return;
+    }
     final nowError = store.backendError;
     final nowLen   = store.knownStocks.length;
     if (nowError == _lastBackendError && nowLen == _lastKnownStocksLength) return;
@@ -105,54 +121,25 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
     setState(() {});
   }
 
+  // Cheap order-sensitive fingerprint so we only rebuild when a watchlist's
+  // name/count/symbol-order actually changed (mutations can come from other
+  // screens, e.g. Stock Detail's save button, not just from this screen).
+  int _computeWatchlistsFingerprint(List<Watchlist> wls) {
+    var fp = wls.length;
+    for (final w in wls) {
+      fp = fp * 31 + w.symbols.length;
+      for (final s in w.symbols) {
+        fp = fp * 31 + s.hashCode;
+      }
+    }
+    return fp;
+  }
+
   void _onTabVisibilityChanged() {
     final active = activeTabNotifier.value == 1;
     if (active == _isActiveTab) return;
     _isActiveTab = active;
     if (active) setState(() {});
-  }
-
-  void _initWatchlists() {
-    // Load from persistence first — this survives navigation, hot restarts,
-    // and full page reloads (SharedPreferences is backed by localStorage on web).
-    final saved = PersistenceService.instance.getJson<List<dynamic>>(_kWatchlistsKey);
-    if (saved != null && saved.isNotEmpty) {
-      try {
-        _watchlists = saved.map((e) {
-          final m = e as Map<String, dynamic>;
-          return Watchlist(
-            id: m['id'] as String? ?? 'wl-${m.hashCode}',
-            name: m['name'] as String? ?? 'Watchlist',
-            symbols: (m['symbols'] as List<dynamic>? ?? []).cast<String>(),
-            order: (m['order'] as num?)?.toInt() ?? 0,
-          );
-        }).toList();
-        _rebuildTabController();
-        return;
-      } catch (_) {
-        // Corrupted data — fall through to defaults.
-      }
-    }
-
-    // First-ever launch: start with one empty watchlist.
-    _watchlists = [
-      Watchlist(id: 'wl-1', name: 'My Watchlist', symbols: const [], order: 0),
-    ];
-    _rebuildTabController();
-    _saveWatchlists(); // persist the default immediately
-  }
-
-  // Persist the current watchlist state to SharedPreferences.
-  void _saveWatchlists() {
-    final maps = _watchlists
-        .map((wl) => {
-              'id': wl.id,
-              'name': wl.name,
-              'symbols': wl.symbols,
-              'order': wl.order,
-            })
-        .toList();
-    PersistenceService.instance.setJson(_kWatchlistsKey, maps);
   }
 
   void _rebuildTabController() {
@@ -232,7 +219,8 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
   // ─── Dialogs ────────────────────────────────────────────────────────────────
 
   Future<void> _showAddWatchlistDialog() async {
-    if (_watchlists.length >= Watchlist.maxWatchlists) {
+    final store = _store!;
+    if (store.watchlists.length >= Watchlist.maxWatchlists) {
       AppToast.warning(context, 'Maximum 5 watchlists allowed.');
       return;
     }
@@ -243,21 +231,10 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
       hint: 'Watchlist name',
       confirmLabel: 'Create',
       onSubmit: (name) {
-        setState(() {
-          _watchlists.add(
-            Watchlist(
-              id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
-              name: name,
-              symbols: const [],
-              order: _watchlists.length,
-            ),
-          );
-          _rebuildTabController();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _tabController.animateTo(_watchlists.length - 1);
-          });
+        store.createWatchlist(name);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _tabController.animateTo(store.watchlists.length - 1);
         });
-        _saveWatchlists();
       },
     );
   }
@@ -297,12 +274,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
         try {
           final decoded = jsonDecode(controller.text) as Map<String, dynamic>;
           final symbols = (decoded['symbols'] as List).cast<String>();
-          setState(() {
-            _watchlists[tabIndex] = _watchlists[tabIndex].copyWith(
-              symbols: symbols,
-            );
-          });
-          _saveWatchlists();
+          _store!.replaceWatchlistSymbols(wl.id, symbols);
         } catch (_) {
           AppToast.error(context, 'Invalid JSON format');
         }
@@ -379,7 +351,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
           IconButton(
             tooltip: 'Add stock to watchlist',
             icon: const Icon(LucideIcons.plus, size: 22),
-            onPressed: () => _showAddStockSheet(context, store.knownStocks.toList()),
+            onPressed: () => _showAddStockSheet(context, store),
           ),
           const SizedBox(width: 4),
         ],
@@ -392,15 +364,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
             key: ValueKey(_watchlists[i].id),
             stocks: stocks,
             onReorder: (oldIndex, newIndex) {
-              setState(() {
-                if (newIndex > oldIndex) newIndex--;
-                final sym = _watchlists[i].symbols[oldIndex];
-                final newSymbols = List<String>.from(_watchlists[i].symbols)
-                  ..removeAt(oldIndex)
-                  ..insert(newIndex, sym);
-                _watchlists[i] = _watchlists[i].copyWith(symbols: newSymbols);
-              });
-              _saveWatchlists();
+              _store!.reorderWatchlistSymbol(_watchlists[i].id, oldIndex, newIndex);
             },
             onBuy: (stock) => _openOrderSheet(stock, OrderType.buy),
             onSell: (stock) => _openOrderSheet(stock, OrderType.sell),
@@ -411,14 +375,7 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
               ),
             ),
             onRemove: (stock) {
-              setState(() {
-                _watchlists[i] = _watchlists[i].copyWith(
-                  symbols: _watchlists[i].symbols
-                      .where((s) => s != stock.symbol)
-                      .toList(),
-                );
-              });
-              _saveWatchlists();
+              _store!.removeSymbolFromWatchlist(_watchlists[i].id, stock.symbol);
             },
           );
         }),
@@ -441,25 +398,17 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 
   // ─── Add stock bottom sheet ───────────────────────────────────────────────
 
-  void _showAddStockSheet(BuildContext context, List<Stock> allStocks) {
+  void _showAddStockSheet(BuildContext context, TradingStore store) {
     final currentTabIndex = _tabController.index;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _AddStockSheet(
-        allStocks: allStocks,
+        store: store,
         currentSymbols: _watchlists[currentTabIndex].symbols,
         onAdd: (symbol) {
-          setState(() {
-            final current = _watchlists[currentTabIndex].symbols;
-            if (!current.contains(symbol)) {
-              // Prepend so the newly added stock shows at the top (manual sort).
-              _watchlists[currentTabIndex] = _watchlists[currentTabIndex]
-                  .copyWith(symbols: [symbol, ...current]);
-            }
-          });
-          _saveWatchlists();
+          _store!.addSymbolToWatchlist(_watchlists[currentTabIndex].id, symbol);
         },
       ),
     );
@@ -467,14 +416,19 @@ class _MarketWatchScreenState extends State<MarketWatchScreen>
 }
 
 // ─── Add Stock Bottom Sheet ───────────────────────────────────────────────────
+// Searches the SAME data source as Universal Search (lib/screens/universal_
+// search_screen.dart): the shared SearchIndex trie, backed by the backend
+// /search endpoint via BackendApiService.searchUniversal(). Remote results are
+// ingested into SearchIndex.instance so both screens benefit from each other's
+// searches for the rest of the session.
 
 class _AddStockSheet extends StatefulWidget {
-  final List<Stock> allStocks;
+  final TradingStore store;
   final List<String> currentSymbols;
   final void Function(String symbol) onAdd;
 
   const _AddStockSheet({
-    required this.allStocks,
+    required this.store,
     required this.currentSymbols,
     required this.onAdd,
   });
@@ -485,23 +439,73 @@ class _AddStockSheet extends StatefulWidget {
 
 class _AddStockSheetState extends State<_AddStockSheet> {
   final _controller = TextEditingController();
+  final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
   String _query = '';
+  List<Instrument> _localResults = [];
+  bool _remoteLoading = false;
+  Timer? _debounce;
+  int _reqGen = 0;
 
-  List<Stock> get _filtered {
-    if (_query.isEmpty) return widget.allStocks;
-    final q = _query.toLowerCase();
-    return widget.allStocks
-        .where(
-          (s) =>
-              s.symbol.toLowerCase().contains(q) ||
-              s.name.toLowerCase().contains(q),
-        )
-        .toList();
+  // Default view (empty query): stocks already known to the live price
+  // universe — same fallback this sheet always showed before.
+  List<Instrument> get _defaultResults => widget.store.knownStocks
+      .map((s) => Instrument(
+            symbol: s.symbol,
+            displayName: s.symbol,
+            name: s.name,
+            exchange: s.exchange,
+            segment: InstrumentSegment.eq,
+          ))
+      .toList();
+
+  List<Instrument> get _filtered => _query.isEmpty ? _defaultResults : _localResults;
+
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    final q = value.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _query = q;
+        _localResults = [];
+        _remoteLoading = false;
+      });
+      return;
+    }
+
+    // Instant local hit — same shared trie Universal Search uses.
+    final local = SearchIndex.instance.search(q, limit: 20);
+    setState(() {
+      _query = q;
+      _localResults = local;
+      _remoteLoading = q.length >= 2;
+    });
+
+    if (q.length < 2) return;
+    final gen = ++_reqGen;
+    _debounce = Timer(const Duration(milliseconds: 150), () => _fetchRemote(q, gen));
+  }
+
+  Future<void> _fetchRemote(String q, int gen) async {
+    if (!mounted || gen != _reqGen) return;
+    try {
+      final results = await _api.searchUniversal(q);
+      if (!mounted || gen != _reqGen) return;
+      // Ingest into the shared trie — next keystroke (here or in Universal
+      // Search) is served instantly, and both screens see the same catalog.
+      SearchIndex.instance.ingestRemoteResults(results);
+      setState(() {
+        _localResults = SearchIndex.instance.search(q, limit: 20);
+        _remoteLoading = false;
+      });
+    } catch (_) {
+      if (mounted && gen == _reqGen) setState(() => _remoteLoading = false);
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _debounce?.cancel();
     super.dispose();
   }
 
@@ -548,7 +552,7 @@ class _AddStockSheetState extends State<_AddStockSheet> {
               child: TextField(
                 controller: _controller,
                 autofocus: true,
-                onChanged: (v) => setState(() => _query = v),
+                onChanged: _onQueryChanged,
                 decoration: InputDecoration(
                   hintText: 'Search stocks, eg. INFY, RELIANCE',
                   hintStyle: const TextStyle(
@@ -565,7 +569,7 @@ class _AddStockSheetState extends State<_AddStockSheet> {
                           icon: const Icon(Icons.close, size: 16),
                           onPressed: () {
                             _controller.clear();
-                            setState(() => _query = '');
+                            _onQueryChanged('');
                           },
                         )
                       : null,
@@ -586,12 +590,14 @@ class _AddStockSheetState extends State<_AddStockSheet> {
             Expanded(
               child: _filtered.isEmpty
                   ? Center(
-                      child: Text(
-                        _query.isEmpty
-                            ? 'No stocks available'
-                            : 'No results for "$_query"',
-                        style: const TextStyle(color: Color(0xFF757575)),
-                      ),
+                      child: _remoteLoading
+                          ? const CircularProgressIndicator()
+                          : Text(
+                              _query.isEmpty
+                                  ? 'No stocks available'
+                                  : 'No results for "$_query"',
+                              style: const TextStyle(color: Color(0xFF757575)),
+                            ),
                     )
                   : ListView.builder(
                       controller: scrollController,

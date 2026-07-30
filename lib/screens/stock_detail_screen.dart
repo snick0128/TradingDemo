@@ -17,6 +17,7 @@ import '../services/subscription_manager.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
 
@@ -101,6 +102,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   String get _screenId => 'stock_detail_${widget.symbol}';
+  int? _subGen;
 
   @override
   void didChangeDependencies() {
@@ -111,7 +113,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     _store = store;
     _ltpNotifier = store.ltpNotifier(widget.symbol);
     _ltpNotifier!.addListener(_onLtpChanged);
-    SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
+    _subGen = SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
     _primeInstantState(store);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _startProgressiveHydration();
@@ -343,7 +345,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   void dispose() {
     _refreshTimer?.cancel();
     _tickDebounce?.cancel();
-    SubscriptionManager.instance.unsubscribeScreen(_screenId);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId, _subGen);
     _ltpNotifier?.removeListener(_onLtpChanged);
     _fadeCtrl.dispose();
     _settingsSub?.cancel();
@@ -798,8 +800,13 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     );
   }
 
-  PreferredSizeWidget _buildAppBar(BuildContext context, store, Stock stock) {
-    final inWatchlist = store.isInWatchlist(stock.symbol);
+  PreferredSizeWidget _buildAppBar(
+    BuildContext context,
+    TradingStore store,
+    Stock stock,
+  ) {
+    final inWatchlist =
+        store.watchlists.any((wl) => wl.symbols.contains(stock.symbol));
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
@@ -832,27 +839,43 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                 : const Color(0xFF0D0D0D),
             size: 24,
           ),
-          onPressed: () {
-            if (inWatchlist) {
-              store.removeFromWatchlist(stock.symbol);
-            } else {
-              store.addToWatchlist(stock.symbol);
-            }
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  inWatchlist
-                      ? '${stock.symbol} removed from watchlist'
-                      : '${stock.symbol} added to watchlist',
-                ),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          },
+          onPressed: () => _handleSaveTap(context, store, stock),
         ),
         const SizedBox(width: 4),
       ],
       shape: const Border(bottom: BorderSide(color: Color(0xFFF0F0F0))),
+    );
+  }
+
+  void _handleSaveTap(BuildContext context, TradingStore store, Stock stock) {
+    final watchlists = store.watchlists;
+    if (watchlists.length > 1) {
+      AppBottomSheet.show(
+        context,
+        title: 'Save to Watchlist',
+        child: _ChooseWatchlistSheet(store: store, stock: stock),
+      );
+      return;
+    }
+
+    // Zero or one watchlist — no choice to make, keep a single-tap toggle.
+    final wl = watchlists.isEmpty ? null : watchlists.first;
+    if (wl == null) return;
+    final inWatchlist = wl.symbols.contains(stock.symbol);
+    if (inWatchlist) {
+      store.removeSymbolFromWatchlist(wl.id, stock.symbol);
+    } else {
+      store.addSymbolToWatchlist(wl.id, stock.symbol);
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          inWatchlist
+              ? '${stock.symbol} removed from ${wl.name}'
+              : '${stock.symbol} added to ${wl.name}',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -2319,4 +2342,74 @@ class _CandlePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CandlePainter old) => old.color != color;
+}
+
+// ─── Choose Watchlist sheet ───────────────────────────────────────────────────
+// Shown from the save/bookmark button when the user has more than one
+// watchlist, so they can pick which one(s) to save the stock into.
+
+class _ChooseWatchlistSheet extends StatefulWidget {
+  final TradingStore store;
+  final Stock stock;
+
+  const _ChooseWatchlistSheet({required this.store, required this.stock});
+
+  @override
+  State<_ChooseWatchlistSheet> createState() => _ChooseWatchlistSheetState();
+}
+
+class _ChooseWatchlistSheetState extends State<_ChooseWatchlistSheet> {
+  @override
+  Widget build(BuildContext context) {
+    final watchlists = widget.store.watchlists;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final wl in watchlists)
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(wl.name),
+            subtitle: Text(
+              '${wl.symbols.length} stock${wl.symbols.length == 1 ? '' : 's'}',
+            ),
+            value: wl.symbols.contains(widget.stock.symbol),
+            onChanged: (checked) {
+              setState(() {
+                if (checked == true) {
+                  widget.store.addSymbolToWatchlist(wl.id, widget.stock.symbol);
+                } else {
+                  widget.store.removeSymbolFromWatchlist(wl.id, widget.stock.symbol);
+                }
+              });
+            },
+          ),
+        const SizedBox(height: 4),
+        TextButton.icon(
+          onPressed: _createAndAdd,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('New watchlist'),
+        ),
+      ],
+    );
+  }
+
+  void _createAndAdd() {
+    if (widget.store.watchlists.length >= Watchlist.maxWatchlists) {
+      AppToast.warning(context, 'Maximum ${Watchlist.maxWatchlists} watchlists allowed.');
+      return;
+    }
+    AppDialog.input(
+      context,
+      title: 'New Watchlist',
+      hint: 'Watchlist name',
+      confirmLabel: 'Create',
+      onSubmit: (name) {
+        widget.store.createWatchlist(name);
+        final created = widget.store.watchlists.last;
+        widget.store.addSymbolToWatchlist(created.id, widget.stock.symbol);
+        setState(() {});
+      },
+    );
+  }
 }

@@ -30,6 +30,7 @@ import 'universal_search_screen.dart';
 import 'market_watch_screen.dart';
 import 'portfolio_screen.dart';
 import 'stock_detail_screen.dart';
+import 'wallet_screen.dart';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const _kProfit = Color(0xFF00C853);
@@ -1304,7 +1305,7 @@ class _QuickActionsRow extends StatelessWidget {
     final actions = [
       (LucideIcons.barChart2,      'Markets',   AppColors.primary),
       (LucideIcons.activity,       'F&O',       const Color(0xFF00897B)),
-      (LucideIcons.briefcase,      'IPO',       const Color(0xFF6A1B9A)),
+      (LucideIcons.wallet,         'Wallet',    const Color(0xFF2E7D32)),
       (LucideIcons.moreHorizontal, 'More',      AppColors.textSecondary),
     ];
 
@@ -1314,9 +1315,9 @@ class _QuickActionsRow extends StatelessWidget {
         return _QuickActionButton(
           icon: a.$1, label: a.$2, color: a.$3,
           onTap: () {
-            if (a.$2 == 'Markets')  Navigator.push(context, MaterialPageRoute(builder: (_) => const MarketWatchScreen()));
-            else if (a.$2 == 'F&O') Navigator.push(context, MaterialPageRoute(builder: (_) => const FnoMarketScreen()));
-            else if (a.$2 == 'IPO')  Navigator.push(context, MaterialPageRoute(builder: (_) => const IPOScreen()));
+            if (a.$2 == 'Markets')     Navigator.push(context, MaterialPageRoute(builder: (_) => const MarketWatchScreen()));
+            else if (a.$2 == 'F&O')    Navigator.push(context, MaterialPageRoute(builder: (_) => const FnoMarketScreen()));
+            else if (a.$2 == 'Wallet') Navigator.push(context, MaterialPageRoute(builder: (_) => const WalletScreen()));
             else _showMoreActions(context);
           },
         );
@@ -1341,6 +1342,7 @@ class _QuickActionsRow extends StatelessWidget {
             _sheetItem(ctx, 'F&O Dashboard',       const FnoDashboardScreen(),                    icon: LucideIcons.barChart2),
             _sheetItem(ctx, 'Market Depth',        const MarketDepthScreen(),                     icon: Icons.layers),
             _sheetItem(ctx, 'Time & Sales',        const TimeAndSalesScreen(),                    icon: LucideIcons.clock3),
+            _sheetItem(ctx, 'IPO',                 const IPOScreen(),                              icon: LucideIcons.briefcase),
             _sheetItem(ctx, 'Universal Search',    const UniversalSearchScreen(),                 icon: LucideIcons.search),
             _sheetItem(ctx, 'Stock Guide',         const StockGuideScreen(),                      icon: LucideIcons.bookOpen),
           ],

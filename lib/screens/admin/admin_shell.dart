@@ -21,6 +21,7 @@ import 'admin_change_password_screen.dart';
 import 'audit_log_screen.dart';
 import 'broadcast_notifications_screen.dart';
 import 'pending_withdrawals_screen.dart';
+import 'admin_deposit_requests_screen.dart';
 import 'stock_control_screen.dart';
 import 'force_close_positions_screen.dart';
 import 'risk_control_screen.dart';
@@ -51,6 +52,7 @@ const _kSecondary = <_Dest>[
   (LucideIcons.fileSearch,       'Audit Log'),
   (LucideIcons.megaphone,        'Broadcast'),
   (LucideIcons.barChart,         'Stock Control'),
+  (LucideIcons.arrowDownCircle,  'Deposits'),
   (LucideIcons.wallet,           'Withdrawals'),
   (LucideIcons.xCircle,          'Force Close'),
   (LucideIcons.sliders,          'Risk Limits'),
@@ -58,7 +60,7 @@ const _kSecondary = <_Dest>[
 ];
 
 // ── All screens ────────────────────────────────────────────────────────────────
-// Indices 0-5 = primary; 6-17 = secondary
+// Indices 0-5 = primary; 6-18 = secondary
 const _kAllScreens = [
   AdminDashboardScreen(),
   AdminOrdersScreen(),
@@ -74,6 +76,7 @@ const _kAllScreens = [
   AuditLogScreen(),
   BroadcastNotificationsScreen(),
   StockControlScreen(),
+  AdminDepositRequestsScreen(),
   PendingWithdrawalsScreen(),
   ForceClosePositionsScreen(),
   RiskControlScreen(),

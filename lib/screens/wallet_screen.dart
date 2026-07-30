@@ -1,46 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
-import '../theme.dart';
-import 'add_funds_screen.dart';
 import 'brokerage_calculator_screen.dart';
 import 'brokerage_statement_screen.dart';
 import 'funds_screen.dart';
 import 'ipo_history_screen.dart';
 import 'wallet_ledger_screen.dart';
-import 'withdraw_funds_screen.dart';
 
-/// Wallet screen — tabs: Overview · Add Funds · Withdraw · Wallet History · IPO History · Statement · Calculator
-class WalletScreen extends StatefulWidget {
+/// Wallet screen — a single Overview (balance, Add Funds / Withdraw CTAs,
+/// recent activity), with wallet History as a dedicated top-right action.
+/// IPO History / Statement / Calculator live in the overflow menu since
+/// they're used far less often than History.
+class WalletScreen extends StatelessWidget {
   const WalletScreen({super.key});
 
-  @override
-  State<WalletScreen> createState() => _WalletScreenState();
-}
-
-class _WalletScreenState extends State<WalletScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-
-  static const _tabs = [
-    Tab(text: 'Overview'),
-    Tab(text: 'Add Funds'),
-    Tab(text: 'Withdraw'),
-    Tab(text: 'History'),
-    Tab(text: 'IPO History'),
-    Tab(text: 'Statement'),
-    Tab(text: 'Calculator'),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: _tabs.length, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
+  void _open(BuildContext context, Widget screen) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   @override
@@ -48,30 +23,33 @@ class _WalletScreenState extends State<WalletScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Funds'),
-        bottom: TabBar(
-          controller:               _tabController,
-          isScrollable:             true,
-          labelColor:               AppColors.primary,
-          unselectedLabelColor:     AppColors.textSecondary,
-          indicatorColor:           AppColors.primary,
-          indicatorWeight:          2,
-          labelStyle:               const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          unselectedLabelStyle:     const TextStyle(fontSize: 13),
-          tabs:                     _tabs,
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: const [
-          FundsScreen(showAppBar: false),
-          AddFundsScreen(showAppBar: false),
-          WithdrawFundsScreen(showAppBar: false),
-          WalletLedgerScreen(showAppBar: false),
-          IpoHistoryScreen(showAppBar: false),
-          BrokerageStatementScreen(showAppBar: false),
-          BrokerageCalculatorScreen(showAppBar: false),
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.history),
+            tooltip: 'Wallet History',
+            onPressed: () => _open(context, const WalletLedgerScreen()),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'ipo':
+                  _open(context, const IpoHistoryScreen());
+                case 'statement':
+                  _open(context, const BrokerageStatementScreen());
+                case 'calculator':
+                  _open(context, const BrokerageCalculatorScreen());
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'ipo', child: Text('IPO History')),
+              PopupMenuItem(value: 'statement', child: Text('Brokerage Statement')),
+              PopupMenuItem(value: 'calculator', child: Text('Brokerage Calculator')),
+            ],
+          ),
         ],
       ),
+      body: const FundsScreen(showAppBar: false),
     );
   }
 }

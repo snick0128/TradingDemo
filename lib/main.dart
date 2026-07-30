@@ -719,9 +719,11 @@ class _BoxTradingAppState extends State<BoxTradingApp>
       final results = await Future.wait([
         api.getRmsSettings(),
         api.getSupportConfig(),
+        api.getPaymentConfig(),
       ]);
       _tradingStore.updateRmsSettings(PlatformRmsSettings.fromMap(results[0]));
       _tradingStore.updateSupportConfig(SupportConfig.fromMap(results[1]));
+      _tradingStore.updatePaymentConfig(PaymentConfig.fromMap(results[2]));
     } catch (_) {
       // Non-fatal — defaults remain in effect
     }

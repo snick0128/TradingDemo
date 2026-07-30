@@ -34,6 +34,11 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
   final _msgTplCtrl    = TextEditingController();
   bool _supportEnabled = true;
 
+  // Payment (deposit UPI) fields
+  final _upiIdCtrl        = TextEditingController();
+  final _merchantNameCtrl = TextEditingController();
+  bool _paymentEnabled    = false;
+
   @override
   void initState() {
     super.initState();
@@ -48,6 +53,8 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
     _phoneCtrl.dispose();
     _emailCtrl.dispose();
     _msgTplCtrl.dispose();
+    _upiIdCtrl.dispose();
+    _merchantNameCtrl.dispose();
     super.dispose();
   }
 
@@ -57,10 +64,12 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
       final results = await Future.wait([
         _api.getRmsSettings(),
         _api.getSupportConfig(),
+        _api.getPaymentConfig(),
       ]);
 
-      final rms  = PlatformRmsSettings.fromMap(results[0]);
-      final supp = SupportConfig.fromMap(results[1]);
+      final rms     = PlatformRmsSettings.fromMap(results[0]);
+      final supp    = SupportConfig.fromMap(results[1]);
+      final payment = PaymentConfig.fromMap(results[2]);
 
       _rmsThresholdCtrl.text = rms.rmsLossThresholdPercent.toStringAsFixed(0);
       _slippageCtrl.text     = rms.slippagePercent.toStringAsFixed(2);
@@ -72,6 +81,10 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
       _emailCtrl.text    = supp.email;
       _msgTplCtrl.text   = supp.messageTemplate;
       _supportEnabled    = supp.enabled;
+
+      _upiIdCtrl.text        = payment.upiId;
+      _merchantNameCtrl.text = payment.merchantName;
+      _paymentEnabled        = payment.enabled;
 
       setState(() => _loading = false);
     } catch (e) {
@@ -118,6 +131,30 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Support config saved.'), backgroundColor: AppColors.success),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: AppColors.danger),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _savePayment() async {
+    setState(() => _saving = true);
+    try {
+      await _api.updatePaymentConfig({
+        'paymentUpiId':        _upiIdCtrl.text.trim(),
+        'paymentMerchantName': _merchantNameCtrl.text.trim(),
+        'paymentEnabled':      _paymentEnabled,
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payment config saved.'), backgroundColor: AppColors.success),
         );
       }
     } catch (e) {
@@ -275,6 +312,61 @@ class _PlatformSettingsScreenState extends State<PlatformSettingsScreen> {
                       onPressed: _saving ? null : _saveSupport,
                       icon: const Icon(LucideIcons.save, size: 16),
                       label: const Text('Save Support Config'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // ── Payment / UPI Config ────────────────────────────────────────
+            Text('Payment / UPI Settings', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            CustomCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'The UPI ID and merchant name shown on the deposit payment screen '
+                    '(QR code + payment app links). Deposits stay hidden from users until enabled.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _upiIdCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'UPI ID (VPA)',
+                      hintText: 'yourbusiness@okaxis',
+                      prefixIcon: Icon(LucideIcons.indianRupee, size: 18),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _merchantNameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Merchant Display Name',
+                      hintText: 'TradeKosh',
+                      prefixIcon: Icon(LucideIcons.store, size: 18),
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Enable Deposits (Add Funds) for Users', style: TextStyle(fontSize: 13)),
+                    subtitle: const Text(
+                      'Turn on once the UPI ID above is verified correct.',
+                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                    value: _paymentEnabled,
+                    onChanged: (v) => setState(() => _paymentEnabled = v),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _saving ? null : _savePayment,
+                      icon: const Icon(LucideIcons.save, size: 16),
+                      label: const Text('Save Payment Config'),
                     ),
                   ),
                 ],

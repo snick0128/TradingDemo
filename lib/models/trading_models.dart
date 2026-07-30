@@ -1504,3 +1504,78 @@ class WithdrawalRequest {
     );
   }
 }
+
+// ─── Deposit Request ──────────────────────────────────────────────────────────
+
+class DepositRequest {
+  final String id;
+  final String userId;
+  final String userName;
+  final String email;
+  final String phone;
+  final double amount;
+  final String paymentMethod; // gpay | phonepe | paytm | upi | bank_transfer
+  final String referenceCode; // system-generated, embedded in the UPI note
+  final String device;
+  final String platform;
+  final String appVersion;
+  final String status; // PENDING | APPROVED | REJECTED
+  final DateTime createdAt;
+  final String? approvedBy;
+  final DateTime? approvedAt;
+  final String? rejectedBy;
+  final DateTime? rejectedAt;
+  final String? rejectionReason;
+
+  const DepositRequest({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.email,
+    required this.phone,
+    required this.amount,
+    required this.paymentMethod,
+    required this.referenceCode,
+    required this.device,
+    required this.platform,
+    required this.appVersion,
+    required this.status,
+    required this.createdAt,
+    this.approvedBy,
+    this.approvedAt,
+    this.rejectedBy,
+    this.rejectedAt,
+    this.rejectionReason,
+  });
+
+  factory DepositRequest.fromFirestore(String id, Map<String, dynamic> d) {
+    DateTime parseTs(dynamic ts) {
+      if (ts == null) return DateTime.now();
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return DateTime.now(); }
+    }
+    DateTime? parseTsOpt(dynamic ts) {
+      if (ts == null) return null;
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return null; }
+    }
+    return DepositRequest(
+      id:              id,
+      userId:          (d['userId']          as String?) ?? '',
+      userName:        (d['userName']        as String?) ?? '',
+      email:           (d['email']           as String?) ?? '',
+      phone:           (d['phone']           as String?) ?? '',
+      amount:          ((d['amount']         as num?) ?? 0).toDouble(),
+      paymentMethod:   (d['paymentMethod']   as String?) ?? '',
+      referenceCode:   (d['referenceCode']   as String?) ?? '',
+      device:          (d['device']          as String?) ?? '',
+      platform:        (d['platform']        as String?) ?? '',
+      appVersion:      (d['appVersion']      as String?) ?? '',
+      status:          (d['status']          as String?) ?? 'PENDING',
+      createdAt:       parseTs(d['createdAt']),
+      approvedBy:      d['approvedBy']       as String?,
+      approvedAt:      parseTsOpt(d['approvedAt']),
+      rejectedBy:      d['rejectedBy']       as String?,
+      rejectedAt:      parseTsOpt(d['rejectedAt']),
+      rejectionReason: d['rejectionReason']  as String?,
+    );
+  }
+}

@@ -1,14 +1,26 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
-import 'package:lucide_icons/lucide_icons.dart';
 
+import '../app/app_scope.dart';
 import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../theme.dart';
+import '../widgets/wallet_fund_widgets.dart';
 import 'add_funds_screen.dart';
+import 'deposit_history_screen.dart';
 import 'withdraw_funds_screen.dart';
+import 'withdrawal_history_screen.dart';
+
+const _kMethodLabels = {
+  'gpay': 'Google Pay',
+  'phonepe': 'PhonePe',
+  'paytm': 'Paytm',
+  'upi': 'UPI',
+  'bank_transfer': 'Bank Transfer',
+};
 
 // ── Indian currency formatter ─────────────────────────────────────────────────
 String _fmt(double v) {
@@ -122,6 +134,28 @@ class _FundsScreenState extends State<FundsScreen>
               runningPnl:  runningPnl,
               realizedPnl: realizedPnl,
             ),
+            const SizedBox(height: 24),
+            _RequestsSection(
+              collection: 'deposit_requests',
+              pendingTitle: 'Pending Deposits',
+              recentTitle: 'Recent Deposits',
+              isCredit: true,
+              historyScreen: const DepositHistoryScreen(),
+              subtitleBuilder: (d) => _kMethodLabels[d['paymentMethod'] as String? ?? ''] ??
+                  (d['paymentMethod'] as String? ?? 'UPI'),
+            ),
+            const SizedBox(height: 20),
+            _RequestsSection(
+              collection: 'withdrawal_requests',
+              pendingTitle: 'Pending Withdrawals',
+              recentTitle: 'Recent Withdrawals',
+              isCredit: false,
+              historyScreen: const WithdrawalHistoryScreen(),
+              subtitleBuilder: (d) {
+                final upi = d['upiId'] as String? ?? '';
+                return upi.isNotEmpty ? 'UPI: $upi' : (d['bankAccount'] as String? ?? '');
+              },
+            ),
             const SizedBox(height: 80),
           ],
         ),
@@ -184,7 +218,6 @@ class _HeroCard extends StatelessWidget {
         children: [
           // ── Primary: Equity ────────────────────────────────────────────
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Column(
@@ -215,26 +248,51 @@ class _HeroCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _ActionButton(
-                    label: 'Add Funds',
-                    onTap: () => Navigator.push(
+            ],
+          ),
+          const SizedBox(height: 18),
+
+          // ── Primary CTA row: large Add Funds + Withdraw ────────────────
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const AddFundsScreen()),
                     ),
+                    icon: const Icon(Icons.add_circle, size: 18),
+                    label: Text('Add Funds', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 14)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: const Color(0xFF0D2B6B),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  _ActionButton(
-                    label: 'Withdraw',
-                    onTap: () => Navigator.push(
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: SizedBox(
+                  height: 46,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const WithdrawFundsScreen()),
                     ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white, width: 1.2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('Withdraw', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
-                ],
+                ),
               ),
             ],
           ),
@@ -365,39 +423,6 @@ class _HeroMetric extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-
-  const _ActionButton({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white, width: 1),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: Colors.white,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -680,6 +705,117 @@ class _PnlCell extends StatelessWidget {
           style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF9E9E9E)),
         ),
       ],
+    );
+  }
+}
+
+// ── Pending / Recent requests section (shared by deposits & withdrawals) ──────
+
+class _RequestsSection extends StatelessWidget {
+  final String collection;
+  final String pendingTitle;
+  final String recentTitle;
+  final bool isCredit;
+  final Widget historyScreen;
+  final String Function(Map<String, dynamic> data) subtitleBuilder;
+
+  const _RequestsSection({
+    required this.collection,
+    required this.pendingTitle,
+    required this.recentTitle,
+    required this.isCredit,
+    required this.historyScreen,
+    required this.subtitleBuilder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = AppScope.of(context).notifier?.user?.uid ?? '';
+    if (uid.isEmpty) return const SizedBox.shrink();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection(collection)
+          .where('userId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        final pending = docs.where((d) => (d.data()['status'] as String? ?? '') == 'PENDING').toList();
+        final recent  = docs.where((d) => (d.data()['status'] as String? ?? '') != 'PENDING').take(3).toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (pending.isNotEmpty) ...[
+              _SectionHeader(title: pendingTitle),
+              const SizedBox(height: 10),
+              ...pending.map((d) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _cardFor(d),
+                  )),
+              const SizedBox(height: 14),
+            ],
+            if (recent.isNotEmpty) ...[
+              _SectionHeader(
+                title: recentTitle,
+                onViewAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => historyScreen)),
+              ),
+              const SizedBox(height: 10),
+              ...recent.map((d) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _cardFor(d),
+                  )),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _cardFor(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final d      = doc.data();
+    final amount = ((d['amount'] as num?) ?? 0).toDouble();
+    final status = (d['status'] as String?) ?? 'PENDING';
+    final ts     = d['createdAt'];
+    final date   = ts is Timestamp ? ts.toDate() : DateTime.now();
+
+    return WalletHistoryCard(
+      amount: amount,
+      status: status,
+      date: date,
+      subtitle: subtitleBuilder(d),
+      rejectionReason: d['rejectionReason'] as String?,
+      isCredit: isCredit,
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final VoidCallback? onViewAll;
+
+  const _SectionHeader({required this.title, this.onViewAll});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: const Color(0xFF0D0D0D))),
+          if (onViewAll != null)
+            InkWell(
+              onTap: onViewAll,
+              child: Text('View All',
+                  style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.primary)),
+            ),
+        ],
+      ),
     );
   }
 }

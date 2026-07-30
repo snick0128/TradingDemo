@@ -89,6 +89,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   }
 
   String get _screenId => 'advanced_chart_${widget.symbol}';
+  int? _subGen;
 
   @override
   void didChangeDependencies() {
@@ -101,7 +102,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
     _advStore?.removeListener(_onAdvLiveTick);
     _advStore = store;
     store.addListener(_onAdvLiveTick);
-    SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
+    _subGen = SubscriptionManager.instance.subscribeForScreen(_screenId, {widget.symbol});
   }
 
   void _onAdvLiveTick() {
@@ -172,7 +173,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
   @override
   void dispose() {
     _advStore?.removeListener(_onAdvLiveTick);
-    SubscriptionManager.instance.unsubscribeScreen(_screenId);
+    SubscriptionManager.instance.unsubscribeScreen(_screenId, _subGen);
     _fadeCtrl.dispose();
     _compareController.dispose();
     super.dispose();

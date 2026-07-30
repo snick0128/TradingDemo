@@ -52,6 +52,40 @@ class SupportConfig {
   );
 }
 
+class PaymentConfig {
+  final String upiId;
+  final String merchantName;
+  final bool enabled;
+
+  const PaymentConfig({
+    this.upiId = '',
+    this.merchantName = 'TradeKosh',
+    this.enabled = false,
+  });
+
+  factory PaymentConfig.fromMap(Map<String, dynamic> m) => PaymentConfig(
+    upiId:        (m['paymentUpiId']        as String?) ?? '',
+    merchantName: (m['paymentMerchantName'] as String?) ?? 'TradeKosh',
+    enabled:      (m['paymentEnabled']      as bool?)   ?? false,
+  );
+
+  Map<String, dynamic> toMap() => {
+    'paymentUpiId':        upiId,
+    'paymentMerchantName': merchantName,
+    'paymentEnabled':      enabled,
+  };
+
+  PaymentConfig copyWith({
+    String? upiId,
+    String? merchantName,
+    bool? enabled,
+  }) => PaymentConfig(
+    upiId:        upiId        ?? this.upiId,
+    merchantName: merchantName ?? this.merchantName,
+    enabled:      enabled      ?? this.enabled,
+  );
+}
+
 class PlatformRmsSettings {
   final double intradayShortSellLeverage;
   final double maxShortSellMultiplier;

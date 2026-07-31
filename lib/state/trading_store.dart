@@ -76,22 +76,36 @@ class TradingStore extends ChangeNotifier {
   // Granular per-metric notifiers — widgets subscribe directly and bypass
   // notifyListeners() so only the subscribing widget rebuilds, not the tree.
   final Map<String, ValueNotifier<double>> _changeNotifiers = {};
-  final _runningPnlNotifier      = ValueNotifier<double>(0.0);
-  final _equityNotifier          = ValueNotifier<double>(0.0);
+  final _runningPnlNotifier = ValueNotifier<double>(0.0);
+  final _equityNotifier = ValueNotifier<double>(0.0);
   final _availableMarginNotifier = ValueNotifier<double>(0.0);
   final _marginShortfallNotifier = ValueNotifier<double>(0.0);
-  final _topMoversNotifier       = ValueNotifier<List<Stock>>(const []);
+  final _topMoversNotifier = ValueNotifier<List<Stock>>(const []);
+  // Portfolio totals for the dashboard hero — holdings AND open positions
+  // combined (matches what PortfolioScreen's own total already includes),
+  // live-tick reactive, same pattern as the position-based notifiers above.
+  // Invested value isn't included: avgPrice/quantity never change on a
+  // price tick, only on buy/sell (which already goes through notifyListeners()).
+  final _portfolioCurrentNotifier = ValueNotifier<double>(0.0);
+  final _portfolioTodaysPnlNotifier = ValueNotifier<double>(0.0);
+  final _portfolioOverallPnlNotifier = ValueNotifier<double>(0.0);
+  // Wallet Balance = balance + usedMargin (same figure/label as the Funds
+  // screen). Only changes on balance updates and position replace (margin
+  // blocked/released) — NOT on price ticks — so it's pushed from those call
+  // sites directly rather than piggybacking on the tick-driven notifiers.
+  final _walletBalanceNotifier = ValueNotifier<double>(0.0);
 
   // Targeted structural version counters — increment only when that data
   // category changes (never on price ticks). Screens subscribe to exactly
   // one and skip the structural-gate boilerplate entirely.
   final _positionsVersion = ValueNotifier<int>(0);
-  final _ordersVersion    = ValueNotifier<int>(0);
-  final _accountVersion   = ValueNotifier<int>(0);
+  final _ordersVersion = ValueNotifier<int>(0);
+  final _accountVersion = ValueNotifier<int>(0);
 
   // Render tracing: batch addPostFrameCallback so we schedule at most 1 per frame.
   bool _renderTracePending = false;
-  final List<({String symbol, double ltp, int storeExitTs})> _pendingRenderTrace = [];
+  final List<({String symbol, double ltp, int storeExitTs})>
+  _pendingRenderTrace = [];
 
   // Tick-to-frame latency ring buffer — last 512 measurements, reported every 30s.
   final List<int> _frameLatencies = [];
@@ -99,9 +113,10 @@ class TradingStore extends ChangeNotifier {
 
   /// Returns a [ValueNotifier<double>] for [symbol] that fires on every tick.
   /// Use with [ValueListenableBuilder] for instant, targeted price rebuilds.
-  ValueNotifier<double> ltpNotifier(String symbol) =>
-      _ltpNotifiers.putIfAbsent(
-          symbol, () => ValueNotifier(_lastLtpBySymbol[symbol] ?? 0.0));
+  ValueNotifier<double> ltpNotifier(String symbol) => _ltpNotifiers.putIfAbsent(
+    symbol,
+    () => ValueNotifier(_lastLtpBySymbol[symbol] ?? 0.0),
+  );
 
   /// Per-symbol change-% notifier, seeded from already-cached stock data.
   ValueNotifier<double> changeNotifier(String symbol) =>
@@ -110,14 +125,33 @@ class TradingStore extends ChangeNotifier {
         return ValueNotifier(existing?.changePercentage ?? 0.0);
       });
 
-  ValueNotifier<double>       get runningPnlNotifier      => _runningPnlNotifier;
-  ValueNotifier<double>       get equityNotifier          => _equityNotifier;
-  ValueNotifier<double>       get availableMarginNotifier => _availableMarginNotifier;
-  ValueNotifier<double>       get marginShortfallNotifier => _marginShortfallNotifier;
-  ValueNotifier<List<Stock>>  get topMoversNotifier       => _topMoversNotifier;
-  ValueNotifier<int>          get positionsVersion        => _positionsVersion;
-  ValueNotifier<int>          get ordersVersion           => _ordersVersion;
-  ValueNotifier<int>          get accountVersion          => _accountVersion;
+  ValueNotifier<double> get runningPnlNotifier => _runningPnlNotifier;
+  ValueNotifier<double> get equityNotifier => _equityNotifier;
+  ValueNotifier<double> get availableMarginNotifier => _availableMarginNotifier;
+  ValueNotifier<double> get marginShortfallNotifier => _marginShortfallNotifier;
+  ValueNotifier<List<Stock>> get topMoversNotifier => _topMoversNotifier;
+  ValueNotifier<double> get portfolioCurrentNotifier =>
+      _portfolioCurrentNotifier;
+  ValueNotifier<double> get portfolioTodaysPnlNotifier =>
+      _portfolioTodaysPnlNotifier;
+  ValueNotifier<double> get portfolioOverallPnlNotifier =>
+      _portfolioOverallPnlNotifier;
+  ValueNotifier<double> get walletBalanceNotifier => _walletBalanceNotifier;
+
+  void _pushWalletBalance() {
+    final wb = _balance + usedMargin;
+    if (_walletBalanceNotifier.value != wb) _walletBalanceNotifier.value = wb;
+  }
+
+  /// Sum of quantity × avgPrice across holdings AND open positions. Static
+  /// between buy/sell/order-fills — safe to read directly in build() since it
+  /// only changes via notifyListeners().
+  double get portfolioInvested =>
+      _holdings.fold<double>(0.0, (s, h) => s + h.investedValue) +
+      _positions.fold<double>(0.0, (s, p) => s + p.investedValue);
+  ValueNotifier<int> get positionsVersion => _positionsVersion;
+  ValueNotifier<int> get ordersVersion => _ordersVersion;
+  ValueNotifier<int> get accountVersion => _accountVersion;
 
   // ── Live backend wiring ────────────────────────────────────────────────────
   LiveMarketService? _liveMarketService;
@@ -127,7 +161,7 @@ class TradingStore extends ChangeNotifier {
 
   // Pre-computed top movers from the movers stream (updated every ~5 s, not every tick).
   List<Stock> _topGainers = [];
-  List<Stock> _topLosers  = [];
+  List<Stock> _topLosers = [];
   bool _usingLiveBackend = false;
   bool get usingLiveBackend => _usingLiveBackend;
   LiveMarketService? get liveMarketService => _liveMarketService;
@@ -157,8 +191,10 @@ class TradingStore extends ChangeNotifier {
     _marketDataService.dispose();
 
     _liveStockSub = _liveMarketService!.stockUpdates.listen(_onLiveStockUpdate);
-    _wsNotifSub   = _liveMarketService!.notificationStream.listen(_onWsNotification);
-    _moversSub    = _liveMarketService!.moversUpdates.listen(_onMoversUpdate);
+    _wsNotifSub = _liveMarketService!.notificationStream.listen(
+      _onWsNotification,
+    );
+    _moversSub = _liveMarketService!.moversUpdates.listen(_onMoversUpdate);
     unawaited(_liveMarketService!.start());
     _refreshMarketSubscriptions();
     _usingLiveBackend = true;
@@ -183,10 +219,11 @@ class TradingStore extends ChangeNotifier {
   }
 
   void _onWsNotification(Map<String, dynamic> raw) {
-    final id        = raw['id']        as String? ?? '${DateTime.now().millisecondsSinceEpoch}';
-    final title     = raw['title']     as String? ?? '';
-    final body      = raw['body']      as String? ?? '';
-    final typeStr   = raw['type']      as String? ?? '';
+    final id =
+        raw['id'] as String? ?? '${DateTime.now().millisecondsSinceEpoch}';
+    final title = raw['title'] as String? ?? '';
+    final body = raw['body'] as String? ?? '';
+    final typeStr = raw['type'] as String? ?? '';
     final createdAt = raw['createdAt'] as int?;
     final ts = createdAt != null
         ? DateTime.fromMillisecondsSinceEpoch(createdAt)
@@ -194,11 +231,11 @@ class TradingStore extends ChangeNotifier {
 
     final alertType = _alertTypeFromNotifType(typeStr);
     final notif = AppNotification(
-      id:               id,
-      title:            title,
-      message:          body,
-      timestamp:        ts,
-      isRead:           false,
+      id: id,
+      title: title,
+      message: body,
+      timestamp: ts,
+      isRead: false,
       relatedAlertType: alertType,
     );
     addNotification(notif);
@@ -206,13 +243,20 @@ class TradingStore extends ChangeNotifier {
 
   AlertType? _alertTypeFromNotifType(String type) {
     switch (type) {
-      case 'order_executed':      return AlertType.orderExecution;
-      case 'order_rejected':      return AlertType.orderRejection;
-      case 'margin_warning':      return AlertType.marginWarning;
-      case 'rms_alert':           return AlertType.marginWarning;
-      case 'rms_auto_squareoff':  return AlertType.autoSquareOffWarning;
-      case 'squareoff_warning':   return AlertType.autoSquareOffWarning;
-      default:                    return AlertType.news;
+      case 'order_executed':
+        return AlertType.orderExecution;
+      case 'order_rejected':
+        return AlertType.orderRejection;
+      case 'margin_warning':
+        return AlertType.marginWarning;
+      case 'rms_alert':
+        return AlertType.marginWarning;
+      case 'rms_auto_squareoff':
+        return AlertType.autoSquareOffWarning;
+      case 'squareoff_warning':
+        return AlertType.autoSquareOffWarning;
+      default:
+        return AlertType.news;
     }
   }
 
@@ -251,6 +295,7 @@ class TradingStore extends ChangeNotifier {
   void _onLiveStockUpdate(List<Stock> stocks) {
     if (stocks.isEmpty) return;
     bool anyPriceChanged = false;
+    bool anyPortfolioItemChanged = false;
 
     // Clear error state — backend is responding
     if (_backendError) {
@@ -315,25 +360,34 @@ class TradingStore extends ChangeNotifier {
         for (final i in posIndices) {
           _positions[i] = _positions[i].copyWith(currentPrice: newLtp);
         }
+        anyPortfolioItemChanged = true;
       }
 
       // Update holdings with new price (O(1) via index map).
       // Holdings don't carry exchange, so symbol-only key is used here.
       final holdingIdx = _holdingIndex[stock.symbol];
       if (holdingIdx != null) {
-        _holdings[holdingIdx] = _holdings[holdingIdx].copyWith(currentPrice: newLtp);
+        _holdings[holdingIdx] = _holdings[holdingIdx].copyWith(
+          currentPrice: newLtp,
+        );
+        anyPortfolioItemChanged = true;
       }
 
       // Latency audit: record store-side timestamps for traced symbols.
       if (newLtp > 0 && (_liveMarketService?.isTraced(stock.symbol) ?? false)) {
         final storeExitTs = DateTime.now().millisecondsSinceEpoch;
         _liveMarketService!.patchLastStoreTrace(
-          stock.symbol, newLtp,
-          storeEntryTs:  storeEntryTs,
+          stock.symbol,
+          newLtp,
+          storeEntryTs: storeEntryTs,
           ltpNotifierTs: ltpNotifierTs,
-          storeExitTs:   storeExitTs,
+          storeExitTs: storeExitTs,
         );
-        _pendingRenderTrace.add((symbol: stock.symbol, ltp: newLtp, storeExitTs: storeExitTs));
+        _pendingRenderTrace.add((
+          symbol: stock.symbol,
+          ltp: newLtp,
+          storeExitTs: storeExitTs,
+        ));
       }
     }
 
@@ -341,16 +395,23 @@ class TradingStore extends ChangeNotifier {
     // widgets update without waiting for the full notifyListeners() rebuild.
     // Compute once to avoid the runningPnL fold() running 4 times per tick.
     if (anyPriceChanged) {
-      final newPnL = _positions.fold<double>(0.0, (s, p) => s + p.unrealizedPnl);
+      final newPnL = _positions.fold<double>(
+        0.0,
+        (s, p) => s + p.unrealizedPnl,
+      );
       final um = usedMargin; // single fold over positions for margin
       final newEquity = _balance + um + newPnL;
       final newAvailableMargin = (newEquity - um).clamp(0.0, double.infinity);
       final newMarginShortfall = (um - newEquity).clamp(0.0, double.infinity);
-      if (_runningPnlNotifier.value != newPnL) _runningPnlNotifier.value = newPnL;
+      if (_runningPnlNotifier.value != newPnL)
+        _runningPnlNotifier.value = newPnL;
       if (_equityNotifier.value != newEquity) _equityNotifier.value = newEquity;
-      if (_availableMarginNotifier.value != newAvailableMargin) _availableMarginNotifier.value = newAvailableMargin;
-      if (_marginShortfallNotifier.value != newMarginShortfall) _marginShortfallNotifier.value = newMarginShortfall;
+      if (_availableMarginNotifier.value != newAvailableMargin)
+        _availableMarginNotifier.value = newAvailableMargin;
+      if (_marginShortfallNotifier.value != newMarginShortfall)
+        _marginShortfallNotifier.value = newMarginShortfall;
     }
+    if (anyPortfolioItemChanged) _recomputePortfolioTotals();
 
     if (!anyPriceChanged) return;
 
@@ -368,7 +429,11 @@ class TradingStore extends ChangeNotifier {
         if (_pendingRenderTrace.isNotEmpty) {
           for (final entry in _pendingRenderTrace) {
             _liveMarketService?.recordRenderCompletion(
-                entry.symbol, entry.ltp, renderTs, entry.storeExitTs);
+              entry.symbol,
+              entry.ltp,
+              renderTs,
+              entry.storeExitTs,
+            );
           }
           _pendingRenderTrace.clear();
         }
@@ -392,7 +457,7 @@ class TradingStore extends ChangeNotifier {
 
   void _onMoversUpdate(Map<String, List<Stock>> data) {
     _topGainers = data['gainers'] ?? [];
-    _topLosers  = data['losers']  ?? [];
+    _topLosers = data['losers'] ?? [];
     _topMoversNotifier.value = topMovers.toList();
     // topMoversNotifier VLB drives _TopMoversGrid — no global notify needed.
   }
@@ -401,13 +466,17 @@ class TradingStore extends ChangeNotifier {
     final dashboardSymbols = <String>{
       'NIFTY',
       'BANKNIFTY',
+      'SENSEX',
       ..._watchlist.map((s) => s.symbol),
       ..._positions.map((p) => p.symbol),
       ..._holdings.map((h) => h.symbol),
     };
     if (!setEquals(_lastDashboardSymbols, dashboardSymbols)) {
       _lastDashboardSymbols = Set.unmodifiable(dashboardSymbols);
-      SubscriptionManager.instance.replaceScreenSubscriptions('dashboard', dashboardSymbols);
+      SubscriptionManager.instance.replaceScreenSubscriptions(
+        'dashboard',
+        dashboardSymbols,
+      );
     }
 
     final portfolioSymbols = <String>{
@@ -416,7 +485,10 @@ class TradingStore extends ChangeNotifier {
     };
     if (!setEquals(_lastPortfolioSymbols, portfolioSymbols)) {
       _lastPortfolioSymbols = Set.unmodifiable(portfolioSymbols);
-      SubscriptionManager.instance.replaceScreenSubscriptions('portfolio', portfolioSymbols);
+      SubscriptionManager.instance.replaceScreenSubscriptions(
+        'portfolio',
+        portfolioSymbols,
+      );
     }
   }
 
@@ -468,9 +540,10 @@ class TradingStore extends ChangeNotifier {
   // _positionTokenIndex: token           → indices  (populated only when position.token != '')
   // Lookup uses token first (globally unique per contract) then falls back
   // to exchange:symbol, so positions without a stored token still receive updates.
-  final Map<String, List<int>> _positionIndex      = {};
+  final Map<String, List<int>> _positionIndex = {};
   final Map<String, List<int>> _positionTokenIndex = {};
-  final Map<String, int> _holdingIndex = {}; // symbol → index (unique per symbol)
+  final Map<String, int> _holdingIndex =
+      {}; // symbol → index (unique per symbol)
   // symbol → index in _watchlist — O(1) replacement for indexWhere in the tick path.
   // Maintained incrementally on add; fully rebuilt on removal (non-hot-path).
   final Map<String, int> _watchlistIndex = {};
@@ -481,7 +554,7 @@ class TradingStore extends ChangeNotifier {
   Set<String>? _lastPortfolioSymbols;
 
   // ── Watchlist index diagnostics (lifetime counters) ───────────────────────
-  int _diagWatchlistIndexHits   = 0;
+  int _diagWatchlistIndexHits = 0;
   int _diagWatchlistIndexMisses = 0;
   User _currentUser;
 
@@ -556,6 +629,10 @@ class TradingStore extends ChangeNotifier {
     _availableMarginNotifier.dispose();
     _marginShortfallNotifier.dispose();
     _topMoversNotifier.dispose();
+    _portfolioCurrentNotifier.dispose();
+    _portfolioTodaysPnlNotifier.dispose();
+    _portfolioOverallPnlNotifier.dispose();
+    _walletBalanceNotifier.dispose();
     _positionsVersion.dispose();
     _ordersVersion.dispose();
     _accountVersion.dispose();
@@ -573,8 +650,8 @@ class TradingStore extends ChangeNotifier {
   List<Stock> get topMovers => [..._topGainers, ..._topLosers];
 
   Map<String, dynamic> get watchlistDiagnostics => {
-    'watchlistSize':        _watchlist.length,
-    'watchlistIndexHits':   _diagWatchlistIndexHits,
+    'watchlistSize': _watchlist.length,
+    'watchlistIndexHits': _diagWatchlistIndexHits,
     'watchlistIndexMisses': _diagWatchlistIndexMisses,
   };
   UnmodifiableListView<Order> get orders => UnmodifiableListView(_orders);
@@ -598,6 +675,7 @@ class TradingStore extends ChangeNotifier {
   double get payOut => _transactions
       .where((tx) => !tx.isDeposit && tx.title.contains('Withdrawal'))
       .fold(0.0, (sum, tx) => sum + tx.amount);
+
   /// Used margin — single source of truth for live and offline paths.
   ///
   /// Live backend (Firebase): sum of `marginUsed` on every open MIS/NRML
@@ -609,18 +687,19 @@ class TradingStore extends ChangeNotifier {
     if (_usingLiveBackend) {
       // Derive from positions written by the backend — never from local state.
       return _positions
-          .where((p) =>
-              p.product == ProductType.mis ||
-              p.product == ProductType.nrml)
+          .where(
+            (p) =>
+                p.product == ProductType.mis || p.product == ProductType.nrml,
+          )
           .fold(0.0, (sum, p) => sum + p.marginUsed);
     }
     // Mock / offline path: use transaction log.
     return _transactions
-        .where((tx) => !tx.isDeposit && tx.title.contains('Margin blocked'))
-        .fold(0.0, (sum, tx) => sum + tx.amount) -
-    _transactions
-        .where((tx) => tx.isDeposit && tx.title.contains('Margin released'))
-        .fold(0.0, (sum, tx) => sum + tx.amount);
+            .where((tx) => !tx.isDeposit && tx.title.contains('Margin blocked'))
+            .fold(0.0, (sum, tx) => sum + tx.amount) -
+        _transactions
+            .where((tx) => tx.isDeposit && tx.title.contains('Margin released'))
+            .fold(0.0, (sum, tx) => sum + tx.amount);
   }
 
   double get totalInvestment =>
@@ -669,6 +748,54 @@ class TradingStore extends ChangeNotifier {
   double get runningPnL =>
       _positions.fold<double>(0.0, (s, p) => s + p.unrealizedPnl);
 
+  /// Recomputes portfolio current value, today's P&L and overall P&L across
+  /// holdings AND open positions (matches PortfolioScreen's own total, which
+  /// combines both) — pushes to the granular notifiers only when a value
+  /// actually changed.
+  ///
+  /// Overall P&L reuses each item's own side-aware `pnl`/`unrealizedPnl`
+  /// getter rather than `currentValue − investedValue`: holdings are always
+  /// long (only CNC-long routes to _holdings, see main.dart), but positions
+  /// can be short, where currentValue − investedValue would show the wrong
+  /// sign. Today's P&L applies the same side-aware day-over-day formula,
+  /// using each symbol's live prevClose; items without a resolvable
+  /// prevClose are skipped (not zero-filled) rather than distorting the total.
+  void _recomputePortfolioTotals() {
+    double current = 0.0;
+    double overallPnl = 0.0;
+    double todaysPnl = 0.0;
+
+    for (final h in _holdings) {
+      current += h.currentValue;
+      overallPnl += h.pnl;
+      final prevClose = _watchlistUniverse[h.symbol]?.prevClose;
+      if (prevClose != null && prevClose > 0 && h.currentPrice > 0) {
+        todaysPnl += h.quantity * (h.currentPrice - prevClose);
+      }
+    }
+    for (final p in _positions) {
+      current += p.currentValue;
+      overallPnl += p.unrealizedPnl;
+      final prevClose = _watchlistUniverse[p.symbol]?.prevClose;
+      if (prevClose != null && prevClose > 0 && p.currentPrice > 0) {
+        final dayDelta = p.side == OrderType.buy
+            ? p.currentPrice - prevClose
+            : prevClose - p.currentPrice;
+        todaysPnl += p.quantity * dayDelta;
+      }
+    }
+
+    if (_portfolioCurrentNotifier.value != current) {
+      _portfolioCurrentNotifier.value = current;
+    }
+    if (_portfolioTodaysPnlNotifier.value != todaysPnl) {
+      _portfolioTodaysPnlNotifier.value = todaysPnl;
+    }
+    if (_portfolioOverallPnlNotifier.value != overallPnl) {
+      _portfolioOverallPnlNotifier.value = overallPnl;
+    }
+  }
+
   /// Live equity = walletBalance + runningPnL.
   /// walletBalance = _balance (free cash) + usedMargin (blocked margin).
   double get equity {
@@ -683,10 +810,12 @@ class TradingStore extends ChangeNotifier {
   double get freeMargin => equity - usedMargin;
 
   /// Available margin — never negative. max(0, equity − usedMargin)
-  double get availableMargin => (equity - usedMargin).clamp(0.0, double.infinity);
+  double get availableMargin =>
+      (equity - usedMargin).clamp(0.0, double.infinity);
 
   /// Margin shortfall — how far equity is below the required margin. Zero when healthy.
-  double get marginShortfall => (usedMargin - equity).clamp(0.0, double.infinity);
+  double get marginShortfall =>
+      (usedMargin - equity).clamp(0.0, double.infinity);
 
   /// Margin level % = (equity / usedMargin) × 100. Null when no open positions.
   double? get marginLevel {
@@ -702,7 +831,8 @@ class TradingStore extends ChangeNotifier {
     if (_accountEquity.equity == newEquity.equity &&
         _accountEquity.freeMargin == newEquity.freeMargin &&
         _accountEquity.usedMargin == newEquity.usedMargin &&
-        _accountEquity.runningPnL == newEquity.runningPnL) return;
+        _accountEquity.runningPnL == newEquity.runningPnL)
+      return;
     _accountEquity = newEquity;
     _accountVersion.value++;
     notifyListeners();
@@ -713,7 +843,10 @@ class TradingStore extends ChangeNotifier {
     Stock? exact = _watchlistUniverse[symbol];
     if (exact == null) {
       for (final s in _watchlist) {
-        if (s.symbol == symbol) { exact = s; break; }
+        if (s.symbol == symbol) {
+          exact = s;
+          break;
+        }
       }
     }
     if (exact != null) return exact;
@@ -863,8 +996,9 @@ class TradingStore extends ChangeNotifier {
       UnmodifiableListView(_namedWatchlists);
 
   void _loadNamedWatchlists() {
-    final saved = PersistenceService.instance
-        .getJson<List<dynamic>>(_kNamedWatchlistsKey);
+    final saved = PersistenceService.instance.getJson<List<dynamic>>(
+      _kNamedWatchlistsKey,
+    );
     if (saved != null && saved.isNotEmpty) {
       try {
         _namedWatchlists = saved.map((e) {
@@ -889,24 +1023,28 @@ class TradingStore extends ChangeNotifier {
 
   void _saveNamedWatchlists() {
     final maps = _namedWatchlists
-        .map((wl) => {
-              'id': wl.id,
-              'name': wl.name,
-              'symbols': wl.symbols,
-              'order': wl.order,
-            })
+        .map(
+          (wl) => {
+            'id': wl.id,
+            'name': wl.name,
+            'symbols': wl.symbols,
+            'order': wl.order,
+          },
+        )
         .toList();
     PersistenceService.instance.setJson(_kNamedWatchlistsKey, maps);
   }
 
   void createWatchlist(String name) {
     if (_namedWatchlists.length >= Watchlist.maxWatchlists) return;
-    _namedWatchlists.add(Watchlist(
-      id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      symbols: const [],
-      order: _namedWatchlists.length,
-    ));
+    _namedWatchlists.add(
+      Watchlist(
+        id: 'wl-${DateTime.now().millisecondsSinceEpoch}',
+        name: name,
+        symbols: const [],
+        order: _namedWatchlists.length,
+      ),
+    );
     _saveNamedWatchlists();
     notifyListeners();
   }
@@ -922,8 +1060,9 @@ class TradingStore extends ChangeNotifier {
     if (idx == -1) return;
     final current = _namedWatchlists[idx].symbols;
     if (current.contains(symbol)) return;
-    _namedWatchlists[idx] =
-        _namedWatchlists[idx].copyWith(symbols: [symbol, ...current]);
+    _namedWatchlists[idx] = _namedWatchlists[idx].copyWith(
+      symbols: [symbol, ...current],
+    );
     _saveNamedWatchlists();
     notifyListeners();
   }
@@ -932,8 +1071,7 @@ class TradingStore extends ChangeNotifier {
     final idx = _namedWatchlists.indexWhere((wl) => wl.id == watchlistId);
     if (idx == -1) return;
     _namedWatchlists[idx] = _namedWatchlists[idx].copyWith(
-      symbols:
-          _namedWatchlists[idx].symbols.where((s) => s != symbol).toList(),
+      symbols: _namedWatchlists[idx].symbols.where((s) => s != symbol).toList(),
     );
     _saveNamedWatchlists();
     notifyListeners();
@@ -944,8 +1082,9 @@ class TradingStore extends ChangeNotifier {
     for (var i = 0; i < _namedWatchlists.length; i++) {
       if (_namedWatchlists[i].symbols.contains(symbol)) {
         _namedWatchlists[i] = _namedWatchlists[i].copyWith(
-          symbols:
-              _namedWatchlists[i].symbols.where((s) => s != symbol).toList(),
+          symbols: _namedWatchlists[i].symbols
+              .where((s) => s != symbol)
+              .toList(),
         );
         changed = true;
       }
@@ -1532,9 +1671,9 @@ class TradingStore extends ChangeNotifier {
     void Function()? onMarkAllRead,
     void Function()? onClearAll,
   }) {
-    _onNotifMarkRead    = onMarkRead;
+    _onNotifMarkRead = onMarkRead;
     _onNotifMarkAllRead = onMarkAllRead;
-    _onNotifClearAll    = onClearAll;
+    _onNotifClearAll = onClearAll;
   }
 
   UnmodifiableListView<AppNotification> get notifications =>
@@ -1607,9 +1746,7 @@ class TradingStore extends ChangeNotifier {
     _positionTokenIndex.clear();
     for (var i = 0; i < _positions.length; i++) {
       final p = _positions[i];
-      _positionIndex
-          .putIfAbsent('${p.exchange}:${p.symbol}', () => [])
-          .add(i);
+      _positionIndex.putIfAbsent('${p.exchange}:${p.symbol}', () => []).add(i);
       if (p.token.isNotEmpty) {
         _positionTokenIndex.putIfAbsent(p.token, () => []).add(i);
       }
@@ -1636,6 +1773,8 @@ class TradingStore extends ChangeNotifier {
       ..addAll(merged);
     _rebuildPositionIndex();
     _refreshMarketSubscriptions();
+    _recomputePortfolioTotals();
+    _pushWalletBalance(); // usedMargin depends on _positions
     _positionsVersion.value++;
     notifyListeners();
   }
@@ -1651,6 +1790,7 @@ class TradingStore extends ChangeNotifier {
       ..addAll(merged);
     _rebuildHoldingIndex();
     _refreshMarketSubscriptions();
+    _recomputePortfolioTotals();
     _positionsVersion.value++;
     notifyListeners();
   }
@@ -1682,6 +1822,7 @@ class TradingStore extends ChangeNotifier {
     if (updateBalance) {
       _balance = updated.balance;
       _isUserDataLoaded = true; // real balance has arrived
+      _pushWalletBalance();
     }
     _accountVersion.value++;
     notifyListeners();
@@ -1692,6 +1833,7 @@ class TradingStore extends ChangeNotifier {
   void setOptimisticBalance(double newBalance) {
     if (_balance == newBalance) return;
     _balance = newBalance;
+    _pushWalletBalance();
     _accountVersion.value++;
     notifyListeners();
   }

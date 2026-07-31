@@ -613,7 +613,7 @@ class _SChip extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 4),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(value, style: GoogleFonts.jetBrainsMono(
+      Text(value, style: AppTheme.mono(
           fontSize: 13, fontWeight: FontWeight.w800, color: color)),
       Text(label, style: GoogleFonts.inter(
           fontSize: 9, color: AppColors.textSecondary)),
@@ -981,7 +981,7 @@ class _DateHeaderRow extends StatelessWidget {
           const SizedBox(width: 14),
         ],
         // Net P&L
-        Text(_fmtPnl(group.netPnl), style: GoogleFonts.jetBrainsMono(
+        Text(_fmtPnl(group.netPnl), style: AppTheme.mono(
             fontSize: 13, fontWeight: FontWeight.w900, color: pnlColor)),
         const SizedBox(width: 4),
         Text('net', style: GoogleFonts.inter(
@@ -1024,7 +1024,7 @@ class _DayPnl extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.end,
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
-      Text(_fmt(value), style: GoogleFonts.jetBrainsMono(
+      Text(_fmt(value), style: AppTheme.mono(
           fontSize: 11, fontWeight: FontWeight.w600,
           color: value >= 0 ? AppColors.success : AppColors.danger)),
       Text(label, style: GoogleFonts.inter(
@@ -1147,11 +1147,11 @@ class _DesktopTradeRow extends StatelessWidget {
           // Qty
           Expanded(flex: 1, child: Text('${trade.quantity}',
               textAlign: TextAlign.right,
-              style: GoogleFonts.jetBrainsMono(fontSize: 11))),
+              style: AppTheme.mono(fontSize: 11))),
           // Entry
           Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Text('₹${trade.entryPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textPrimary)),
+                style: AppTheme.mono(fontSize: 10, color: AppColors.textPrimary)),
             Text(_fmtTimestampCompact(trade.entryTime),
                 style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
           ])),
@@ -1159,7 +1159,7 @@ class _DesktopTradeRow extends StatelessWidget {
           Expanded(flex: 2, child: trade.exitPrice != null
               ? Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Text('₹${trade.exitPrice!.toStringAsFixed(2)}',
-                      style: GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textPrimary)),
+                      style: AppTheme.mono(fontSize: 10, color: AppColors.textPrimary)),
                   Text(_fmtTimestampCompact(trade.exitTime!),
                       style: GoogleFonts.inter(fontSize: 9, color: AppColors.textSecondary)),
                 ])
@@ -1170,7 +1170,7 @@ class _DesktopTradeRow extends StatelessWidget {
               ? Text(
                   '${trade.pointsCaptured >= 0 ? '+' : ''}${trade.pointsCaptured.toStringAsFixed(2)}',
                   textAlign: TextAlign.right,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                       fontSize: 11, fontWeight: FontWeight.w600,
                       color: trade.pointsCaptured >= 0 ? AppColors.success : AppColors.danger))
               : Text('—', textAlign: TextAlign.right,
@@ -1178,14 +1178,14 @@ class _DesktopTradeRow extends StatelessWidget {
           // Gross P&L
           Expanded(flex: 2, child: trade.status == _TradeStatus.closed
               ? Text(_fmtPnl(trade.grossPnl), textAlign: TextAlign.right,
-                  style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.w600,
+                  style: AppTheme.mono(fontSize: 11, fontWeight: FontWeight.w600,
                       color: trade.grossPnl > 0 ? AppColors.success : AppColors.danger))
               : Text('—', textAlign: TextAlign.right,
                   style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary))),
           // Net P&L
           Expanded(flex: 2, child: trade.status == _TradeStatus.closed
               ? Text(_fmtPnl(trade.netPnl), textAlign: TextAlign.right,
-                  style: GoogleFonts.jetBrainsMono(fontSize: 12, fontWeight: FontWeight.w800,
+                  style: AppTheme.mono(fontSize: 12, fontWeight: FontWeight.w800,
                       color: pnlColor))
               : _StatusPill(status: trade.status)),
           // Status
@@ -1275,18 +1275,18 @@ class _MobileTradeCard extends StatelessWidget {
               // Row 2: Buy ₹X → Sell ₹X  |  Net P&L (visual priority)
               Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                 Text('$entryLabel ₹${trade.entryPrice.toStringAsFixed(2)}',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                    style: AppTheme.mono(fontSize: 11,
                         fontWeight: FontWeight.w600, color: dirColor)),
                 const SizedBox(width: 5),
                 const Icon(LucideIcons.arrowRight, size: 10, color: AppColors.textSecondary),
                 const SizedBox(width: 5),
                 Text('$exitLabel ₹${trade.exitPrice!.toStringAsFixed(2)}',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                    style: AppTheme.mono(fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: trade.netPnl >= 0 ? AppColors.success : AppColors.danger)),
                 const Spacer(),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  Text(_fmtPnl(trade.netPnl), style: GoogleFonts.jetBrainsMono(
+                  Text(_fmtPnl(trade.netPnl), style: AppTheme.mono(
                       fontSize: 15, fontWeight: FontWeight.w900, color: pnlColor)),
                   Text('Net P&L', style: GoogleFonts.inter(
                       fontSize: 8, color: AppColors.textSecondary)),
@@ -1301,7 +1301,7 @@ class _MobileTradeCard extends StatelessWidget {
                   const SizedBox(width: 7),
                   Text(
                     '${trade.pointsCaptured >= 0 ? '+' : ''}${trade.pointsCaptured.toStringAsFixed(2)} pts',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 10,
+                    style: AppTheme.mono(fontSize: 10,
                         color: trade.pointsCaptured >= 0 ? AppColors.success : AppColors.danger),
                   ),
                 ],
@@ -1313,7 +1313,7 @@ class _MobileTradeCard extends StatelessWidget {
               // Row 2: entry price · qty · time · chevron (open/pending/rejected)
               Row(children: [
                 Text('$entryLabel ₹${trade.entryPrice.toStringAsFixed(2)}',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 11,
+                    style: AppTheme.mono(fontSize: 11,
                         fontWeight: FontWeight.w600, color: dirColor)),
                 const SizedBox(width: 8),
                 Text('Qty ${trade.quantity}', style: GoogleFonts.inter(

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../services/app_update_service.dart';
+import '../theme.dart';
 
 /// Overlays a full-screen force-update dialog on top of [child] when
 /// [AppUpdateService.instance.updateAvailable] is true.
@@ -60,100 +62,97 @@ class _ForceUpdateDialogState extends State<_ForceUpdateDialog>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? AppColors.surfaceDark : AppColors.surface;
+    final borderColor = isDark ? AppColors.borderDark : AppColors.border;
+    final textPrimary =
+        isDark ? AppColors.textPrimaryDark : AppColors.textPrimary;
+    final textSecondary =
+        isDark ? AppColors.textSecondaryDark : AppColors.textSecondary;
+    final primary = isDark ? AppColors.primaryOnDark : AppColors.primary;
+
     return Positioned.fill(
       child: FadeTransition(
         opacity: _fade,
         child: Container(
-          color: const Color(0xCC000000),
+          color: const Color(0x99000000),
           child: Center(
             child: ScaleTransition(
               scale: _scale,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 360),
                 child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 24),
-                  padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                  ),
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.lg,
+                    AppSpacing.xl,
+                    AppSpacing.lg,
+                    AppSpacing.lg,
+                  ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1A1F2E),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0x4D2962FF),
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x80000000),
-                        blurRadius: 40,
-                        spreadRadius: 4,
-                      ),
-                    ],
+                    color: cardColor,
+                    borderRadius: BorderRadius.circular(AppColors.heroRadius),
+                    border: Border.all(color: borderColor),
+                    boxShadow: AppColors.floatingShadow,
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 60,
-                        height: 60,
+                        width: 56,
+                        height: 56,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF1A3A6B), Color(0xFF2962FF)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(17),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x662962FF),
-                              blurRadius: 16,
-                              offset: Offset(0, 4),
-                            ),
-                          ],
+                          color: primary.withOpacity(0.10),
+                          borderRadius:
+                              BorderRadius.circular(AppColors.cardRadius),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.system_update_rounded,
-                          color: Colors.white,
-                          size: 28,
+                          color: primary,
+                          size: 26,
                         ),
                       ),
-                      const SizedBox(height: 20),
-                      const Text(
+                      const SizedBox(height: AppSpacing.md),
+                      Text(
                         'Update Available',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
+                        style: GoogleFonts.inter(
+                          color: textPrimary,
+                          fontSize: 18,
                           fontWeight: FontWeight.w700,
-                          letterSpacing: -0.3,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      const Text(
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
                         'A new version of Trade Kosh is ready.\nUpdate now to get the latest features.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Color(0x99FFFFFF),
+                        style: GoogleFonts.inter(
+                          color: textSecondary,
                           fontSize: 13,
-                          height: 1.55,
-                          decoration: TextDecoration.none,
+                          height: 1.5,
                         ),
                       ),
-                      const SizedBox(height: 28),
+                      const SizedBox(height: AppSpacing.lg),
                       SizedBox(
                         width: double.infinity,
                         height: 48,
                         child: FilledButton.icon(
                           onPressed: AppUpdateService.reload,
                           icon: const Icon(Icons.refresh_rounded, size: 18),
-                          label: const Text(
+                          label: Text(
                             'Update Now',
-                            style: TextStyle(
+                            style: GoogleFonts.inter(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF2962FF),
+                            backgroundColor: primary,
                             foregroundColor: Colors.white,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius:
+                                  BorderRadius.circular(AppColors.cardRadius),
                             ),
                           ),
                         ),

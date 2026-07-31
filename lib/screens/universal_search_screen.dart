@@ -10,6 +10,8 @@ import '../search/search_index.dart';
 import '../search/top_50_stocks.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
+import '../widgets/instrument_logo.dart';
+import '../widgets/shared_widgets.dart' show Sparkline;
 import 'stock_detail_screen.dart';
 
 // ─── Session-level search cache ──────────────────────────────────────────────
@@ -685,30 +687,7 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          _FilterChip(
-            label: 'All',
-            selected: _exchangeFilter == null,
-            onTap: () {
-              if (_exchangeFilter != null) {
-                _debounce?.cancel();
-                _retryTimer?.cancel();
-                setState(() => _exchangeFilter = null);
-                if (_query.length >= 2) {
-                  final gen      = ++_reqGen;
-                  final cacheKey = 'ALL_$_query';
-                  final cached   = _SearchSessionCache.get(cacheKey);
-                  if (cached != null && !cached.isExpired) {
-                    setState(() { _remoteResults = cached.results; _remoteLoading = false; });
-                    return;
-                  }
-                  setState(() => _remoteLoading = true);
-                  _fetchRemote(_query, gen);
-                }
-              }
-            },
-          ),
-          const SizedBox(width: 6),
-          for (final ex in ['NSE', 'BSE', 'NFO', 'MCX', 'CDS']) ...[
+          for (final ex in ['NSE', 'BSE']) ...[
             _FilterChip(
               label: ex,
               selected: _exchangeFilter == ex,
@@ -716,64 +695,34 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
             ),
             const SizedBox(width: 6),
           ],
-          Container(
-            width: 1,
-            height: 18,
-            color: const Color(0xFFE0E0E0),
-            margin: const EdgeInsets.symmetric(horizontal: 6),
-          ),
-          if (_exchangeFilter != 'MCX' && _exchangeFilter != 'CDS') ...[
-            _FilterChip(
-              label: 'EQ',
-              selected: _segmentFilter == 'EQ',
-              onTap: () => setState(
-                () => _segmentFilter = _segmentFilter == 'EQ' ? null : 'EQ',
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
           _FilterChip(
-            label: 'FUT',
-            selected: _segmentFilter == 'FUT',
+            label: 'F&O',
+            selected: _exchangeFilter == 'NFO',
+            onTap: () => _onExchangeTap('NFO'),
+          ),
+          const SizedBox(width: 6),
+          _FilterChip(
+            label: 'ETF',
+            selected: _segmentFilter == 'ETF',
             onTap: () => setState(
-              () => _segmentFilter = _segmentFilter == 'FUT' ? null : 'FUT',
+              () => _segmentFilter = _segmentFilter == 'ETF' ? null : 'ETF',
             ),
           ),
-          if (_exchangeFilter != 'MCX' && _exchangeFilter != 'CDS') ...[
-            const SizedBox(width: 6),
-            _FilterChip(
-              label: 'CE',
-              selected: _segmentFilter == 'CE',
-              onTap: () => setState(
-                () => _segmentFilter = _segmentFilter == 'CE' ? null : 'CE',
-              ),
+          const SizedBox(width: 6),
+          _FilterChip(
+            label: 'Index',
+            selected: _segmentFilter == 'INDEX',
+            onTap: () => setState(
+              () =>
+                  _segmentFilter = _segmentFilter == 'INDEX' ? null : 'INDEX',
             ),
-            const SizedBox(width: 6),
-            _FilterChip(
-              label: 'PE',
-              selected: _segmentFilter == 'PE',
-              onTap: () => setState(
-                () => _segmentFilter = _segmentFilter == 'PE' ? null : 'PE',
-              ),
-            ),
-            const SizedBox(width: 6),
-            _FilterChip(
-              label: 'ETF',
-              selected: _segmentFilter == 'ETF',
-              onTap: () => setState(
-                () => _segmentFilter = _segmentFilter == 'ETF' ? null : 'ETF',
-              ),
-            ),
-            const SizedBox(width: 6),
-            _FilterChip(
-              label: 'INDEX',
-              selected: _segmentFilter == 'INDEX',
-              onTap: () => setState(
-                () =>
-                    _segmentFilter = _segmentFilter == 'INDEX' ? null : 'INDEX',
-              ),
-            ),
-          ],
+          ),
+          const SizedBox(width: 6),
+          _FilterChip(
+            label: 'MCX',
+            selected: _exchangeFilter == 'MCX',
+            onTap: () => _onExchangeTap('MCX'),
+          ),
         ],
       ),
     );
@@ -1072,7 +1021,16 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
   // ── Default view (no query) ─────────────────────────────────────────────────
 
   Widget _buildDefaultView(BuildContext context, dynamic store) {
-    final recent = store.recentSearches as List<String>;
+    // Recent searches are stored as bare symbols — resolve each back to a
+    // full Stock (price/exchange/name) so the row can show live data.
+    // Anything the store no longer recognizes (cleared cache, etc.) is
+    // dropped rather than shown with blank data.
+    final recentSymbols = store.recentSearches as List<String>;
+    final recent = recentSymbols
+        .map((sym) => store.stockBySymbolOrNull(sym) as Stock?)
+        .whereType<Stock>()
+        .toList();
+
     final watchlist = store.watchlist as List<Stock>;
     final trending =
         (List<Stock>.from(watchlist)
@@ -1080,101 +1038,59 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
             .take(6)
             .toList();
 
+    void openStock(Stock stock) {
+      store.addRecentSearch(stock.symbol);
+      store.registerSearchResult(
+        symbol: stock.symbol,
+        displayName: stock.name,
+        exchange: stock.exchange,
+        token: stock.token,
+        ltp: stock.currentPrice,
+        changePercent: stock.changePercentage,
+      );
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => StockDetailScreen(symbol: stock.symbol)),
+      );
+    }
+
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        // Recent searches
         if (recent.isNotEmpty) ...[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Recent',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF0D0D0D),
-                ),
-              ),
-              TextButton(
-                onPressed: () => store.clearRecentSearches(),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary,
-                  textStyle: const TextStyle(fontSize: 12),
-                ),
-                child: const Text('Clear'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: recent
-                .map(
-                  (sym) => ActionChip(
-                    label: Text(sym, style: const TextStyle(fontSize: 12)),
-                    avatar: const Icon(LucideIcons.clock, size: 13),
-                    onPressed: () {
-                      _controller.text = sym;
-                      _onQueryChanged(sym);
-                    },
-                    backgroundColor: AppColors.surfaceAlt,
-                    side: const BorderSide(color: Color(0xFFE0E0E0)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _DefaultSectionLabel(icon: LucideIcons.clock, label: 'RECENT'),
+                TextButton(
+                  onPressed: () => store.clearRecentSearches(),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textSecondary,
+                    textStyle: const TextStyle(fontSize: 12),
                   ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 24),
-        ],
-        // Top 50 NSE Stocks — instant, no network
-        const Text(
-          'Top NSE Stocks',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF0D0D0D),
-          ),
-        ),
-        const SizedBox(height: 4),
-        ..._top50Filtered.map(
-          (s) => _Top50Tile(
-            stock: s,
-            onTap: () => _navigateToSymbol(context, s.symbol, s.symbol, exchange: s.exchange),
-          ),
-        ),
-        // Trending from watchlist (if available)
-        if (trending.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          const Text(
-            'Trending',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF0D0D0D),
+                  child: const Text('Clear'),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
+          ...recent.map(
+            (stock) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _TrendingTile(stock: stock, onTap: () => openStock(stock)),
+            ),
+          ),
+        ],
+        if (trending.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: _DefaultSectionLabel(icon: LucideIcons.trendingUp, label: 'TRENDING'),
+          ),
           ...trending.map(
-            (stock) => _TrendingTile(
-              stock: stock,
-              onTap: () {
-                store.addRecentSearch(stock.symbol);
-                store.registerSearchResult(
-                  symbol: stock.symbol,
-                  displayName: stock.name,
-                  exchange: stock.exchange,
-                  token: stock.token,
-                  ltp: stock.currentPrice,
-                  changePercent: stock.changePercentage,
-                );
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => StockDetailScreen(symbol: stock.symbol),
-                  ),
-                );
-              },
+            (stock) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _TrendingTile(stock: stock, onTap: () => openStock(stock)),
             ),
           ),
         ],
@@ -1184,6 +1100,35 @@ class _UniversalSearchScreenState extends State<UniversalSearchScreen> {
 }
 
 // ─── Section header ───────────────────────────────────────────────────────────
+
+// ─── Default (no-query) view section label — no trailing padding, so a
+// sibling action (e.g. "Clear") can sit flush against it in a Row ───────────
+
+class _DefaultSectionLabel extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _DefaultSectionLabel({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: AppColors.primary),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: AppColors.primary,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;
@@ -1350,9 +1295,14 @@ class _LocalInstrumentTile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        leading: _SymbolAvatar(
+        leading: InstrumentLogo(
           symbol: instrument.displayName,
           exchange: instrument.exchange,
+          size: 42,
+          fallbackBuilder: (_) => _SymbolAvatar(
+            symbol: instrument.displayName,
+            exchange: instrument.exchange,
+          ),
         ),
         title: Row(
           children: [
@@ -1415,9 +1365,14 @@ class _RemoteResultTile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        leading: _SymbolAvatar(
+        leading: InstrumentLogo(
           symbol: result.displaySymbol,
           exchange: result.exchange,
+          size: 42,
+          fallbackBuilder: (_) => _SymbolAvatar(
+            symbol: result.displaySymbol,
+            exchange: result.exchange,
+          ),
         ),
         title: Row(
           children: [
@@ -1493,47 +1448,101 @@ class _TrendingTile extends StatelessWidget {
   final VoidCallback onTap;
   const _TrendingTile({required this.stock, required this.onTap});
 
+  /// "F&O" for equities/indices with a derivatives chain, "ETF" for funds,
+  /// null for plain equities and MCX commodities (exchange badge suffices).
+  String? get _segmentBadge {
+    if (stock.instrumentType == InstrumentType.etf) return 'ETF';
+    if (stock.exchange != 'MCX' && stock.hasFnoChain) return 'F&O';
+    return null;
+  }
+
+  /// Absolute price change — derived from prevClose when available, else
+  /// backed out algebraically from the percentage (prev = cur/(1+pct/100)).
+  double get _absoluteChange {
+    final prev = stock.prevClose;
+    if (prev != null && prev > 0) return stock.currentPrice - prev;
+    final pct = stock.changePercentage;
+    if (pct <= -100) return 0;
+    return stock.currentPrice * pct / (100 + pct);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final store = TradingScope.read(context);
     final isPos = stock.changePercentage >= 0;
-    return ListTile(
+    final color = isPos ? AppColors.success : AppColors.danger;
+    final segment = _segmentBadge;
+    final sign = isPos ? '+' : '';
+
+    return InkWell(
       onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
-      leading: _SymbolAvatar(symbol: stock.symbol, exchange: stock.exchange),
-      title: Text(
-        stock.symbol,
-        style: const TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-          color: Color(0xFF0D0D0D),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          stock.symbol,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF0D0D0D)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      _Badge(label: stock.exchange, color: _exchangeColor(stock.exchange)),
+                      if (segment != null) ...[
+                        const SizedBox(width: 4),
+                        _Badge(label: segment, color: AppColors.primary),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    stock.name,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 60,
+              height: 32,
+              child: Sparkline(
+                valueListenable: store.ltpNotifier(stock.symbol),
+                color: color,
+                filled: false,
+                seedValue: stock.currentPrice,
+                symbol: stock.symbol,
+                exchange: stock.exchange,
+                token: stock.token,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '₹${stock.currentPrice.toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF0D0D0D)),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$sign${_absoluteChange.toStringAsFixed(2)} ($sign${stock.changePercentage.toStringAsFixed(2)}%)',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+                ),
+              ],
+            ),
+          ],
         ),
-      ),
-      subtitle: Text(
-        stock.name,
-        style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            '₹${stock.currentPrice.toStringAsFixed(2)}',
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF0D0D0D),
-            ),
-          ),
-          Text(
-            '${isPos ? '+' : ''}${stock.changePercentage.toStringAsFixed(2)}%',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: isPos ? AppColors.success : AppColors.danger,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1552,7 +1561,13 @@ class _Top50Tile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: _SymbolAvatar(symbol: stock.symbol, exchange: stock.exchange),
+        leading: InstrumentLogo(
+          symbol: stock.symbol,
+          exchange: stock.exchange,
+          size: 42,
+          fallbackBuilder: (_) =>
+              _SymbolAvatar(symbol: stock.symbol, exchange: stock.exchange),
+        ),
         title: Row(
           children: [
             Flexible(

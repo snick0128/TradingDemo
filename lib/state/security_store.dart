@@ -21,6 +21,7 @@ class SecurityStore extends ChangeNotifier {
   final List<DateTime> _sessionLog = [];
 
   bool get isLocked => _isLocked;
+  String get pin => _pin;
   Duration get lockTimeout => _lockTimeout;
   bool get isAuthenticated => _isAuthenticated;
   User? get currentUser => _currentUser;

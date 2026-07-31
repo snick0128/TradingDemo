@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
@@ -13,6 +12,7 @@ import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/backend_error_widget.dart';
+import '../widgets/instrument_logo.dart';
 import '../widgets/trading_bottom_nav_bar.dart';
 import 'positions_screen.dart';
 
@@ -106,7 +106,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               const Text('Portfolio'),
               Text(
                 '₹${_fmtValue(_totalValue)}',
-                style: GoogleFonts.jetBrainsMono(
+                style: AppTheme.mono(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
@@ -506,6 +506,8 @@ class _PendingCardState extends State<_PendingCard> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                InstrumentLogo(symbol: o.symbol, exchange: o.exchange ?? 'NSE', size: 22),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     o.symbol,

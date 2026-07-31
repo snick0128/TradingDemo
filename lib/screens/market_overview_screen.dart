@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../theme.dart';
@@ -95,7 +94,7 @@ class _IndianIndicesGrid extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     price,
-                    style: GoogleFonts.jetBrainsMono(
+                    style: AppTheme.mono(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
                       color: AppColors.textPrimary,
@@ -192,7 +191,7 @@ class _GlobalIndicesGrid extends StatelessWidget {
                     children: [
                       Text(
                         price,
-                        style: GoogleFonts.jetBrainsMono(
+                        style: AppTheme.mono(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: AppColors.textPrimary,
@@ -332,7 +331,7 @@ class _SectorPerformanceTable extends StatelessWidget {
                         child: Text(
                           topMover,
                           textAlign: TextAlign.right,
-                          style: GoogleFonts.jetBrainsMono(
+                          style: AppTheme.mono(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                             color: AppColors.primary,

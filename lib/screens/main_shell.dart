@@ -324,13 +324,34 @@ class PinLockOverlay extends StatefulWidget {
 }
 
 class _PinLockOverlayState extends State<PinLockOverlay> {
-  final TextEditingController _pinController = TextEditingController();
+  String _pin = '';
   String _error = '';
 
-  @override
-  void dispose() {
-    _pinController.dispose();
-    super.dispose();
+  void _onDigit(String digit) {
+    if (_pin.length >= 4) return;
+    setState(() {
+      _pin += digit;
+      _error = '';
+    });
+    if (_pin.length == 4) _unlock();
+  }
+
+  void _onBackspace() {
+    if (_pin.isEmpty) return;
+    setState(() => _pin = _pin.substring(0, _pin.length - 1));
+  }
+
+  void _unlock() {
+    final security = SecurityScope.of(context);
+    final success = security.unlock(_pin);
+    setState(() {
+      _pin = '';
+      _error = success ? '' : 'Incorrect PIN. Try again.';
+    });
+  }
+
+  void _useBiometrics() {
+    SecurityScope.of(context).biometricUnlock();
   }
 
   @override
@@ -338,57 +359,90 @@ class _PinLockOverlayState extends State<PinLockOverlay> {
     final security = SecurityScope.of(context);
 
     return ColoredBox(
-      color: AppColors.background.withOpacity(0.96),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: CustomCard(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  LucideIcons.shield,
-                  size: 30,
-                  color: AppColors.accent,
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'Session Locked',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Enter your 4-digit PIN to continue.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _pinController,
-                  keyboardType: TextInputType.number,
-                  obscureText: true,
-                  maxLength: 4,
-                  decoration: const InputDecoration(
-                    labelText: '4-digit PIN',
-                    counterText: '',
+      color: AppColors.background,
+      child: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.lock, color: Colors.white, size: 28),
                   ),
-                  onChanged: (_) => setState(() => _error = ''),
-                  onSubmitted: (_) => _unlock(security),
-                ),
-                if (_error.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      _error,
-                      style: const TextStyle(color: AppColors.danger),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Enter PIN',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
                     ),
                   ),
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  onPressed: () => _unlock(security),
-                  child: const Text('Unlock App'),
-                ),
-              ],
+                  const SizedBox(height: 6),
+                  Text(
+                    'Use PIN ${security.pin} to continue',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(4, (i) {
+                      final filled = i < _pin.length;
+                      return Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: filled ? AppColors.primary : Colors.transparent,
+                          border: Border.all(
+                            color: filled ? AppColors.primary : AppColors.border,
+                            width: 1.5,
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 18,
+                    child: _error.isEmpty
+                        ? null
+                        : Text(
+                            _error,
+                            style: const TextStyle(
+                              color: AppColors.danger,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 16),
+                  _keypadRow(['1', '2', '3']),
+                  _keypadRow(['4', '5', '6']),
+                  _keypadRow(['7', '8', '9']),
+                  _keypadRow([null, '0', 'back']),
+                  const SizedBox(height: 20),
+                  TextButton.icon(
+                    onPressed: _useBiometrics,
+                    icon: const Icon(Icons.fingerprint, size: 18, color: AppColors.primary),
+                    label: const Text(
+                      'Use Biometrics',
+                      style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -396,14 +450,66 @@ class _PinLockOverlayState extends State<PinLockOverlay> {
     );
   }
 
-  void _unlock(SecurityStore security) {
-    final input = _pinController.text.trim();
-    final success = security.unlock(input);
-    if (!success) {
-      setState(() => _error = 'Invalid PIN. Try again.');
-      return;
-    }
-    _pinController.clear();
-    setState(() => _error = '');
+  Widget _keypadRow(List<String?> keys) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: keys.map((key) {
+          if (key == null) return const SizedBox(width: 84, height: 60);
+          if (key == 'back') return _keypadBackspaceButton();
+          return _keypadDigitButton(key);
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _keypadDigitButton(String digit) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Material(
+        color: AppColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _onDigit(digit),
+          child: SizedBox(
+            width: 72,
+            height: 60,
+            child: Center(
+              child: Text(
+                digit,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _keypadBackspaceButton() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Material(
+        color: AppColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: _onBackspace,
+          child: const SizedBox(
+            width: 72,
+            height: 60,
+            child: Center(
+              child: Icon(Icons.backspace_outlined, size: 20, color: AppColors.textSecondary),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

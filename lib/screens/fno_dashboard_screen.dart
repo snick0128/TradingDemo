@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:intl/intl.dart';
 
@@ -7,6 +6,7 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../theme.dart';
 import '../widgets/shared_widgets.dart';
+
 
 class _FnoPosition {
   final String symbol;
@@ -196,7 +196,7 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                       const SizedBox(height: 4),
                       Text(
                         '${isPos ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)}',
-                        style: GoogleFonts.jetBrainsMono(
+                        style: AppTheme.mono(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
                           color: isPos ? AppColors.success : AppColors.danger,
@@ -222,7 +222,7 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
                       const SizedBox(height: 4),
                       Text(
                         '₹${totalMargin.toStringAsFixed(0)}',
-                        style: GoogleFonts.jetBrainsMono(
+                        style: AppTheme.mono(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
                           color: AppColors.primary,
@@ -300,7 +300,7 @@ class _FnoDashboardScreenState extends State<FnoDashboardScreen>
               children: [
                 Text(
                   '₹${p.ltp.toStringAsFixed(2)}',
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                   ),

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
@@ -235,7 +234,7 @@ class _PCRScreenState extends State<PCRScreen> {
                                     child: Text(
                                       pcr.toStringAsFixed(2),
                                       textAlign: TextAlign.right,
-                                      style: GoogleFonts.jetBrainsMono(
+                                      style: AppTheme.mono(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,
                                         color: pcrColor,

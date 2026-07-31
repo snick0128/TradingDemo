@@ -228,10 +228,20 @@ class SubscriptionManager with WidgetsBindingObserver {
     // was pushed on top, with no error or indication anywhere. F&O option
     // tokens stay scoped to the top screen only — that subscription is
     // deliberately heavyweight and screen-specific.
+    //
+    // The VISIBLE (top-of-stack) screen's symbols go in first — Set insertion
+    // order is preserved all the way through to the WS subscribe payload (see
+    // LiveMarketService._sendSubscribe, which no longer alphabetizes it), and
+    // the backend's tick-replay-after-reconnect processes that array in order.
+    // Without this, whichever screen happened to register first (usually
+    // dashboard, mounted at app startup) won its symbols the front of the
+    // queue regardless of what the user is actually looking at right now.
     final topScreenId  = _screenStack.last;
     final activeSymbols = <String>{};
-    for (final symbols in _screenSymbols.values) {
-      activeSymbols.addAll(symbols);
+    activeSymbols.addAll(_screenSymbols[topScreenId] ?? const <String>{});
+    for (final entry in _screenSymbols.entries) {
+      if (entry.key == topScreenId) continue;
+      activeSymbols.addAll(entry.value);
     }
     final activeTokens  = _screenFnoTokens[topScreenId] ?? <String>[];
     final activeExchange = _screenFnoExchange[topScreenId] ?? 'NFO';

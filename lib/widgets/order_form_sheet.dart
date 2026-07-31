@@ -14,6 +14,7 @@ import '../models/trading_models.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../services/subscription_manager.dart';
+import '../theme.dart';
 import 'app_dialog.dart';
 
 /// Shows the buy/sell order form as a modal bottom sheet.
@@ -399,7 +400,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       (_isBuy ? _estimatedCharges : -_estimatedCharges);
 
   Color get _sideColor =>
-      _isBuy ? const Color(0xFF00C853) : const Color(0xFFE53935);
+      _isBuy ? AppColors.success : AppColors.danger;
 
   @override
   Widget build(BuildContext context) {
@@ -593,7 +594,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                         fontSize: 16,
                                         fontWeight: FontWeight.w800,
                                         color: hasInsufficientFunds
-                                            ? const Color(0xFFD50000)
+                                            ? AppColors.danger
                                             : Colors.black,
                                       ),
                                     ),
@@ -640,7 +641,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                             ? const Color(0xFFE65100)
                                             : availableQty > 0
                                             ? const Color(0xFF2E7D32)
-                                            : const Color(0xFFD50000),
+                                            : AppColors.danger,
                                       ),
                                     ),
                                   ),
@@ -678,7 +679,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
                                       color: hasInsufficientFunds
-                                          ? const Color(0xFFD50000)
+                                          ? AppColors.danger
                                           : const Color(0xFF666666),
                                     ),
                                   ),
@@ -697,7 +698,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                             const Icon(
                               Icons.error_outline,
                               size: 14,
-                              color: Color(0xFFD50000),
+                              color: AppColors.danger,
                             ),
                             const SizedBox(width: 8),
                             Expanded(
@@ -710,7 +711,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                                 style: const TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w500,
-                                  color: Color(0xFFD50000),
+                                  color: AppColors.danger,
                                 ),
                               ),
                             ),
@@ -782,7 +783,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                         : () => _submitOrder(context, store),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _sideColor,
-                      disabledBackgroundColor: const Color(0xFFE0E0E0),
+                      disabledBackgroundColor: AppColors.border,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -838,7 +839,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
     final cepeColor = isCE
         ? const Color(0xFF1565C0)
         : isPE
-        ? const Color(0xFFD50000)
+        ? AppColors.danger
         : const Color(0xFF7B1FA2);
 
     return Container(
@@ -1044,7 +1045,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               height: 40,
               decoration: BoxDecoration(
                 color: _side == OrderType.buy
-                    ? const Color(0xFF00C853)
+                    ? AppColors.success
                     : const Color(0xFFF5F5F5),
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -1071,7 +1072,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               height: 40,
               decoration: BoxDecoration(
                 color: _side == OrderType.sell
-                    ? const Color(0xFFE53935)
+                    ? AppColors.danger
                     : const Color(0xFFF5F5F5),
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -1147,7 +1148,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFE8F5E9) : Colors.white,
           border: Border.all(
-            color: selected ? const Color(0xFF00C853) : const Color(0xFFE0E0E0),
+            color: selected ? AppColors.success : AppColors.border,
             width: selected ? 1.5 : 1,
           ),
           borderRadius: BorderRadius.circular(10),
@@ -1171,7 +1172,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: selected
-                      ? const Color(0xFF00C853)
+                      ? AppColors.success
                       : const Color(0xFFF0F0F0),
                   borderRadius: BorderRadius.circular(4),
                 ),
@@ -1278,7 +1279,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
                         ? _sideColor.withOpacity(0.1)
                         : Colors.white,
                     border: Border.all(
-                      color: _qty == q ? _sideColor : const Color(0xFFE0E0E0),
+                      color: _qty == q ? _sideColor : AppColors.border,
                     ),
                     borderRadius: BorderRadius.circular(7),
                   ),
@@ -1354,7 +1355,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       height: 32,
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: const Color(0xFFE0E0E0)),
+        border: Border.all(color: AppColors.border),
         borderRadius: BorderRadius.circular(7),
       ),
       child: Icon(icon, size: 14, color: const Color(0xFF111111)),
@@ -1514,7 +1515,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             marginsMargin
                 ? '₹${(margin + _estimatedCharges).toStringAsFixed(2)}'
                 : '₹${_totalCost.toStringAsFixed(2)}',
-            marginsMargin ? const Color(0xFFD50000) : const Color(0xFF00C853),
+            marginsMargin ? AppColors.danger : AppColors.success,
             bold: true,
           ),
           if (marginsMargin) ...[
@@ -1524,14 +1525,14 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               '₹${afterMargin.toStringAsFixed(2)}',
               afterMargin >= 0
                   ? const Color(0xFF888888)
-                  : const Color(0xFFD50000),
+                  : AppColors.danger,
             ),
             const SizedBox(height: 4),
             _row(
               'Margin utilization',
               '${utilization.toStringAsFixed(1)}%',
               utilization > 80
-                  ? const Color(0xFFD50000)
+                  ? AppColors.danger
                   : utilization > 50
                       ? const Color(0xFFE65100)
                       : const Color(0xFF888888),
@@ -1582,7 +1583,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
           border: Border.all(
             color: selected
                 ? (_isBuy ? const Color(0xFF81C784) : const Color(0xFFEF9A9A))
-                : const Color(0xFFE0E0E0),
+                : AppColors.border,
           ),
           borderRadius: BorderRadius.circular(20),
         ),
@@ -1914,7 +1915,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
               '${executed != null ? ' @ ₹${(executed as num).toStringAsFixed(2)}' : ''}',
               style: const TextStyle(fontSize: 13),
             ),
-            backgroundColor: const Color(0xFF00C853),
+            backgroundColor: AppColors.success,
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
           ),
@@ -1944,7 +1945,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
       sm.showSnackBar(
         SnackBar(
           content: Text(msg, style: const TextStyle(fontSize: 13)),
-          backgroundColor: const Color(0xFFD50000),
+          backgroundColor: AppColors.danger,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 4),
         ),
@@ -1960,7 +1961,7 @@ class _OrderFormSheetContentState extends State<_OrderFormSheetContent> {
             e.toString().replaceAll('Exception: ', ''),
             style: const TextStyle(fontSize: 13),
           ),
-          backgroundColor: const Color(0xFFD50000),
+          backgroundColor: AppColors.danger,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 4),
         ),

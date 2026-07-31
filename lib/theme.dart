@@ -1,35 +1,87 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+/// TradeKosh V3.0 design tokens.
+///
+/// Financial colors (primary/success/danger/warning) are brand-fixed and
+/// stay the same value on light backgrounds; dark-mode variants exist only
+/// where the fixed value would fail contrast against a near-black surface.
+///
+/// One signature gradient is sanctioned app-wide: [heroGradient], reserved
+/// for the single "hero" card per screen (e.g. portfolio/equity value).
+/// Every other card, dialog, sheet, and button stays flat — the gradient's
+/// value comes from being used exactly once per screen, not everywhere.
 class AppColors {
-  // ── Premium Fintech Design System ─────────────────────────────────────────
-  static const Color primary = Color(0xFF2962FF); // Premium blue
-  static const Color success = Color(0xFF00C853); // Profit green
-  static const Color danger = Color(0xFFD50000); // Loss red
-  static const Color warning = Color(0xFFFF9800);
-  static const Color accent = Color(0xFF2962FF);
+  // ── Brand / semantic ───────────────────────────────────────────────────
+  static const Color primary = Color(0xFF1B4FD8); // Financial blue
+  static const Color success = Color(0xFF059669); // Profit green
+  static const Color danger = Color(0xFFDC2626); // Loss red
+  static const Color warning = Color(0xFFD97706); // Amber
+  static const Color accent = primary;
 
-  // Backgrounds & Text
-  static const Color background = Color(
-    0xFFFAFAFA,
-  ); // Near-white — bright, clean
-  static const Color surface = Color(0xFFFFFFFF); // Pure white cards
-  static const Color surfaceAlt = Color(0xFFF5F5F5);
-  static const Color surfaceElevated = Color(0xFFFAFAFA);
-  static const Color textPrimary = Color(0xFF111111); // Darker for contrast
-  static const Color textSecondary = Color(0xFF666666); // Softer grey
-  static const Color border = Color(0xFFE0E0E0);
-  static const Color divider = Color(0xFFEAEAEA); // Very subtle divider
+  // Signature hero gradient — the one sanctioned gradient in the app.
+  static const Color heroGradientStart = Color(0xFF3D6FF2);
+  static const Color heroGradientEnd = Color(0xFF13277A);
+  static const LinearGradient heroGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [heroGradientStart, heroGradientEnd],
+  );
 
-  // Nav — premium blue active, clean grey inactive
-  static const Color navActive = Color(0xFF2962FF);
-  static const Color navInactive = Color(0xFF9E9E9E);
+  // Neutral + accent tag chips (e.g. "NSE" / "EQ" badges on watchlist rows)
+  static const Color chipNeutralBg = Color(0xFFEAEEF5);
+  static const Color chipNeutralText = Color(0xFF6B7280);
 
+  // Dark-mode contrast variants (same hue, lifted lightness for AA on near-black)
+  static const Color primaryOnDark = Color(0xFF5B8DFF);
+  static const Color successOnDark = Color(0xFF10B981);
+  static const Color dangerOnDark = Color(0xFFF87171);
+  static const Color warningOnDark = Color(0xFFFBBF24);
+
+  // ── Backgrounds & surfaces (light) ──────────────────────────────────────
+  static const Color background = Color(0xFFF1F4F9); // Cool light gray canvas — cards pop as white on top
+  static const Color surface = Color(0xFFFFFFFF); // Card fill — pure white
+  static const Color surfaceAlt = Color(
+    0xFFEAEEF5,
+  ); // Slightly deeper cool gray — secondary panels, zebra rows
+  static const Color surfaceElevated = Color(
+    0xFFFFFFFF,
+  ); // Sheets/dialogs/menus
+  static const Color textPrimary = Color(0xFF18181B); // Neutral near-black
+  static const Color textSecondary = Color(0xFF6B7280); // Neutral gray
+  static const Color textTertiary = Color(0xFF9CA3AF); // Placeholder/hint
+  static const Color border = Color(0xFFDFE3EA);
+  static const Color divider = Color(0xFFE9ECF2);
+
+  // ── Backgrounds & surfaces (dark) ───────────────────────────────────────
+  static const Color backgroundDark = Color(0xFF17181A);
+  static const Color surfaceDark = Color(0xFF212226);
+  static const Color surfaceAltDark = Color(0xFF2A2B2F);
+  static const Color textPrimaryDark = Color(0xFFECECEE);
+  static const Color textSecondaryDark = Color(0xFF9BA1A6);
+  static const Color borderDark = Color(0xFF34363A);
+  static const Color dividerDark = Color(0xFF2C2D31);
+
+  // Nav
+  static const Color navActive = primary;
+  static const Color navInactive = Color(0xFF9CA3AF);
+  static const Color navActiveDark = primaryOnDark;
+  static const Color navInactiveDark = Color(0xFF71767C);
+
+  // ── Radii ────────────────────────────────────────────────────────────
+  static const double radiusSm = 8.0;
   static const double cardRadius = 12.0;
   static const double heroRadius = 16.0;
+  static const double radiusPill = 999.0;
 
-  // No shadows — flat premium style
-  static List<BoxShadow> softShadow = [];
+  // Cards/dialogs stay flat (border-only). This single subtle shadow token
+  // is the only sanctioned elevation cue, reserved for floating chrome
+  // (e.g. the floating bottom nav) that needs to visually separate from
+  // scrollable content behind it — not for cards or buttons.
+  static const List<BoxShadow> floatingShadow = [
+    BoxShadow(color: Color(0x14000000), blurRadius: 16, offset: Offset(0, 4)),
+  ];
+  static List<BoxShadow> softShadow = const [];
 
   static BoxDecoration cardDecoration = BoxDecoration(
     color: surface,
@@ -38,9 +90,40 @@ class AppColors {
   );
 }
 
+/// 8-point spacing scale. Use these instead of literal EdgeInsets values.
+class AppSpacing {
+  static const double xs = 4;
+  static const double sm = 8;
+  static const double md = 16;
+  static const double lg = 24;
+  static const double xl = 32;
+  static const double xxl = 40;
+  static const double xxxl = 48;
+}
+
 class AppTheme {
   static TextStyle tabular(TextStyle style) {
     return style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+  }
+
+  /// The single token for rendering financial numbers — prices, PnL,
+  /// margin, LTP, average price, portfolio/current value. Always DM Mono
+  /// with tabular figures so digits align in columns.
+  static TextStyle mono({
+    double fontSize = 14,
+    FontWeight fontWeight = FontWeight.w500,
+    Color? color,
+    double? letterSpacing,
+    double? height,
+  }) {
+    return GoogleFonts.dmMono(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      letterSpacing: letterSpacing,
+      height: height,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
   }
 
   static ThemeData get lightTheme {
@@ -107,13 +190,13 @@ class AppTheme {
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleTextStyle: GoogleFonts.inter(
-          color: AppColors.textPrimary, // #111111 — strong contrast
+          color: AppColors.textPrimary,
           fontSize: 18,
           fontWeight: FontWeight.w600,
         ),
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
         shape: const Border(
-          bottom: BorderSide(color: AppColors.divider, width: 1), // very subtle
+          bottom: BorderSide(color: AppColors.divider, width: 1),
         ),
       ),
       cardTheme: CardThemeData(
@@ -167,9 +250,9 @@ class AppTheme {
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         type: BottomNavigationBarType.fixed,
-        backgroundColor: AppColors.surface, // pure white
-        selectedItemColor: AppColors.navActive, // #2962FF premium blue
-        unselectedItemColor: AppColors.navInactive, // #9E9E9E
+        backgroundColor: AppColors.surface,
+        selectedItemColor: AppColors.navActive,
+        unselectedItemColor: AppColors.navInactive,
         selectedLabelStyle: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
@@ -181,20 +264,20 @@ class AppTheme {
         filled: true,
         fillColor: Colors.white,
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 12,
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.md,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
           borderSide: const BorderSide(color: AppColors.border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
           borderSide: const BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1),
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
+          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
         ),
       ),
     );
@@ -204,23 +287,23 @@ class AppTheme {
     final baseTextTheme = GoogleFonts.interTextTheme(
       ThemeData.dark().textTheme,
     );
-    const darkSurface = Color(0xFF1F1F1F);
-    const darkBg = Color(0xFF191919);
-    const darkBorder = Color(0xFF333333);
-    const darkText = Color(0xFFE0E0E0);
-    const darkSecondary = Color(0xFF9E9E9E);
+    const darkSurface = AppColors.surfaceDark;
+    const darkBg = AppColors.backgroundDark;
+    const darkBorder = AppColors.borderDark;
+    const darkText = AppColors.textPrimaryDark;
+    const darkSecondary = AppColors.textSecondaryDark;
 
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      primaryColor: AppColors.primary,
+      primaryColor: AppColors.primaryOnDark,
       scaffoldBackgroundColor: darkBg,
       colorScheme: const ColorScheme.dark(
-        primary: AppColors.primary,
+        primary: AppColors.primaryOnDark,
         surface: darkSurface,
-        secondary: AppColors.accent,
+        secondary: AppColors.primaryOnDark,
         onSurface: darkText,
-        error: AppColors.danger,
+        error: AppColors.dangerOnDark,
       ),
       textTheme: baseTextTheme.copyWith(
         displayLarge: GoogleFonts.inter(
@@ -267,19 +350,23 @@ class AppTheme {
       cardTheme: CardThemeData(
         color: darkSurface,
         elevation: 0,
+        margin: EdgeInsets.zero,
+        shadowColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppColors.cardRadius),
+          side: const BorderSide(color: darkBorder, width: 1),
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
+          backgroundColor: AppColors.primaryOnDark,
           foregroundColor: Colors.white,
           minimumSize: const Size(64, 48),
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppColors.cardRadius),
           ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -292,27 +379,11 @@ class AppTheme {
           textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
         ),
       ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: darkBg,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
-          borderSide: const BorderSide(color: darkBorder),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
-          borderSide: const BorderSide(color: darkBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
-          borderSide: const BorderSide(color: AppColors.primary),
-        ),
-      ),
       dividerTheme: const DividerThemeData(color: darkBorder),
       tabBarTheme: TabBarThemeData(
-        labelColor: AppColors.primary,
+        labelColor: AppColors.primaryOnDark,
         unselectedLabelColor: darkSecondary,
-        indicatorColor: AppColors.primary,
+        indicatorColor: AppColors.primaryOnDark,
         indicatorSize: TabBarIndicatorSize.tab,
         labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(
@@ -320,6 +391,41 @@ class AppTheme {
           fontWeight: FontWeight.w500,
         ),
         dividerColor: darkBorder,
+      ),
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        type: BottomNavigationBarType.fixed,
+        backgroundColor: darkSurface,
+        selectedItemColor: AppColors.navActiveDark,
+        unselectedItemColor: AppColors.navInactiveDark,
+        selectedLabelStyle: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelStyle: const TextStyle(fontSize: 11),
+        elevation: 0,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: darkBg,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.md,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
+          borderSide: const BorderSide(color: darkBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
+          borderSide: const BorderSide(color: darkBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusSm),
+          borderSide: const BorderSide(
+            color: AppColors.primaryOnDark,
+            width: 1.5,
+          ),
+        ),
       ),
     );
   }

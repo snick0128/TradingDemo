@@ -1307,14 +1307,19 @@ class LiveMarketService {
     final channel = _channel;
     if (channel == null) return;
 
-    final sortedSymbols = _subscriptions.toList(growable: false)..sort();
+    // Preserve insertion order — SubscriptionManager puts the currently
+    // VISIBLE screen's symbols first, and the backend's tick-replay-on-
+    // reconnect processes this array in order. Alphabetizing here (as this
+    // used to do) silently discarded that priority: whichever symbol sorted
+    // first got served first, regardless of what the user was looking at.
+    final orderedSymbols = _subscriptions.toList(growable: false);
 
     // [WS_SUBSCRIBE] — exact payload being sent to the backend WebSocket.
     final buf = StringBuffer('[WS_SUBSCRIBE]\n');
-    buf.writeln('count=${sortedSymbols.length}');
+    buf.writeln('count=${orderedSymbols.length}');
     buf.writeln('source=$source  generation=$_wsGeneration');
-    buf.writeln('symbols=[');
-    for (final s in sortedSymbols) {
+    buf.writeln('symbols (priority order)=[');
+    for (final s in orderedSymbols) {
       final tag = _traceSymbols.contains(s) ? '  ← trace/forced' : '';
       buf.writeln('  $s,$tag');
     }
@@ -1331,13 +1336,13 @@ class LiveMarketService {
         : const <String, int>{};
     final payload = jsonEncode({
       'type':    'subscribe',
-      'symbols': sortedSymbols,
+      'symbols': orderedSymbols,
       if (lastSeq.isNotEmpty) 'lastSeq': lastSeq,
     });
     debugPrint('[SUB_SOURCE] class=LiveMarketService method=_sendSubscribe '
         'source=$source generation=$_wsGeneration '
-        'count=${sortedSymbols.length} '
-        'first20=${sortedSymbols.take(20).toList()}');
+        'count=${orderedSymbols.length} '
+        'first20(priority)=${orderedSymbols.take(20).toList()}');
     channel.sink.add(payload);
   }
 

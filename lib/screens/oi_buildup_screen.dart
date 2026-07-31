@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../config/backend_config.dart';
 import '../data/services/backend_api_service.dart';
@@ -344,7 +343,7 @@ class _OIBuildupList extends StatelessWidget {
                       child: Text(
                         '₹${ltp.toStringAsFixed(2)}',
                         textAlign: TextAlign.right,
-                        style: GoogleFonts.jetBrainsMono(
+                        style: AppTheme.mono(
                           fontSize: 12,
                           color: AppColors.textPrimary,
                         ),
@@ -367,7 +366,7 @@ class _OIBuildupList extends StatelessWidget {
                       child: Text(
                         _fmtOI(oiChg),
                         textAlign: TextAlign.right,
-                        style: GoogleFonts.jetBrainsMono(
+                        style: AppTheme.mono(
                           fontSize: 11,
                           color: oiChg >= 0
                               ? AppColors.success

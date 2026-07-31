@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 
 import '../config/backend_config.dart';
@@ -9,17 +9,22 @@ import '../data/services/backend_api_service.dart';
 import '../data/services/market_settings_service.dart';
 import '../models/market_settings.dart';
 import '../models/trading_models.dart';
+import '../theme.dart';
 import 'alert_creation_screen.dart';
 import '../screens/advanced_chart_screen.dart';
+import '../screens/market_depth_screen.dart';
 import '../screens/options_chain_screen.dart';
+import '../screens/time_and_sales_screen.dart';
 import '../services/local_chart_cache.dart';
 import '../services/subscription_manager.dart';
 import '../services/trading_chart_service.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../widgets/app_dialog.dart';
+import '../widgets/instrument_logo.dart';
 import '../widgets/order_form_sheet.dart';
 import '../widgets/shared_widgets.dart';
+import 'universal_search_screen.dart';
 
 class StockDetailScreen extends StatefulWidget {
   final String symbol;
@@ -32,13 +37,33 @@ class StockDetailScreen extends StatefulWidget {
 
 class _StockDetailScreenState extends State<StockDetailScreen>
     with SingleTickerProviderStateMixin {
-  static final Map<String, int> _savedRangeBySymbol = {};
+  static final Map<String, ChartTimeframe> _savedTimeframeBySymbol = {};
   static final Map<String, TradingChartSeries> _chartCache = {};
   static final Map<String, Stock> _quoteCache = {};
   static final Map<String, DateTime> _firstOpenedAt = {};
   static const _localChartCache = LocalChartCache();
   final _api = BackendApiService(baseUrl: BackendConfig.backendBaseUrl);
-  int _selectedRange = 0;
+
+  // Timeframe tabs shown in the inline chart — ordered finest to coarsest.
+  static const _timeframeTabs = [
+    ChartTimeframe.m1,
+    ChartTimeframe.m5,
+    ChartTimeframe.m15,
+    ChartTimeframe.h1,
+    ChartTimeframe.d1,
+    ChartTimeframe.w1,
+  ];
+  static const _timeframeLabels = ['1m', '5m', '15m', '1H', '1D', '1W'];
+
+  // Fine enough that a live tick can be merged into the most recent candle
+  // (rather than requiring a full refetch) and worth auto-refreshing.
+  static const _liveMergeableTimeframes = {
+    ChartTimeframe.m1,
+    ChartTimeframe.m5,
+    ChartTimeframe.m15,
+  };
+
+  ChartTimeframe _timeframe = ChartTimeframe.m5;
   bool _useCandleChart = true;
   TradingChartSeries? _series;
   TradingChartSeries? _prevSeries;
@@ -82,7 +107,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   @override
   void initState() {
     super.initState();
-    _selectedRange = _savedRangeBySymbol[widget.symbol] ?? 0;
+    _timeframe = _savedTimeframeBySymbol[widget.symbol] ?? ChartTimeframe.m5;
     _fadeCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 250),
@@ -122,7 +147,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
 
   String get _cacheSymbol => widget.symbol.trim().toUpperCase();
 
-  String get _seriesCacheKey => '$_cacheSymbol:$_selectedRange';
+  String get _seriesCacheKey => '$_cacheSymbol:${_timeframe.name}';
 
   int _openElapsedMs() {
     final openedAt = _firstOpenedAt[_cacheSymbol];
@@ -363,16 +388,16 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       _logStage('first_tick_latency_ms', _openElapsedMs());
     }
 
-    // On 1M / 1Y / 5Y / Max tabs the candles are too coarse to merge intraday
+    // On 1H / 1D / 1W tabs the candles are too coarse to merge intraday
     // ticks. LivePriceText and the change chip VLB both subscribe to ltpNotifier
     // directly, so NO setState() is needed here — a full screen rebuild on every
     // tick would be wasted work.
-    if (_selectedRange > 1) {
+    if (!_liveMergeableTimeframes.contains(_timeframe)) {
       _lastRealtimePrice = price;
       return;
     }
 
-    // On 1D / 1W tabs: merge tick into live candle and update chart.
+    // On 1m / 5m / 15m tabs: merge tick into live candle and update chart.
     _pendingRealtimePrice = price;
     _tickDebounce ??= Timer(Duration.zero, () {
       _tickDebounce = null;
@@ -385,12 +410,12 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         return;
       }
       debugPrint('[Chart] Tick ${widget.symbol} ₹$pending '
-          'candles=${current.data.length} range=$_selectedRange at_live=$_isAtLive');
+          'candles=${current.data.length} timeframe=${_timeframe.name} at_live=$_isAtLive');
 
       final (:series, :isNewCandle) = TradingChartService.mergeRealtimeTick(
         current,
         pending,
-        intervalMinutes: _intervalMinutesForRange(_selectedRange),
+        intervalMinutes: _intervalMinutes(_timeframe),
       );
       _chartCache[_seriesCacheKey] = series;
 
@@ -437,8 +462,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
       try {
         final sw = Stopwatch()..start();
         final now = DateTime.now().toUtc();
-        final interval = _intervalForRange(_selectedRange);
-        final from = _fromForRange(now, _selectedRange);
+        final interval = _apiInterval(_timeframe);
+        final from = _fromForTimeframe(now, _timeframe);
         final store = _store!;
         final stock = store.stockBySymbol(widget.symbol);
 
@@ -458,7 +483,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             )
             .timeout(const Duration(seconds: 8));
         if (gen != _loadGeneration || !mounted) return;
-        final maxCandles = _maxCandlesForRange(_selectedRange);
+        final maxCandles = _maxCandlesForTimeframe(_timeframe);
         final visibleCandles = candles.length > maxCandles
             ? candles.sublist(candles.length - maxCandles)
             : candles;
@@ -488,7 +513,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         // Guard is required: _loadSeries() is async and may reach this point
         // after dispose() has already run and cancelled the previous timer.
         if (!mounted) return;
-        if (_selectedRange <= 1) {
+        if (_liveMergeableTimeframes.contains(_timeframe)) {
           _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
             if (mounted) _loadSeries();
           });
@@ -516,53 +541,52 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     }
   }
 
-  int _maxCandlesForRange(int rangeIdx) {
-    switch (rangeIdx) {
-      case 0:
-        return 78; // 1D @ 5m → ~78 candles in a trading day
-      case 1:
-        return 120; // 1W @ 15m → ~120 candles
-      case 2:
-        return 160; // 1M @ 1h → ~160 candles
-      case 3:
-        return 250; // 1Y @ 1d → ~250 trading days
-      case 4:
-        return 260; // 5Y @ 1w → ~260 weeks
-      default:
-        return 300; // Max @ 1w
+  int _maxCandlesForTimeframe(ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1:
+        return 400; // 1m over 1 day → ~375 candles in a trading day
+      case ChartTimeframe.m5:
+        return 78; // 5m over 1 day → ~78 candles in a trading day
+      case ChartTimeframe.m15:
+        return 130; // 15m over 7 days → ~120 candles
+      case ChartTimeframe.h1:
+        return 160; // 1h over 30 days → ~160 candles
+      case ChartTimeframe.d1:
+        return 250; // 1d over 1 year → ~250 trading days
+      default: // w1
+        return 260; // 1w over 5 years → ~260 weeks
     }
   }
 
-  DateTime _fromForRange(DateTime nowUtc, int rangeIdx) {
-    switch (rangeIdx) {
-      case 0:
-        return nowUtc.subtract(const Duration(days: 1)); // 1D
-      case 1:
-        return nowUtc.subtract(const Duration(days: 7)); // 1W
-      case 2:
-        return nowUtc.subtract(const Duration(days: 30)); // 1M
-      case 3:
-        return nowUtc.subtract(const Duration(days: 365)); // 1Y
-      case 4:
-        return nowUtc.subtract(const Duration(days: 365 * 5)); // 5Y
-      default:
-        return nowUtc.subtract(const Duration(days: 365 * 20)); // Max
+  DateTime _fromForTimeframe(DateTime nowUtc, ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1:
+      case ChartTimeframe.m5:
+        return nowUtc.subtract(const Duration(days: 1));
+      case ChartTimeframe.m15:
+        return nowUtc.subtract(const Duration(days: 7));
+      case ChartTimeframe.h1:
+        return nowUtc.subtract(const Duration(days: 30));
+      case ChartTimeframe.d1:
+        return nowUtc.subtract(const Duration(days: 365));
+      default: // w1
+        return nowUtc.subtract(const Duration(days: 365 * 5));
     }
   }
 
-  String _intervalForRange(int rangeIdx) {
-    switch (rangeIdx) {
-      case 0: // 1D
+  String _apiInterval(ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1:
+        return '1m';
+      case ChartTimeframe.m5:
         return '5m';
-      case 1: // 1W
+      case ChartTimeframe.m15:
         return '15m';
-      case 2: // 1M
+      case ChartTimeframe.h1:
         return '1h';
-      case 3: // 1Y
+      case ChartTimeframe.d1:
         return '1d';
-      case 4: // 5Y
-        return '1w';
-      default: // Max
+      default: // w1
         return '1w';
     }
   }
@@ -575,6 +599,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final int roundedMin;
     final int roundedHour;
     switch (interval) {
+      case '1m':
+        roundedMin = d.minute;
+        roundedHour = d.hour;
       case '5m':
         roundedMin = (d.minute ~/ 5) * 5;
         roundedHour = d.hour;
@@ -601,14 +628,15 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     return '${d.year}-$m-$day $h:$min';
   }
 
-  /// Candle interval in minutes for the given range tab index.
-  int _intervalMinutesForRange(int rangeIdx) {
-    switch (rangeIdx) {
-      case 0: return 5;          // 1D  → 5m candles
-      case 1: return 15;         // 1W  → 15m candles
-      case 2: return 60;         // 1M  → 1h candles
-      case 3: return 24 * 60;    // 1Y  → daily candles
-      default: return 24 * 60 * 7; // 5Y/max → weekly candles
+  /// Candle interval in minutes for the given timeframe.
+  int _intervalMinutes(ChartTimeframe tf) {
+    switch (tf) {
+      case ChartTimeframe.m1: return 1;
+      case ChartTimeframe.m5: return 5;
+      case ChartTimeframe.m15: return 15;
+      case ChartTimeframe.h1: return 60;
+      case ChartTimeframe.d1: return 24 * 60;
+      default: return 24 * 60 * 7; // w1
     }
   }
 
@@ -620,18 +648,18 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   }
 
   /// Format a DateTime for the x-axis label in the inline chart.
-  String _formatAxisLabel(DateTime t, int rangeIdx) {
+  String _formatAxisLabel(DateTime t, ChartTimeframe tf) {
     final local = t.toLocal();
-    if (rangeIdx <= 1) {
-      // intraday / weekly — show HH:mm
+    if (tf == ChartTimeframe.m1 || tf == ChartTimeframe.m5 || tf == ChartTimeframe.m15) {
+      // intraday — show HH:mm
       return '${local.hour.toString().padLeft(2,'0')}:${local.minute.toString().padLeft(2,'0')}';
     }
-    if (rangeIdx == 2) {
-      // monthly — show "dd MMM"
+    if (tf == ChartTimeframe.h1) {
+      // hourly over a month — show "dd MMM"
       const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       return '${local.day} ${months[local.month - 1]}';
     }
-    // yearly / max — show "MMM yy"
+    // daily / weekly — show "MMM yy"
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${months[local.month - 1]} ${(local.year % 100).toString().padLeft(2,'0')}';
   }
@@ -660,12 +688,10 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     // use latest candle close so header/order UI never shows ₹0.00.
     final stock = _withSeriesFallback(rawStock, displaySeries);
     final isPos = stock.changePercentage >= 0;
-    final chartColor = isPos
-        ? const Color(0xFF00C853)
-        : const Color(0xFFD50000);
+    final chartColor = isPos ? AppColors.success : AppColors.danger;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.surface,
       appBar: _buildAppBar(context, store, stock),
       bottomNavigationBar: _buildBottomBar(context, stock),
       body: SingleChildScrollView(
@@ -674,50 +700,66 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           children: [
             _buildStockHeader(context, stock),
             _buildHydrationStrip(),
-            _buildChartSection(
-              context,
-              displaySeries,
-              chartColor,
-              !_useCandleChart,
-            ),
-            // Error banner with retry button
-            if (_seriesError != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                child: Row(
-                  children: [
-                    const Text(
-                      'Chart unavailable',
-                      style: TextStyle(fontSize: 11, color: Color(0xFFD32F2F)),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: _loadSeries,
-                      child: const Text(
-                        'Retry',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF1565C0),
-                          decoration: TextDecoration.underline,
-                        ),
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(AppColors.cardRadius),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Column(
+                children: [
+                  _buildTimeframeRow(context, displaySeries),
+                  _buildChartSection(
+                    context,
+                    displaySeries,
+                    chartColor,
+                    !_useCandleChart,
+                  ),
+                  // Error banner with retry button
+                  if (_seriesError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                      child: Row(
+                        children: [
+                          const Text(
+                            'Chart unavailable',
+                            style: TextStyle(fontSize: 11, color: AppColors.danger),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: _loadSeries,
+                            child: const Text(
+                              'Retry',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.primary,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  _buildDayRangeRow(stock, displaySeries),
+                  const SizedBox(height: 4),
+                ],
               ),
-            _buildTimeframeRow(context),
+            ),
             const SizedBox(height: 24),
-            _buildSectionHeader('Market stats'),
+            _buildSectionHeader(
+              'Market stats',
+              trailingLabel: 'View All',
+              onTrailingTap: () => _showFundamentalsSheet(context, stock),
+            ),
             _buildStatsGrid(
               context,
               stock,
               displaySeries,
               MediaQuery.of(context).size.width >= 1060,
             ),
-            const SizedBox(height: 24),
-            _buildSectionHeader('Fundamentals'),
-            _buildFundamentalsGrid(context, stock),
             const SizedBox(height: 24),
             if (_supportsDerivatives(stock)) _buildDerivativesSection(context),
             const SizedBox(height: 24),
@@ -791,7 +833,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           Expanded(
             child: Text(
               messages.join(' • '),
-              style: const TextStyle(fontSize: 11, color: Color(0xFF757575)),
+              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -808,20 +850,28 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final inWatchlist =
         store.watchlists.any((wl) => wl.symbols.contains(stock.symbol));
     return AppBar(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.surface,
       elevation: 0,
       scrolledUnderElevation: 0,
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Color(0xFF0D0D0D), size: 24),
+        icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary, size: 24),
         onPressed: () => Navigator.pop(context),
       ),
       title: null,
       centerTitle: true,
       actions: [
         IconButton(
+          icon: const Icon(LucideIcons.search, color: AppColors.textPrimary, size: 22),
+          tooltip: 'Search',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const UniversalSearchScreen()),
+          ),
+        ),
+        IconButton(
           icon: const Icon(
             Icons.notifications_outlined,
-            color: Color(0xFF0D0D0D),
+            color: AppColors.textPrimary,
             size: 24,
           ),
           onPressed: () => Navigator.push(
@@ -834,16 +884,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         IconButton(
           icon: Icon(
             inWatchlist ? Icons.bookmark : Icons.bookmark_border,
-            color: inWatchlist
-                ? const Color(0xFF00897B)
-                : const Color(0xFF0D0D0D),
+            color: inWatchlist ? AppColors.primary : AppColors.textPrimary,
             size: 24,
           ),
           onPressed: () => _handleSaveTap(context, store, stock),
         ),
         const SizedBox(width: 4),
       ],
-      shape: const Border(bottom: BorderSide(color: Color(0xFFF0F0F0))),
+      shape: const Border(bottom: BorderSide(color: AppColors.divider)),
     );
   }
 
@@ -879,178 +927,194 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     );
   }
 
+  static String _segmentLabel(InstrumentType t) {
+    switch (t) {
+      case InstrumentType.equity: return 'EQ';
+      case InstrumentType.marketIndex: return 'IDX';
+      case InstrumentType.etf: return 'ETF';
+      case InstrumentType.futuresStkIdx:
+      case InstrumentType.futuresCom: return 'FUT';
+      case InstrumentType.optionCE: return 'CE';
+      case InstrumentType.optionPE: return 'PE';
+      case InstrumentType.currency: return 'CCY';
+      case InstrumentType.unknown: return 'EQ';
+    }
+  }
+
   Widget _buildStockHeader(BuildContext context, Stock stock) {
     assert(() {
       _headerBuildCount++;
       debugPrint('[StockDetailPerf] ${widget.symbol} header_build=$_headerBuildCount');
       return true;
     }());
-    final exColor = _exchangeBadgeColor(stock.exchange);
     final chips = _derivativeChips(context, stock);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Compact two-column header row ──────────────────────────────
+          // ── Identity row: avatar · symbol · exchange/segment chips · name ─
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Left: avatar + symbol + name
+              InstrumentLogo.forStock(stock, size: 40),
+              const SizedBox(width: 10),
               Expanded(
-                child: Row(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Small letter badge
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: exColor.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: exColor.withOpacity(0.25)),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        stock.symbol.isNotEmpty ? stock.symbol[0] : '?',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: exColor,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            stock.symbol,
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 6),
+                        AppTagChip.neutral(stock.exchange.isNotEmpty ? stock.exchange : 'NSE'),
+                        const SizedBox(width: 4),
+                        AppTagChip(_segmentLabel(stock.instrumentType)),
+                      ],
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
+                    const SizedBox(height: 3),
+                    Text(
+                      stock.name,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    // Expiry badge on its own line so it never overlaps price
+                    if (stock.isFutures) ...[
+                      const SizedBox(height: 4),
+                      _ExpiryBadge(stock: stock),
+                    ] else if (_indexNearestExpiry != null) ...[
+                      const SizedBox(height: 4),
+                      _IndexExpiryBadge(
+                        expiryIso: _indexNearestExpiry!,
+                        exchange: stock.exchange,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+
+          // ── Price hero — the dominant element on this screen ────────────
+          ValueListenableBuilder<double>(
+            valueListenable: _store!.ltpNotifier(widget.symbol),
+            builder: (_, ltp, __) {
+              assert(() {
+                _priceBuildCount++;
+                debugPrint('[StockDetailPerf] ${widget.symbol} price_build=$_priceBuildCount');
+                return true;
+              }());
+              final effectiveLtp = ltp > 0 ? ltp : stock.currentPrice;
+              final pct = stock.changePercentage;
+              final amt = effectiveLtp * pct / 100;
+              final isPos = pct >= 0;
+              final color = isPos ? AppColors.success : AppColors.danger;
+              final sign = isPos ? '+' : '';
+              final marketOpen = _marketSettings.isTimeOpen(stock.exchange);
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: PriceFlashWidget(
+                      price: effectiveLtp,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Symbol + exchange badge row
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              '₹${effectiveLtp.toStringAsFixed(2)}',
+                              style: AppTheme.mono(fontSize: 36, fontWeight: FontWeight.w800, color: AppColors.textPrimary, height: 1.0),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
                           Row(
                             children: [
-                              Text(
-                                stock.symbol,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0D0D0D),
-                                ),
+                              Icon(
+                                isPos ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                                size: 16,
+                                color: color,
                               ),
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 5,
-                                  vertical: 1,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: exColor.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
+                              const SizedBox(width: 3),
+                              Flexible(
                                 child: Text(
-                                  stock.exchange.isNotEmpty
-                                      ? stock.exchange
-                                      : 'NSE',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                    color: exColor,
-                                  ),
+                                  '$sign${amt.toStringAsFixed(2)} ($sign${pct.abs().toStringAsFixed(2)}%)',
+                                  style: AppTheme.mono(fontSize: 15, fontWeight: FontWeight.w700, color: color),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
                           ),
-                          // Expiry badge on its own line so it never overlaps price
-                          if (stock.isFutures) ...[
-                            const SizedBox(height: 3),
-                            _ExpiryBadge(stock: stock),
-                          ] else if (_indexNearestExpiry != null) ...[
-                            const SizedBox(height: 3),
-                            _IndexExpiryBadge(
-                              expiryIso: _indexNearestExpiry!,
-                              exchange: stock.exchange,
-                            ),
-                          ],
-                          const SizedBox(height: 2),
-                          Text(
-                            stock.name,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF757575),
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                          ),
                         ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Right: LTP + change
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  LivePriceText(
-                    symbol: widget.symbol,
-                    store: _store!,
-                    style: GoogleFonts.inter(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF0D0D0D),
-                      fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                  SizedBox(
+                    width: 72,
+                    height: 36,
+                    child: Sparkline(
+                      valueListenable: _store!.ltpNotifier(widget.symbol),
+                      color: color,
+                      seedValue: effectiveLtp,
+                      symbol: stock.symbol,
+                      exchange: stock.exchange,
+                      token: stock.token,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  // Change chip updates on every tick via its own VLB so the
-                  // full screen does NOT need to rebuild for price movement.
-                  ValueListenableBuilder<double>(
-                    valueListenable: _store!.ltpNotifier(widget.symbol),
-                    builder: (_, ltp, __) {
-                      assert(() {
-                        _priceBuildCount++;
-                        debugPrint('[StockDetailPerf] ${widget.symbol} price_build=$_priceBuildCount');
-                        return true;
-                      }());
-                      final effectiveLtp = ltp > 0 ? ltp : stock.currentPrice;
-                      final pct = stock.changePercentage;
-                      final amt = effectiveLtp * pct / 100;
-                      final isChipPos = pct >= 0;
-                      final chipArrow = isChipPos ? '+' : '';
-                      final chipColor = isChipPos
-                          ? const Color(0xFF00C853)
-                          : const Color(0xFFD50000);
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: chipColor.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          '$chipArrow${amt.toStringAsFixed(2)} ($chipArrow${pct.abs().toStringAsFixed(2)}%)',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: chipColor,
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: marketOpen ? AppColors.success : AppColors.textTertiary,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                          const SizedBox(width: 4),
+                          Text(
+                            marketOpen ? 'LIVE' : 'CLOSED',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.4,
+                              color: marketOpen ? AppColors.success : AppColors.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        marketOpen ? 'Market Open' : 'Market Closed',
+                        style: const TextStyle(fontSize: 11, color: AppColors.textTertiary, fontWeight: FontWeight.w500),
+                      ),
+                    ],
                   ),
                 ],
-              ),
-            ],
+              );
+            },
           ),
+
           // ── Derivative chips ────────────────────────────────────────────
           if (chips.isNotEmpty) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
             Row(children: chips),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
         ],
       ),
     );
@@ -1076,9 +1140,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final showVolume = series.data.any((c) => c.volume > 0);
     final n = series.data.length;
 
-    final prevCloseRef = _selectedRange == 0
+    final prevCloseRef = (_timeframe == ChartTimeframe.m1 || _timeframe == ChartTimeframe.m5)
         ? series.open
         : (series.data.isNotEmpty ? series.data.first.close : 0.0);
+    final liveLtp = _store!.ltpNotifier(widget.symbol).value;
+    final effectiveLtp = liveLtp > 0 ? liveLtp : series.close;
 
     // ── Index-based x-axis setup ───────────────────────────────────────────
     // Using candle list-index (0, 1, 2, …, n-1) as the x-value eliminates
@@ -1105,7 +1171,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               final idx = details.value.round();
               if (idx >= 0 && idx < n) {
                 return ChartAxisLabel(
-                  _formatAxisLabel(series.data[idx].time, _selectedRange),
+                  _formatAxisLabel(series.data[idx].time, _timeframe),
                   details.textStyle,
                 );
               }
@@ -1144,9 +1210,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         Column(
           children: [
             Container(
-              color: Colors.white,
+              color: AppColors.surface,
               child: SizedBox(
-                height: 300,
+                height: 260,
                 child: Padding(
                   padding: const EdgeInsets.only(top: 16),
                   child: FadeTransition(
@@ -1155,34 +1221,54 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         ? const Center(
                             child: Text(
                               'Chart data unavailable',
-                              style: TextStyle(fontSize: 13, color: Color(0xFF757575)),
+                              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
                             ),
                           )
                         : effectiveLineMode
                         // ── Line chart ─────────────────────────────────────
                         ? SfCartesianChart(
-                            key: ValueKey('line_${widget.symbol}_${_selectedRange}_$_chartKey'),
-                            backgroundColor: Colors.white,
-                            plotAreaBackgroundColor: Colors.white,
+                            key: ValueKey('line_${widget.symbol}_${_timeframe.name}_$_chartKey'),
+                            backgroundColor: AppColors.surface,
+                            plotAreaBackgroundColor: AppColors.surface,
                             enableAxisAnimation: false,
                             plotAreaBorderWidth: 0,
                             margin: const EdgeInsets.only(right: 8),
                             primaryXAxis: _buildXAxis(),
                             primaryYAxis: NumericAxis(
-                              isVisible: false,
+                              isVisible: true,
+                              opposedPosition: true,
                               rangePadding: ChartRangePadding.round,
-                              plotBands: hasRealCandles && prevCloseRef > 0
-                                  ? <PlotBand>[
-                                      PlotBand(
-                                        start: prevCloseRef,
-                                        end: prevCloseRef,
-                                        borderColor: const Color(0xFFBDBDBD),
-                                        borderWidth: 1,
-                                        dashArray: const <double>[5, 4],
-                                      ),
-                                    ]
-                                  : [],
-                              majorGridLines: const MajorGridLines(width: 0),
+                              labelStyle: const TextStyle(fontSize: 10, color: AppColors.textTertiary),
+                              axisLabelFormatter: (details) => ChartAxisLabel(
+                                _fmtAxisPrice(details.value.toDouble()),
+                                details.textStyle,
+                              ),
+                              plotBands: [
+                                if (hasRealCandles && prevCloseRef > 0)
+                                  PlotBand(
+                                    start: prevCloseRef,
+                                    end: prevCloseRef,
+                                    borderColor: AppColors.border,
+                                    borderWidth: 1,
+                                    dashArray: const <double>[5, 4],
+                                  ),
+                                if (hasRealCandles && effectiveLtp > 0)
+                                  PlotBand(
+                                    start: effectiveLtp,
+                                    end: effectiveLtp,
+                                    borderColor: chartColor,
+                                    borderWidth: 1.2,
+                                    dashArray: const <double>[4, 4],
+                                    text: '  ${_fmtAxisPrice(effectiveLtp)}',
+                                    textStyle: TextStyle(
+                                      color: chartColor,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    verticalTextAlignment: TextAnchor.middle,
+                                  ),
+                              ],
+                              majorGridLines: const MajorGridLines(width: 1, color: AppColors.divider),
                               axisLine: const AxisLine(width: 0),
                               majorTickLines: const MajorTickLines(size: 0),
                             ),
@@ -1207,28 +1293,48 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                           )
                         // ── Candle chart ────────────────────────────────────
                         : SfCartesianChart(
-                            key: ValueKey('candle_${widget.symbol}_${_selectedRange}_$_chartKey'),
-                            backgroundColor: Colors.white,
-                            plotAreaBackgroundColor: Colors.white,
+                            key: ValueKey('candle_${widget.symbol}_${_timeframe.name}_$_chartKey'),
+                            backgroundColor: AppColors.surface,
+                            plotAreaBackgroundColor: AppColors.surface,
                             enableAxisAnimation: false,
                             plotAreaBorderWidth: 0,
                             margin: const EdgeInsets.only(right: 8),
                             primaryXAxis: _buildXAxis(),
                             primaryYAxis: NumericAxis(
-                              isVisible: false,
+                              isVisible: true,
+                              opposedPosition: true,
                               rangePadding: ChartRangePadding.round,
-                              plotBands: hasRealCandles && prevCloseRef > 0
-                                  ? <PlotBand>[
-                                      PlotBand(
-                                        start: prevCloseRef,
-                                        end: prevCloseRef,
-                                        borderColor: const Color(0xFFBDBDBD),
-                                        borderWidth: 1,
-                                        dashArray: const <double>[5, 4],
-                                      ),
-                                    ]
-                                  : [],
-                              majorGridLines: const MajorGridLines(width: 0),
+                              labelStyle: const TextStyle(fontSize: 10, color: AppColors.textTertiary),
+                              axisLabelFormatter: (details) => ChartAxisLabel(
+                                _fmtAxisPrice(details.value.toDouble()),
+                                details.textStyle,
+                              ),
+                              plotBands: [
+                                if (hasRealCandles && prevCloseRef > 0)
+                                  PlotBand(
+                                    start: prevCloseRef,
+                                    end: prevCloseRef,
+                                    borderColor: AppColors.border,
+                                    borderWidth: 1,
+                                    dashArray: const <double>[5, 4],
+                                  ),
+                                if (hasRealCandles && effectiveLtp > 0)
+                                  PlotBand(
+                                    start: effectiveLtp,
+                                    end: effectiveLtp,
+                                    borderColor: chartColor,
+                                    borderWidth: 1.2,
+                                    dashArray: const <double>[4, 4],
+                                    text: '  ${_fmtAxisPrice(effectiveLtp)}',
+                                    textStyle: TextStyle(
+                                      color: chartColor,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    verticalTextAlignment: TextAnchor.middle,
+                                  ),
+                              ],
+                              majorGridLines: const MajorGridLines(width: 1, color: AppColors.divider),
                               axisLine: const AxisLine(width: 0),
                               majorTickLines: const MajorTickLines(size: 0),
                             ),
@@ -1236,7 +1342,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                             trackballBehavior: TrackballBehavior(
                               enable: true,
                               activationMode: ActivationMode.singleTap,
-                              lineColor: const Color(0xFFBDBDBD),
+                              lineColor: AppColors.textTertiary,
                               lineWidth: 1,
                             ),
                             zoomPanBehavior: ZoomPanBehavior(
@@ -1254,8 +1360,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                                 openValueMapper:  (c, _) => c.open,
                                 closeValueMapper: (c, _) => c.close,
                                 enableSolidCandles: true,
-                                bearColor: const Color(0xFFE53935),
-                                bullColor: const Color(0xFF00C853),
+                                bearColor: AppColors.danger,
+                                bullColor: AppColors.success,
                                 width:   n > 100 ? 0.7 : 0.6,
                                 spacing: n > 100 ? 0.1 : 0.15,
                                 animationDuration: 0,
@@ -1274,7 +1380,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                 child: FadeTransition(
                   opacity: fadeOpacity,
                   child: SfCartesianChart(
-                    key: ValueKey('vol_${widget.symbol}_${_selectedRange}_$_chartKey'),
+                    key: ValueKey('vol_${widget.symbol}_${_timeframe.name}_$_chartKey'),
                     enableAxisAnimation: false,
                     plotAreaBorderWidth: 0,
                     margin: const EdgeInsets.only(right: 8),
@@ -1298,8 +1404,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         xValueMapper: (c, i) => i,
                         yValueMapper: (c, _) => c.volume,
                         pointColorMapper: (c, _) => c.close >= c.open
-                            ? const Color(0xFF00C853).withOpacity(0.28)
-                            : const Color(0xFFE53935).withOpacity(0.28),
+                            ? AppColors.success.withOpacity(0.28)
+                            : AppColors.danger.withOpacity(0.28),
                         borderWidth: 0,
                         spacing: 0.25,
                         animationDuration: 0,
@@ -1334,7 +1440,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             ),
           ),
         // ── "Go To Live" button — shown when user has panned away ──────────
-        if (!_isAtLive && hasRealCandles && _selectedRange <= 1)
+        if (!_isAtLive && hasRealCandles && _liveMergeableTimeframes.contains(_timeframe))
           Positioned(
             top: 24,
             right: 52,
@@ -1348,15 +1454,9 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1565C0),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.12),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                  boxShadow: AppColors.floatingShadow,
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1376,49 +1476,11 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               ),
             ),
           ),
-        // ── Expand icon ────────────────────────────────────────────────────
-        Positioned(
-          bottom: 8,
-          right: 8,
-          child: GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => AdvancedChartScreen(
-                  symbol: widget.symbol,
-                  initialSeries: series,
-                ),
-              ),
-            ),
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFE0E0E0)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.06),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.open_in_full,
-                size: 16,
-                color: Color(0xFF757575),
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
 
-  Widget _buildTimeframeRow(BuildContext context) {
-    const labels = ['1D', '1W', '1M', '1Y', '5Y', 'Max'];
+  Widget _buildTimeframeRow(BuildContext context, TradingChartSeries series) {
     return SizedBox(
       height: 48,
       child: Row(
@@ -1427,36 +1489,35 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
-                children: List.generate(labels.length, (i) {
-                  final selected = i == _selectedRange;
+                children: List.generate(_timeframeTabs.length, (i) {
+                  final tf = _timeframeTabs[i];
+                  final selected = tf == _timeframe;
                   return GestureDetector(
                     onTap: () {
-                      setState(() => _selectedRange = i);
-                      _savedRangeBySymbol[widget.symbol] = i;
+                      setState(() => _timeframe = tf);
+                      _savedTimeframeBySymbol[widget.symbol] = tf;
                       _loadSeries();
                     },
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
+                        horizontal: 14,
+                        vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFFE8EEF7)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(20),
+                        color: selected ? AppColors.primary : AppColors.surfaceAlt,
+                        borderRadius: BorderRadius.circular(AppColors.radiusPill),
                       ),
                       child: Text(
-                        labels[i],
+                        _timeframeLabels[i],
                         style: TextStyle(
                           fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: selected
-                              ? const Color(0xFF1565C0)
-                              : const Color(0xFF9E9E9E),
+                          fontWeight: FontWeight.w700,
+                          color: selected ? Colors.white : AppColors.textSecondary,
                         ),
                       ),
                     ),
@@ -1467,17 +1528,50 @@ class _StockDetailScreenState extends State<StockDetailScreen>
           ),
           // Candle / Line toggle button — same height as timeframe pills
           Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 8),
             child: GestureDetector(
               onTap: () => setState(() => _useCandleChart = !_useCandleChart),
               child: Container(
                 width: 36,
                 height: 36,
                 alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceAlt,
+                  shape: BoxShape.circle,
+                ),
                 child: Icon(
                   _useCandleChart ? Icons.show_chart : Icons.bar_chart,
-                  size: 20,
-                  color: const Color(0xFF555555),
+                  size: 18,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+          // Fullscreen — opens the full-featured advanced chart screen
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AdvancedChartScreen(
+                    symbol: widget.symbol,
+                    initialSeries: series,
+                  ),
+                ),
+              ),
+              child: Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: AppColors.surfaceAlt,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.open_in_full,
+                  size: 16,
+                  color: AppColors.textSecondary,
                 ),
               ),
             ),
@@ -1487,16 +1581,110 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     );
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(String title, {String? trailingLabel, VoidCallback? onTrailingTap}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 15,
-          fontWeight: FontWeight.w500,
-          color: Color(0xFF0D0D0D),
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          if (trailingLabel != null)
+            GestureDetector(
+              onTap: onTrailingTap,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    trailingLabel,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, size: 16, color: AppColors.primary),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Day's Range — a compact low/high bar with a dot marking today's price,
+  /// derived from the same real candle series already loaded for the chart.
+  Widget _buildDayRangeRow(Stock stock, TradingChartSeries series) {
+    final low = series.low > 0 ? series.low : (stock.low ?? 0);
+    final high = series.high > 0 ? series.high : (stock.high ?? 0);
+    if (low <= 0 || high <= 0 || high <= low) return const SizedBox.shrink();
+    final liveLtp = _store!.ltpNotifier(widget.symbol).value;
+    final current = liveLtp > 0 ? liveLtp : stock.currentPrice;
+    final fraction = ((current - low) / (high - low)).clamp(0.0, 1.0);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(AppColors.radiusSm),
+            ),
+            child: const Icon(Icons.equalizer_rounded, size: 16, color: AppColors.primary),
+          ),
+          const SizedBox(width: 10),
+          const Text(
+            "Day's Range",
+            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            '₹${low.toStringAsFixed(2)}',
+            style: AppTheme.mono(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return Stack(
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      Container(height: 2, color: AppColors.border),
+                      Positioned(
+                        left: (fraction * (constraints.maxWidth - 10)).clamp(0.0, constraints.maxWidth - 10),
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          Text(
+            '₹${high.toStringAsFixed(2)}',
+            style: AppTheme.mono(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+          ),
+        ],
       ),
     );
   }
@@ -1510,11 +1698,32 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     final prevClose = series.data.length > 1
         ? series.data[series.data.length - 2].close
         : series.open;
+    final avgVolume = series.data.isNotEmpty
+        ? series.data.map((c) => c.volume).reduce((a, b) => a + b) / series.data.length
+        : 0.0;
+    final base = stock.currentPrice;
     final stats = [
       ('Open', series.open > 0 ? '₹${series.open.toStringAsFixed(2)}' : '—'),
       ('Prev Close', prevClose > 0 ? '₹${prevClose.toStringAsFixed(2)}' : '—'),
       ('High', series.high > 0 ? '₹${series.high.toStringAsFixed(2)}' : '—'),
       ('Low', series.low > 0 ? '₹${series.low.toStringAsFixed(2)}' : '—'),
+      (
+        'Volume',
+        series.volume > 0
+            ? _fmtVolume(series.volume)
+            : stock.volume != null
+            ? _fmtVolume(stock.volume!)
+            : '—',
+      ),
+      ('Avg. Volume', avgVolume > 0 ? _fmtVolume(avgVolume) : '—'),
+      (
+        'Upper Circuit',
+        stock.upperCircuit != null ? '₹${stock.upperCircuit!.toStringAsFixed(2)}' : '—',
+      ),
+      (
+        'Lower Circuit',
+        stock.lowerCircuit != null ? '₹${stock.lowerCircuit!.toStringAsFixed(2)}' : '—',
+      ),
       (
         '52W High',
         stock.week52High != null
@@ -1532,16 +1741,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             : '—',
       ),
       (
-        'Volume',
-        series.volume > 0
-            ? _fmtVolume(series.volume)
-            : stock.volume != null
-            ? _fmtVolume(stock.volume!)
-            : '—',
+        'Mkt Cap',
+        stock.marketCap != null
+            ? _fmtMarketCap(stock.marketCap!)
+            : '₹${(base * 6800000 / 10000000).toStringAsFixed(0)}Cr',
       ),
       ('VWAP', series.vwap > 0 ? '₹${series.vwap.toStringAsFixed(2)}' : '—'),
     ];
-    return _twoColGrid(stats);
+    return _twoColGrid(stats, columns: 4);
   }
 
   Widget _buildFundamentalsGrid(BuildContext context, Stock stock) {
@@ -1619,6 +1826,21 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     return v.toStringAsFixed(0);
   }
 
+  /// Formats a chart axis price with thousands separators (e.g. "1,292.90")
+  /// without pulling in `intl` just for this.
+  String _fmtAxisPrice(double v) {
+    final isNeg = v < 0;
+    final fixed = v.abs().toStringAsFixed(2);
+    final parts = fixed.split('.');
+    final intPart = parts[0];
+    final buf = StringBuffer();
+    for (var i = 0; i < intPart.length; i++) {
+      if (i > 0 && (intPart.length - i) % 3 == 0) buf.write(',');
+      buf.write(intPart[i]);
+    }
+    return '${isNeg ? '-' : ''}$buf.${parts[1]}';
+  }
+
   String _fmtMarketCap(double v) {
     if (v >= 10000000) return '₹${(v / 10000000).toStringAsFixed(2)}Cr';
     if (v >= 100000) return '₹${(v / 100000).toStringAsFixed(2)}L';
@@ -1659,25 +1881,25 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     return ticks[symbol.toUpperCase()] ?? '—';
   }
 
-  Widget _twoColGrid(List<(String, String)> stats) {
+  Widget _twoColGrid(List<(String, String)> stats, {int columns = 2}) {
+    final isFourCol = columns >= 4;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-          childAspectRatio: 2.4,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: columns,
+          crossAxisSpacing: isFourCol ? 8 : 10,
+          mainAxisSpacing: isFourCol ? 8 : 10,
+          childAspectRatio: isFourCol ? 1.35 : 2.6,
         ),
         itemCount: stats.length,
         itemBuilder: (_, i) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: EdgeInsets.symmetric(horizontal: isFourCol ? 10 : 14, vertical: isFourCol ? 10 : 12),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFFE0E0E0)),
+            color: AppColors.surfaceAlt,
+            borderRadius: BorderRadius.circular(AppColors.radiusSm),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1685,16 +1907,14 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             children: [
               Text(
                 stats[i].$1,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF757575)),
+                style: TextStyle(fontSize: isFourCol ? 10.5 : 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 4),
               Text(
                 stats[i].$2,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF0D0D0D),
-                ),
+                style: AppTheme.mono(fontSize: isFourCol ? 12.5 : 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -1720,8 +1940,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             'About ${stock.name}',
             style: const TextStyle(
               fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF0D0D0D),
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 8),
@@ -1729,7 +1949,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
             description,
             style: const TextStyle(
               fontSize: 13,
-              color: Color(0xFF757575),
+              color: AppColors.textSecondary,
               height: 1.5,
             ),
             maxLines: 3,
@@ -1742,8 +1962,8 @@ class _StockDetailScreenState extends State<StockDetailScreen>
               'Read more',
               style: TextStyle(
                 fontSize: 13,
-                color: Color(0xFF1565C0),
-                fontWeight: FontWeight.w500,
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -1815,7 +2035,59 @@ class _StockDetailScreenState extends State<StockDetailScreen>
   ///   option CE/PE               → "Option Chain" (back to chain)
   ///   ETF / MCX commodity        → [] (no chips)
   ///   unknown on NSE/BSE         → "Options Chain" + "Futures" (backward compat)
+  // Base derivative chips (Option Chain / Futures) plus one always-present
+  // "More" chip pointing at other real per-symbol screens already in the
+  // app (Market Depth, Time & Sales) — no fabricated News/Events actions.
   List<Widget> _derivativeChips(BuildContext context, Stock stock) {
+    final base = _baseDerivativeChips(context, stock);
+    return [
+      ...base,
+      if (base.isNotEmpty) const SizedBox(width: 8),
+      _DerivativeChip(
+        label: 'More',
+        icon: Icons.more_horiz_rounded,
+        onTap: () => _showMoreSheet(context, stock),
+      ),
+    ];
+  }
+
+  void _showMoreSheet(BuildContext context, Stock stock) {
+    AppBottomSheet.show<void>(
+      context,
+      title: stock.symbol,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(LucideIcons.layers, size: 18, color: AppColors.textSecondary),
+            title: const Text('Market Depth', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => MarketDepthScreen(symbol: stock.symbol)));
+            },
+          ),
+          ListTile(
+            leading: const Icon(LucideIcons.clock3, size: 18, color: AppColors.textSecondary),
+            title: const Text('Time & Sales', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => TimeAndSalesScreen(symbol: stock.symbol)));
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showFundamentalsSheet(BuildContext context, Stock stock) {
+    AppBottomSheet.show<void>(
+      context,
+      title: 'Fundamentals',
+      child: _buildFundamentalsGrid(context, stock),
+    );
+  }
+
+  List<Widget> _baseDerivativeChips(BuildContext context, Stock stock) {
     final type = stock.instrumentType;
     final ex = stock.exchange.toUpperCase();
 
@@ -1825,6 +2097,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         _DerivativeChip(
           label: 'Option Chain',
           icon: Icons.grid_view_rounded,
+          primary: true,
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
@@ -1848,6 +2121,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         _DerivativeChip(
           label: 'View Full Chain',
           icon: Icons.grid_view_rounded,
+          primary: true,
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
@@ -1881,6 +2155,7 @@ class _StockDetailScreenState extends State<StockDetailScreen>
         _DerivativeChip(
           label: 'Option Chain',
           icon: Icons.grid_view_rounded,
+          primary: true,
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
@@ -1930,57 +2205,132 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     return const SizedBox.shrink(); // buttons moved to header; section removed
   }
 
+  /// Real countdown to market close, computed from the admin-configured
+  /// per-segment market hours ([MarketSettings]) — not a fabricated timer.
+  (String, String)? _marketOpenCountdown(Stock stock) {
+    if (!_marketSettings.isTimeOpen(stock.exchange)) return null;
+    final seg = _marketSettings.forExchange(stock.exchange);
+    final closeParts = seg.marketClose.split(':');
+    final closeHour = int.tryParse(closeParts[0]) ?? 15;
+    final closeMin = int.tryParse(closeParts.length > 1 ? closeParts[1] : '30') ?? 30;
+    final nowIst = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    final closeIst = DateTime(nowIst.year, nowIst.month, nowIst.day, closeHour, closeMin);
+    final remaining = closeIst.difference(nowIst);
+    if (remaining.isNegative) return null;
+    final h = remaining.inHours;
+    final m = remaining.inMinutes % 60;
+    return (_fmtTime12h(closeHour, closeMin), '${h}h ${m}m remaining');
+  }
+
+  String _fmtTime12h(int hour, int minute) {
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final h12 = hour % 12 == 0 ? 12 : hour % 12;
+    return '$h12:${minute.toString().padLeft(2, '0')} $period';
+  }
+
+  void _showTradingHoursSheet(BuildContext context, Stock stock) {
+    final seg = _marketSettings.forExchange(stock.exchange);
+    final openParts = seg.marketOpen.split(':');
+    final closeParts = seg.marketClose.split(':');
+    AppBottomSheet.show<void>(
+      context,
+      title: 'Trading Hours',
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          '${_fmtTime12h(int.tryParse(openParts[0]) ?? 9, int.tryParse(openParts.length > 1 ? openParts[1] : '15') ?? 15)}'
+          ' – '
+          '${_fmtTime12h(int.tryParse(closeParts[0]) ?? 15, int.tryParse(closeParts.length > 1 ? closeParts[1] : '30') ?? 30)}'
+          ' IST, Mon–Fri',
+          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomBar(BuildContext context, Stock stock) {
     final sellBlock = _marketSettings.checkAction(stock.exchange, isBuy: false);
     final buyBlock = _marketSettings.checkAction(stock.exchange, isBuy: true);
     final anyBlock = sellBlock ?? buyBlock;
+    final openCountdown = anyBlock == null ? _marketOpenCountdown(stock) : null;
 
     return Container(
       decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFE0E0E0))),
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.divider)),
       ),
       padding: EdgeInsets.fromLTRB(
         16,
-        8,
+        10,
         16,
-        8 + MediaQuery.of(context).padding.bottom,
+        10 + MediaQuery.of(context).padding.bottom,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Market closed / disabled banner
+          // Market status — an elegant, subtle banner, not a warning box.
           if (anyBlock != null) ...[
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               margin: const EdgeInsets.only(bottom: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF3E0),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: const Color(0xFFFFB300).withValues(alpha: 0.4),
-                ),
+                color: AppColors.warning.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(AppColors.radiusPill),
               ),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.access_time,
-                    size: 13,
-                    color: Color(0xFFE65100),
-                  ),
-                  const SizedBox(width: 8),
+                  Icon(Icons.access_time_rounded, size: 13, color: AppColors.warning),
+                  const SizedBox(width: 7),
                   Expanded(
                     child: Text(
                       anyBlock,
                       style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFFE65100),
-                        fontWeight: FontWeight.w500,
+                        fontSize: 11.5,
+                        color: AppColors.warning,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ],
+              ),
+            ),
+          ],
+          if (openCountdown != null) ...[
+            GestureDetector(
+              onTap: () => _showTradingHoursSheet(context, stock),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.success.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.access_time_rounded, size: 13, color: AppColors.success),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            const TextSpan(
+                              text: 'Market Open  ',
+                              style: TextStyle(fontSize: 11.5, color: AppColors.success, fontWeight: FontWeight.w700),
+                            ),
+                            TextSpan(
+                              text: 'Closes at ${openCountdown.$1} • ${openCountdown.$2}',
+                              style: TextStyle(fontSize: 11.5, color: AppColors.success.withOpacity(0.85), fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, size: 15, color: AppColors.success.withOpacity(0.7)),
+                  ],
+                ),
               ),
             ),
           ],
@@ -1995,25 +2345,41 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         ? null
                         : () => _openOrderDrawer(context, OrderType.sell),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE53935),
-                      disabledBackgroundColor: const Color(0xFFE0E0E0),
+                      backgroundColor: AppColors.danger,
+                      disabledBackgroundColor: AppColors.border,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(AppColors.cardRadius),
                       ),
                     ),
-                    child: const Text(
-                      'SELL',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.arrow_downward_rounded, size: 14, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'SELL',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               // BUY
               Expanded(
                 child: SizedBox(
@@ -2023,20 +2389,36 @@ class _StockDetailScreenState extends State<StockDetailScreen>
                         ? null
                         : () => _openOrderDrawer(context, OrderType.buy),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00C853),
-                      disabledBackgroundColor: const Color(0xFFE0E0E0),
+                      backgroundColor: AppColors.success,
+                      disabledBackgroundColor: AppColors.border,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(AppColors.cardRadius),
                       ),
                     ),
-                    child: const Text(
-                      'BUY',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.arrow_upward_rounded, size: 14, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'BUY',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -2060,25 +2442,6 @@ class _StockDetailScreenState extends State<StockDetailScreen>
     );
   }
 
-  /// Returns the badge colour for a given exchange string.
-  Color _exchangeBadgeColor(String exchange) {
-    switch (exchange.toUpperCase()) {
-      case 'MCX':
-        return const Color(0xFF7B1FA2);
-      case 'NFO':
-        return const Color(0xFFE65100);
-      case 'BSE':
-        return const Color(0xFF0277BD);
-      case 'CDS':
-        return const Color(0xFF00695C);
-      case 'BFO':
-        return const Color(0xFF558B2F);
-      case 'NCDEX':
-        return const Color(0xFF6D4C41);
-      default:
-        return const Color(0xFF1565C0); // NSE blue
-    }
-  }
 }
 
 // ─── Derivative shortcut chip (Options Chain / Futures) ──────────────────────
@@ -2087,38 +2450,41 @@ class _DerivativeChip extends StatelessWidget {
   final String label;
   final IconData icon;
   final VoidCallback onTap;
+  final bool primary;
 
   const _DerivativeChip({
     required this.label,
     required this.icon,
     required this.onTap,
+    this.primary = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF5F5F5),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE0E0E0)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: const Color(0xFF1565C0)),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1565C0),
+    final fg = primary ? Colors.white : AppColors.primary;
+    return Material(
+      color: primary ? AppColors.primary : AppColors.primary.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(AppColors.radiusPill),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppColors.radiusPill),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: fg),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: fg,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2153,14 +2519,14 @@ class _ExpiryBadge extends StatelessWidget {
     final Color bg;
     final Color fg;
     if (safeDays <= 7) {
-      bg = const Color(0xFFFFEBEE);
-      fg = const Color(0xFFD32F2F);
+      bg = AppColors.danger.withOpacity(0.10);
+      fg = AppColors.danger;
     } else if (safeDays <= 30) {
-      bg = const Color(0xFFFFF8E1);
-      fg = const Color(0xFFE65100);
+      bg = AppColors.warning.withOpacity(0.10);
+      fg = AppColors.warning;
     } else {
-      bg = const Color(0xFFF3E5F5);
-      fg = const Color(0xFF7B1FA2);
+      bg = AppColors.chipNeutralBg;
+      fg = AppColors.chipNeutralText;
     }
 
     final day = expiry.day.toString().padLeft(2, '0');
@@ -2227,14 +2593,14 @@ class _IndexExpiryBadge extends StatelessWidget {
     final Color bg;
     final Color fg;
     if (days <= 7) {
-      bg = const Color(0xFFFFEBEE);
-      fg = const Color(0xFFD32F2F);
+      bg = AppColors.danger.withOpacity(0.10);
+      fg = AppColors.danger;
     } else if (days <= 30) {
-      bg = const Color(0xFFFFF8E1);
-      fg = const Color(0xFFE65100);
+      bg = AppColors.warning.withOpacity(0.10);
+      fg = AppColors.warning;
     } else {
-      bg = const Color(0xFFE8F5E9);
-      fg = const Color(0xFF2E7D32);
+      bg = AppColors.success.withOpacity(0.10);
+      fg = AppColors.success;
     }
 
     final day = expiry.day.toString().padLeft(2, '0');
@@ -2275,74 +2641,6 @@ class _IndexExpiryBadge extends StatelessWidget {
   }
 }
 
-// ─── Candle chart icon (custom painted) ──────────────────────────────────────
-
-class _CandleIcon extends StatelessWidget {
-  final double size;
-  final Color color;
-  const _CandleIcon({required this.size, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size(size, size),
-      painter: _CandlePainter(color: color),
-    );
-  }
-}
-
-class _CandlePainter extends CustomPainter {
-  final Color color;
-  const _CandlePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    final fillPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final w = size.width;
-    final h = size.height;
-
-    // Three mini candles
-    // Candle 1 (left, bearish — hollow)
-    canvas.drawLine(
-      Offset(w * 0.15, h * 0.1),
-      Offset(w * 0.15, h * 0.9),
-      paint,
-    );
-    canvas.drawRect(Rect.fromLTRB(w * 0.08, h * 0.3, w * 0.22, h * 0.7), paint);
-
-    // Candle 2 (center, bullish — filled)
-    canvas.drawLine(
-      Offset(w * 0.5, h * 0.05),
-      Offset(w * 0.5, h * 0.85),
-      paint,
-    );
-    canvas.drawRect(
-      Rect.fromLTRB(w * 0.42, h * 0.2, w * 0.58, h * 0.65),
-      fillPaint,
-    );
-
-    // Candle 3 (right, bearish — hollow)
-    canvas.drawLine(
-      Offset(w * 0.85, h * 0.15),
-      Offset(w * 0.85, h * 0.95),
-      paint,
-    );
-    canvas.drawRect(
-      Rect.fromLTRB(w * 0.78, h * 0.35, w * 0.92, h * 0.75),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _CandlePainter old) => old.color != color;
-}
 
 // ─── Choose Watchlist sheet ───────────────────────────────────────────────────
 // Shown from the save/bookmark button when the user has more than one

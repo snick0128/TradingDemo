@@ -21,6 +21,7 @@ import 'models/trading_models.dart';
 import 'screens/main_shell.dart';
 import 'services/app_update_service.dart';
 import 'services/device_tier.dart';
+import 'services/instrument_logo_service.dart';
 import 'services/performance_monitor.dart';
 import 'services/persistence_service.dart';
 import 'services/subscription_manager.dart';
@@ -44,6 +45,11 @@ void main() async {
 
   // Initialize SharedPreferences-backed storage before any screen runs.
   await PersistenceService.instance.init();
+
+  // Kick off the instrument-logo mapping load in the background — screens
+  // render immediately with initials-avatar fallbacks and swap to real logos
+  // as soon as this resolves (at most once every 7 days per LogoCacheManager).
+  unawaited(InstrumentLogoService.instance.ensureLoaded());
 
   bool firebaseReady = false;
   try {

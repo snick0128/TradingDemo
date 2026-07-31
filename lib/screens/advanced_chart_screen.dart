@@ -11,13 +11,14 @@ import '../services/subscription_manager.dart';
 import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../theme.dart';
+import '../widgets/shared_widgets.dart';
 
 // ─── Chart color constants ────────────────────────────────────────────────────
-const _kBullColor = Color(0xFF00C853);
-const _kBearColor = Color(0xFFD50000);
-const _kChartBg = Colors.white;
-const _kGridColor = Color(0xFFEEEEEE);
-const _kAxisColor = Color(0xFF757575);
+const _kBullColor = AppColors.success;
+const _kBearColor = AppColors.danger;
+const _kChartBg = AppColors.surface;
+const _kGridColor = AppColors.divider;
+const _kAxisColor = AppColors.textTertiary;
 
 class AdvancedChartScreen extends StatefulWidget {
   final String symbol;
@@ -344,11 +345,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.surface,
       elevation: 0,
       centerTitle: false,
+      shape: Border(bottom: BorderSide(color: AppColors.divider)),
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.black, size: 20),
+        icon: Icon(Icons.arrow_back, color: AppColors.textPrimary, size: 20),
         onPressed: () => Navigator.pop(context),
       ),
       titleSpacing: 0,
@@ -360,15 +362,15 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFE0E0E0)),
-                borderRadius: BorderRadius.circular(4),
+                color: AppColors.surfaceAlt,
+                borderRadius: BorderRadius.circular(AppColors.radiusPill),
               ),
               child: Text(
                 _timeframe.name.toUpperCase().replaceFirst('M', 'm').replaceFirst('H', 'h'),
-                style: const TextStyle(
+                style: AppTheme.mono(
                   fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
                 ),
               ),
             ),
@@ -378,24 +380,24 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
           IconButton(
             icon: Icon(
               _chartType == ChartType.line ? Icons.show_chart : Icons.candlestick_chart_outlined,
-              color: const Color(0xFF555555),
+              color: AppColors.textSecondary,
               size: 20,
             ),
             onPressed: () => _showChartTypeSheet(),
           ),
           // Indicators
           IconButton(
-            icon: const Icon(Icons.functions, color: Color(0xFF555555), size: 20),
+            icon: Icon(Icons.functions, color: AppColors.textSecondary, size: 20),
             onPressed: () => _showIndicatorPanel(context),
           ),
           const Spacer(),
           // Undo/Redo
           IconButton(
-            icon: const Icon(Icons.undo, color: Color(0xFFBDBDBD), size: 18),
+            icon: Icon(Icons.undo, color: AppColors.textTertiary, size: 18),
             onPressed: null,
           ),
           IconButton(
-            icon: const Icon(Icons.redo, color: Color(0xFFBDBDBD), size: 18),
+            icon: Icon(Icons.redo, color: AppColors.textTertiary, size: 18),
             onPressed: null,
           ),
           const SizedBox(width: 8),
@@ -403,11 +405,11 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.settings_outlined, color: Color(0xFF555555), size: 20),
+          icon: Icon(Icons.settings_outlined, color: AppColors.textSecondary, size: 20),
           onPressed: () {},
         ),
         IconButton(
-          icon: const Icon(Icons.open_in_full, color: Color(0xFF555555), size: 18),
+          icon: Icon(Icons.open_in_full, color: AppColors.textSecondary, size: 18),
           onPressed: () {},
         ),
         const SizedBox(width: 8),
@@ -426,12 +428,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(LucideIcons.alertTriangle, size: 48, color: Colors.red),
+              Icon(LucideIcons.alertTriangle, size: 48, color: AppColors.danger),
               const SizedBox(height: 16),
               Text(
                 _cleanError(_error!),
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF757575)),
+                style: TextStyle(color: AppColors.textSecondary),
               ),
               const SizedBox(height: 24),
               ElevatedButton(
@@ -467,35 +469,38 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         Container(
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          color: Colors.white,
+          color: AppColors.surface,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 '${stock.symbol} · ${_timeframe.name.toUpperCase()} · ${stock.exchange}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF333333),
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
                 ),
               ),
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Text(
-                    stock.currentPrice.toStringAsFixed(2),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: stock.isPositive ? _kBullColor : _kBearColor,
+                  PriceFlashWidget(
+                    price: stock.currentPrice,
+                    child: Text(
+                      stock.currentPrice.toStringAsFixed(2),
+                      style: AppTheme.mono(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: stock.isPositive ? _kBullColor : _kBearColor,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     '${stock.isPositive ? '+' : ''}${stock.changePercentage.toStringAsFixed(2)}%',
-                    style: TextStyle(
+                    style: AppTheme.mono(
                       fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w700,
                       color: stock.isPositive ? _kBullColor : _kBearColor,
                     ),
                   ),
@@ -511,7 +516,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         ),
         // Volume Panel
         if (series.data.any((c) => c.volume > 0)) ...[
-          Container(height: 1, color: const Color(0xFFEEEEEE)),
+          Container(height: 1, color: _kGridColor),
           SizedBox(
             height: 80,
             child: _buildVolumeChart(series.data),
@@ -534,10 +539,10 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
           const SizedBox(width: 8),
           Text(
             stock.currentPrice.toStringAsFixed(2),
-            style: const TextStyle(
+            style: AppTheme.mono(
               color: Colors.white,
               fontSize: 14,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w800,
               letterSpacing: 0.5,
             ),
           ),
@@ -635,9 +640,9 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
     return Container(
       height: 40,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.divider)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -648,12 +653,20 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
               setState(() => _dateRange = values[i]);
               _loadSeries();
             },
-            child: Text(
-              labels[i],
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                color: selected ? Colors.black : const Color(0xFF9E9E9E),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: selected ? AppColors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(AppColors.radiusPill),
+              ),
+              child: Text(
+                labels[i],
+                style: AppTheme.mono(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? Colors.white : AppColors.textSecondary,
+                ),
               ),
             ),
           );
@@ -762,12 +775,12 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         activationMode: ActivationMode.singleTap,
         tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
         lineType: TrackballLineType.vertical,
-        lineColor: const Color(0xFF757575).withOpacity(0.4),
+        lineColor: AppColors.textTertiary.withOpacity(0.4),
         lineWidth: 1,
-        tooltipSettings: const InteractiveTooltip(
+        tooltipSettings: InteractiveTooltip(
           enable: true,
-          color: Color(0xFF333333),
-          textStyle: TextStyle(color: Colors.white, fontSize: 11),
+          color: AppColors.textPrimary,
+          textStyle: const TextStyle(color: Colors.white, fontSize: 11),
         ),
       ),
       onActualRangeChanged: (ActualRangeChangedArgs args) {
@@ -819,21 +832,21 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
         axisLine: const AxisLine(width: 0),
         numberFormat: NumberFormat('#,##0.00'),
         rangePadding: ChartRangePadding.round,
-        labelStyle: const TextStyle(fontSize: 11, color: Color(0xFF333333)),
+        labelStyle: const TextStyle(fontSize: 11, color: AppColors.textPrimary),
         majorTickLines: const MajorTickLines(size: 0),
         plotBands: series.close > 0
             ? [
                 PlotBand(
                   start: series.close,
                   end: series.close,
-                  borderColor: const Color(0xFF00897B),
+                  borderColor: AppColors.primary,
                   borderWidth: 1.5,
                   dashArray: const [4, 4],
                   text: '  ${series.close.toStringAsFixed(2)}',
-                  textStyle: const TextStyle(
-                    color: Color(0xFF00897B),
+                  textStyle: TextStyle(
+                    color: AppColors.primary,
                     fontSize: 10,
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w700,
                   ),
                   verticalTextAlignment: TextAnchor.middle,
                 ),
@@ -866,15 +879,9 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1565C0),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 6,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                  boxShadow: AppColors.floatingShadow,
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
@@ -885,7 +892,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
                       'Go To Live',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                         color: Colors.white,
                       ),
                     ),
@@ -907,8 +914,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
 
     return SfCartesianChart(
       key: ValueKey('advvol_${widget.symbol}_${_timeframe.name}_$_chartVersion'),
-      backgroundColor: Colors.white,
-      plotAreaBackgroundColor: Colors.white,
+      backgroundColor: AppColors.surface,
+      plotAreaBackgroundColor: AppColors.surface,
       plotAreaBorderWidth: 0,
       margin: const EdgeInsets.only(right: 8),
       primaryXAxis: NumericAxis(
@@ -924,7 +931,7 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
       primaryYAxis: NumericAxis(
         opposedPosition: true,
         isVisible: true,
-        labelStyle: const TextStyle(fontSize: 9, color: Color(0xFF9E9E9E)),
+        labelStyle: const TextStyle(fontSize: 9, color: AppColors.textSecondary),
         majorGridLines: const MajorGridLines(width: 0),
         axisLine: const AxisLine(width: 0),
         majorTickLines: const MajorTickLines(size: 0),
@@ -936,8 +943,8 @@ class _AdvancedChartScreenState extends State<AdvancedChartScreen>
           xValueMapper: (c, i) => i,
           yValueMapper: (c, _) => c.volume,
           pointColorMapper: (c, _) => c.close >= c.open
-              ? const Color(0xFF00C853).withOpacity(0.4)
-              : const Color(0xFFE53935).withOpacity(0.4),
+              ? AppColors.success.withOpacity(0.4)
+              : AppColors.danger.withOpacity(0.4),
           borderWidth: 0,
           spacing: 0.15,
           animationDuration: 0,

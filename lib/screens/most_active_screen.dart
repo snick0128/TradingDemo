@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -137,7 +136,7 @@ class MostActiveScreen extends StatelessWidget {
                                 child: Text(
                                   '₹${stock.currentPrice.toStringAsFixed(2)}',
                                   textAlign: TextAlign.right,
-                                  style: GoogleFonts.jetBrainsMono(
+                                  style: AppTheme.mono(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.textPrimary,
@@ -163,7 +162,7 @@ class MostActiveScreen extends StatelessWidget {
                                 child: Text(
                                   '${(vol / 100000).toStringAsFixed(2)}L',
                                   textAlign: TextAlign.right,
-                                  style: GoogleFonts.jetBrainsMono(
+                                  style: AppTheme.mono(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.primary,

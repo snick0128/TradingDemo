@@ -14,6 +14,7 @@ import '../state/trading_scope.dart';
 import '../state/trading_store.dart';
 import '../theme.dart';
 import '../widgets/app_dialog.dart';
+import '../widgets/instrument_logo.dart';
 import '../widgets/multi_square_off_dialog.dart';
 import '../widgets/position_detail_sheet.dart';
 import '../widgets/shared_widgets.dart';
@@ -1062,6 +1063,8 @@ class _PositionCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                InstrumentLogo(symbol: p.symbol, exchange: p.exchange, size: 22),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     p.symbol,
@@ -1242,6 +1245,8 @@ class _HoldingCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                InstrumentLogo(symbol: h.symbol, size: 22),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     h.symbol,

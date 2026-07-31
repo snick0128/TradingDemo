@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
 import '../models/trading_models.dart';
@@ -153,7 +152,7 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                             flex: 2,
                             child: Text(
                               timeFmt.format(trade.time),
-                              style: GoogleFonts.jetBrainsMono(
+                              style: AppTheme.mono(
                                 fontSize: 12,
                                 color: AppColors.textSecondary,
                               ),
@@ -164,7 +163,7 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                             child: Text(
                               trade.price.toStringAsFixed(2),
                               textAlign: TextAlign.center,
-                              style: GoogleFonts.jetBrainsMono(
+                              style: AppTheme.mono(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: color,
@@ -176,7 +175,7 @@ class _TimeAndSalesScreenState extends State<TimeAndSalesScreen> {
                             child: Text(
                               '${trade.quantity}',
                               textAlign: TextAlign.right,
-                              style: GoogleFonts.jetBrainsMono(
+                              style: AppTheme.mono(
                                 fontSize: 12,
                                 color: AppColors.textPrimary,
                               ),

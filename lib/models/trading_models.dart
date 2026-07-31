@@ -1442,6 +1442,56 @@ class WalletLedgerEntry {
   }
 }
 
+// ─── Bank Account ──────────────────────────────────────────────────────────────
+
+/// A user's saved bank account for withdrawals — stored in the top-level
+/// `bank_accounts` collection, filtered by [userId] the same way
+/// `deposit_requests`/`withdrawal_requests`/`ledger` already are.
+class BankAccount {
+  final String id;
+  final String userId;
+  final String accountHolderName;
+  final String bankName;
+  final String accountNumber;
+  final String ifscCode;
+  final bool isPrimary;
+  final DateTime createdAt;
+
+  const BankAccount({
+    required this.id,
+    required this.userId,
+    required this.accountHolderName,
+    required this.bankName,
+    required this.accountNumber,
+    required this.ifscCode,
+    required this.isPrimary,
+    required this.createdAt,
+  });
+
+  /// Last 4 digits only — e.g. "••••4521".
+  String get maskedAccountNumber {
+    if (accountNumber.length <= 4) return accountNumber;
+    return '••••${accountNumber.substring(accountNumber.length - 4)}';
+  }
+
+  factory BankAccount.fromFirestore(String id, Map<String, dynamic> d) {
+    DateTime parseTs(dynamic ts) {
+      if (ts == null) return DateTime.now();
+      try { return (ts as dynamic).toDate() as DateTime; } catch (_) { return DateTime.now(); }
+    }
+    return BankAccount(
+      id: id,
+      userId: (d['userId'] as String?) ?? '',
+      accountHolderName: (d['accountHolderName'] as String?) ?? '',
+      bankName: (d['bankName'] as String?) ?? '',
+      accountNumber: (d['accountNumber'] as String?) ?? '',
+      ifscCode: (d['ifscCode'] as String?) ?? '',
+      isPrimary: (d['isPrimary'] as bool?) ?? false,
+      createdAt: parseTs(d['createdAt']),
+    );
+  }
+}
+
 // ─── Withdrawal Request ───────────────────────────────────────────────────────
 
 class WithdrawalRequest {

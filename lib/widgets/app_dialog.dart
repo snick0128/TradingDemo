@@ -248,6 +248,8 @@ class AppDialog {
     required void Function(String value) onSubmit,
     VoidCallback? onCancel,
     String? Function(String?)? validator,
+    IconData? icon,
+    Color? iconColor,
   }) {
     return showGeneralDialog(
       context: context,
@@ -279,6 +281,8 @@ class AppDialog {
         onSubmit: onSubmit,
         onCancel: onCancel,
         validator: validator,
+        icon: icon,
+        iconColor: iconColor,
       ),
     );
   }
@@ -294,10 +298,8 @@ class _AppDialogWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark
-        ? const Color(0xFF2A2A2A)
-        : const Color(0xFFF0F0F0);
+    final bg = isDark ? AppColors.surfaceDark : AppColors.surface;
+    final borderColor = isDark ? AppColors.borderDark : AppColors.divider;
 
     final typeData = _typeData(config.type);
     final hasTwoButtons =
@@ -368,7 +370,7 @@ class _AppDialogWidget extends StatelessWidget {
                         style: GoogleFonts.inter(
                           fontSize: 14,
                           color: isDark
-                              ? const Color(0xFF9E9E9E)
+                              ? AppColors.textSecondaryDark
                               : AppColors.textSecondary,
                           height: 1.5,
                         ),
@@ -502,7 +504,7 @@ class _TwoButtonRow extends StatelessWidget {
                 Navigator.of(context).pop();
                 config.onCancel?.call();
               },
-              color: isDark ? const Color(0xFF9E9E9E) : AppColors.textSecondary,
+              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondary,
               filled: false,
               isDark: isDark,
             ),
@@ -613,6 +615,8 @@ class _AppInputDialogWidget extends StatefulWidget {
   final void Function(String value) onSubmit;
   final VoidCallback? onCancel;
   final String? Function(String?)? validator;
+  final IconData? icon;
+  final Color? iconColor;
 
   const _AppInputDialogWidget({
     required this.title,
@@ -625,6 +629,8 @@ class _AppInputDialogWidget extends StatefulWidget {
     required this.onSubmit,
     this.onCancel,
     this.validator,
+    this.icon,
+    this.iconColor,
   });
 
   @override
@@ -651,14 +657,12 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark
-        ? const Color(0xFF2A2A2A)
-        : const Color(0xFFF0F0F0);
+    final bg = isDark ? AppColors.surfaceDark : AppColors.surface;
+    final borderColor = isDark ? AppColors.borderDark : AppColors.divider;
     final inputBorder = OutlineInputBorder(
       borderRadius: BorderRadius.circular(10),
       borderSide: BorderSide(
-        color: isDark ? const Color(0xFF333333) : AppColors.border,
+        color: isDark ? AppColors.borderDark : AppColors.border,
       ),
     );
 
@@ -691,6 +695,18 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (widget.icon != null) ...[
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: (widget.iconColor ?? AppColors.primary).withOpacity(0.10),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(widget.icon, color: widget.iconColor ?? AppColors.primary, size: 24),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       Text(
                         widget.title,
                         style: GoogleFonts.inter(
@@ -706,7 +722,7 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           style: GoogleFonts.inter(
                             fontSize: 13,
                             color: isDark
-                                ? const Color(0xFF9E9E9E)
+                                ? AppColors.textSecondaryDark
                                 : AppColors.textSecondary,
                             height: 1.4,
                           ),
@@ -726,12 +742,12 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           hintStyle: GoogleFonts.inter(
                             fontSize: 14,
                             color: isDark
-                                ? const Color(0xFF666666)
+                                ? AppColors.textSecondaryDark
                                 : AppColors.textSecondary,
                           ),
                           filled: true,
                           fillColor: isDark
-                              ? const Color(0xFF2A2A2A)
+                              ? AppColors.surfaceAltDark
                               : AppColors.surfaceAlt,
                           border: inputBorder,
                           enabledBorder: inputBorder,
@@ -773,7 +789,7 @@ class _AppInputDialogWidgetState extends State<_AppInputDialogWidget> {
                           widget.onCancel?.call();
                         },
                         color: isDark
-                            ? const Color(0xFF9E9E9E)
+                            ? AppColors.textSecondaryDark
                             : AppColors.textSecondary,
                         filled: false,
                         isDark: isDark,
@@ -888,10 +904,8 @@ class _AppBottomSheetWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDark
-        ? const Color(0xFF2A2A2A)
-        : const Color(0xFFF0F0F0);
+    final bg = isDark ? AppColors.surfaceDark : AppColors.surface;
+    final borderColor = isDark ? AppColors.borderDark : AppColors.divider;
 
     return Container(
       decoration: BoxDecoration(
@@ -908,7 +922,7 @@ class _AppBottomSheetWrapper extends StatelessWidget {
             width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF444444) : const Color(0xFFDDDDDD),
+              color: isDark ? AppColors.borderDark : AppColors.border,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -932,7 +946,7 @@ class _AppBottomSheetWrapper extends StatelessWidget {
                       LucideIcons.x,
                       size: 18,
                       color: isDark
-                          ? const Color(0xFF9E9E9E)
+                          ? AppColors.textSecondaryDark
                           : AppColors.textSecondary,
                     ),
                     onPressed: () => Navigator.pop(context),

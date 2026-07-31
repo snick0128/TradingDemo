@@ -1,9 +1,8 @@
-// ignore_for_file: deprecated_member_use
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../theme.dart';
 import '../utils/responsive.dart';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -60,14 +59,14 @@ class TradingNavControllerScope extends InheritedNotifier<TradingNavController> 
 
 // ─── Bar ──────────────────────────────────────────────────────────────────────
 
-/// Premium floating pill-shaped bottom navigation bar for Trade Kosh.
+/// Floating pill-shaped bottom navigation bar for Trade Kosh.
 ///
 /// Design system
 /// ─────────────
-/// • White frosted glass container (rgba 255,255,255,0.82) with 20px blur
-/// • 28px corner radius, white 75% border, elevation shadow
-/// • Selected tab uses grey glass pill (#505050 at 10%) with inner highlight
-/// • No blue — icon/label use #333333 (selected) and #9E9E9E (inactive)
+/// • Flat surface container (AppColors.surface / surfaceDark), 1px border
+/// • 28px corner radius, single subtle floating shadow (AppColors.floatingShadow)
+/// • Selected tab uses a tinted primary pill (AppColors.primary at 10%)
+/// • Selected icon/label use AppColors.navActive; inactive use AppColors.navInactive
 ///
 /// Layout contract
 /// ───────────────
@@ -128,64 +127,45 @@ class TradingBottomNavBar extends StatelessWidget {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(kRadius),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x1F000000), // black 12%
-                blurRadius: 30,
-                spreadRadius: 0,
-                offset: Offset(0, 10),
-              ),
-            ],
+            boxShadow: AppColors.floatingShadow,
           ),
-          // ClipRRect shapes the BackdropFilter blur to the pill boundary.
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(kRadius),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                height: kHeight,
-                decoration: BoxDecoration(
-                  // White frosted glass (light) / Dark glass (dark)
-                  color: isDark
-                      ? const Color(0xFF1C1C1E).withOpacity(0.88)
-                      : Colors.white.withOpacity(0.82),
-                  borderRadius: BorderRadius.circular(kRadius),
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withOpacity(0.12)
-                        : Colors.white.withOpacity(0.75),
-                    width: 1.5,
-                  ),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(kRadius - 1.5),
-                  child: LayoutBuilder(builder: (context, constraints) {
-                    // Slot width model:
-                    //   selected  = 3 units
-                    //   inactive  = 1.5 units each
-                    //   total     = 3 + 4 × 1.5 = 9 units — always fills exactly
-                    final unit = constraints.maxWidth / 9.0;
+          child: Container(
+            height: kHeight,
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.surfaceDark : AppColors.surface,
+              borderRadius: BorderRadius.circular(kRadius),
+              border: Border.all(
+                color: isDark ? AppColors.borderDark : AppColors.border,
+                width: 1,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(kRadius - 1),
+              child: LayoutBuilder(builder: (context, constraints) {
+                // Slot width model:
+                //   selected  = 3 units
+                //   inactive  = 1.5 units each
+                //   total     = 3 + 4 × 1.5 = 9 units — always fills exactly
+                final unit = constraints.maxWidth / 9.0;
 
-                    return Row(
-                      children: List.generate(items.length, (i) {
-                        final isSelected = i == selectedIndex;
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOutCubic,
-                          width: isSelected ? unit * 3.0 : unit * 1.5,
-                          height: kHeight,
-                          child: _NavItemSlot(
-                            item: items[i],
-                            isSelected: isSelected,
-                            isDark: isDark,
-                            onTap: () => onTap(i),
-                          ),
-                        );
-                      }),
+                return Row(
+                  children: List.generate(items.length, (i) {
+                    final isSelected = i == selectedIndex;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOutCubic,
+                      width: isSelected ? unit * 3.0 : unit * 1.5,
+                      height: kHeight,
+                      child: _NavItemSlot(
+                        item: items[i],
+                        isSelected: isSelected,
+                        isDark: isDark,
+                        onTap: () => onTap(i),
+                      ),
                     );
                   }),
-                ),
-              ),
+                );
+              }),
             ),
           ),
         ),
@@ -209,16 +189,16 @@ class _NavItemSlot extends StatelessWidget {
     required this.onTap,
   });
 
-  // ── Colour tokens ──────────────────────────────────────────────────────────
-  static const Color _kSelectedColor = Color(0xFF333333);
-  static const Color _kInactiveColor = Color(0xFF9E9E9E);
-  static const Color _kPillBg        = Color(0x1A505050); // #505050 @ 10%
-
   @override
   Widget build(BuildContext context) {
-    final selectedColor = isDark ? const Color(0xFFEEEEEE) : _kSelectedColor;
-    final iconColor  = isSelected ? selectedColor : _kInactiveColor;
-    final labelColor = isSelected ? selectedColor : _kInactiveColor;
+    final selectedColor =
+        isDark ? AppColors.navActiveDark : AppColors.navActive;
+    final inactiveColor =
+        isDark ? AppColors.navInactiveDark : AppColors.navInactive;
+    final pillBg = (isDark ? AppColors.primaryOnDark : AppColors.primary)
+        .withOpacity(0.10);
+    final iconColor = isSelected ? selectedColor : inactiveColor;
+    final labelColor = isSelected ? selectedColor : inactiveColor;
 
     return Semantics(
       label: item.label,
@@ -238,18 +218,8 @@ class _NavItemSlot extends StatelessWidget {
                 vertical: 8.0,
               ),
               decoration: BoxDecoration(
-                color: isSelected ? _kPillBg : Colors.transparent,
+                color: isSelected ? pillBg : Colors.transparent,
                 borderRadius: BorderRadius.circular(20.0),
-                boxShadow: isSelected
-                    ? const [
-                        BoxShadow(
-                          color: Color(0x1A000000), // black 10%
-                          blurRadius: 18,
-                          spreadRadius: 0,
-                          offset: Offset(0, 6),
-                        ),
-                      ]
-                    : null,
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -285,7 +255,7 @@ class _NavItemSlot extends StatelessWidget {
                               item.label,
                               maxLines: 1,
                               overflow: TextOverflow.clip,
-                              style: TextStyle(
+                              style: GoogleFonts.inter(
                                 fontSize: 12.0,
                                 fontWeight: FontWeight.w600,
                                 color: labelColor,

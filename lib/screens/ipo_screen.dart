@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:intl/intl.dart';
 
@@ -536,7 +535,7 @@ class _IPOCard extends StatelessWidget {
         const SizedBox(height: 2),
         Text(
           value,
-          style: GoogleFonts.jetBrainsMono(
+          style: AppTheme.mono(
             fontSize: 13,
             fontWeight: FontWeight.w700,
             color: AppColors.textPrimary,

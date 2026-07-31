@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../state/trading_scope.dart';
 import '../theme.dart';
@@ -339,12 +338,12 @@ class _TickTraceScreenState extends State<TickTraceScreen> {
               dataRowMaxHeight: 28,
               columnSpacing: 12,
               horizontalMargin: 12,
-              headingTextStyle: GoogleFonts.jetBrainsMono(
+              headingTextStyle: AppTheme.mono(
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
                 color: AppColors.textSecondary,
               ),
-              dataTextStyle: GoogleFonts.jetBrainsMono(
+              dataTextStyle: AppTheme.mono(
                 fontSize: 10,
                 color: AppColors.textPrimary,
               ),
@@ -364,9 +363,9 @@ class _TickTraceScreenState extends State<TickTraceScreen> {
                 final row = r as Map<String, dynamic>;
                 final dropped = row['broadcastTs'] == null;
                 final style   = dropped
-                    ? GoogleFonts.jetBrainsMono(
+                    ? AppTheme.mono(
                         fontSize: 10, color: AppColors.danger)
-                    : GoogleFonts.jetBrainsMono(
+                    : AppTheme.mono(
                         fontSize: 10, color: AppColors.textPrimary);
                 return DataRow(
                   color: WidgetStateProperty.resolveWith((_) =>
@@ -377,7 +376,7 @@ class _TickTraceScreenState extends State<TickTraceScreen> {
                     DataCell(Text(_hms(row['backendReceiveTs'] as int?), style: style)),
                     DataCell(Text(dropped ? '—DROPPED—' : _hms(row['broadcastTs'] as int?),
                         style: dropped
-                            ? GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.danger, fontWeight: FontWeight.w700)
+                            ? AppTheme.mono(fontSize: 10, color: AppColors.danger, fontWeight: FontWeight.w700)
                             : style)),
                     DataCell(Text(_hms(row['clientReceiveTs'] as int?),  style: style)),
                     DataCell(Text(_hms(row['clientRenderedTs'] as int?), style: style)),
@@ -419,13 +418,13 @@ class _TickTraceScreenState extends State<TickTraceScreen> {
   }
 
   TextStyle _latStyle(dynamic ms) {
-    if (ms == null) return GoogleFonts.jetBrainsMono(fontSize: 10, color: AppColors.textSecondary);
+    if (ms == null) return AppTheme.mono(fontSize: 10, color: AppColors.textSecondary);
     final n = (ms as num).toInt();
     final color = n > 500
         ? AppColors.danger
         : n > 200
             ? AppColors.warning
             : AppColors.success;
-    return GoogleFonts.jetBrainsMono(fontSize: 10, color: color, fontWeight: FontWeight.w600);
+    return AppTheme.mono(fontSize: 10, color: color, fontWeight: FontWeight.w600);
   }
 }

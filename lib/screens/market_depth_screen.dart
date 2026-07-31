@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/trading_models.dart';
@@ -71,7 +70,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   _fmt(depth.totalBuyQuantity),
-                                  style: GoogleFonts.jetBrainsMono(
+                                  style: AppTheme.mono(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w700,
                                     color: AppColors.success,
@@ -97,7 +96,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   _fmt(depth.totalSellQuantity),
-                                  style: GoogleFonts.jetBrainsMono(
+                                  style: AppTheme.mono(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w700,
                                     color: AppColors.danger,
@@ -123,7 +122,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   depth.buyToSellRatio.toStringAsFixed(2),
-                                  style: GoogleFonts.jetBrainsMono(
+                                  style: AppTheme.mono(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w700,
                                     color: depth.buyToSellRatio >= 1
@@ -225,7 +224,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
               Expanded(
                 child: Text(
                   '${bid.orders}',
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 12,
                     color: AppColors.textSecondary,
                   ),
@@ -234,7 +233,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
               Expanded(
                 child: Text(
                   _fmt(bid.quantity),
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 12,
                     color: AppColors.success,
                   ),
@@ -244,7 +243,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                 child: Text(
                   bid.price.toStringAsFixed(2),
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: AppColors.success,
@@ -255,7 +254,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                 child: Text(
                   ask.price.toStringAsFixed(2),
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: AppColors.danger,
@@ -266,7 +265,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                 child: Text(
                   _fmt(ask.quantity),
                   textAlign: TextAlign.right,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 12,
                     color: AppColors.danger,
                   ),
@@ -276,7 +275,7 @@ class _MarketDepthScreenState extends State<MarketDepthScreen> {
                 child: Text(
                   '${ask.orders}',
                   textAlign: TextAlign.right,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: AppTheme.mono(
                     fontSize: 12,
                     color: AppColors.textSecondary,
                   ),
